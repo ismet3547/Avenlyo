@@ -75,16 +75,20 @@ select extensions.is(
   0,
   'member cannot read another organization catalog'
 );
-select extensions.is_empty(
-  $$ update public.scheduling_appointment_types set bookable = false where id = '71700000-0000-0000-0000-000000000001' returning id $$,
+select extensions.throws_ok(
+  $$ update public.scheduling_appointment_types set bookable = false where id = '71700000-0000-0000-0000-000000000001' $$,
+  '42501',
+  'permission denied for table scheduling_appointment_types',
   'member cannot directly change catalog bookability'
 );
 select extensions.is_empty(
   $$ update public.integrations set status = 'disabled' where id = '71600000-0000-0000-0000-000000000001' returning id $$,
   'member cannot directly disconnect an integration'
 );
-select extensions.is_empty(
+select extensions.throws_ok(
   $$ select * from public.integration_credentials $$,
+  '42501',
+  'permission denied for table integration_credentials',
   'member cannot read Vault credential references'
 );
 select extensions.throws_ok(

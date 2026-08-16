@@ -213,6 +213,10 @@ create policy booking_intents_select_admin on public.booking_intents
   for select to authenticated
   using (public.is_organization_admin(organization_id));
 
+-- Catalog visibility is location-scoped through RLS. Credential, candidate, intent, and provider
+-- execution tables intentionally receive no direct authenticated table privileges.
+grant select on public.scheduling_appointment_types, public.scheduling_resources to authenticated;
+
 drop policy if exists integrations_insert_admin on public.integrations;
 drop policy if exists integrations_update_admin on public.integrations;
 drop policy if exists integrations_delete_admin on public.integrations;
