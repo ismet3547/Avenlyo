@@ -52,7 +52,7 @@ insert into public.knowledge_imports (organization_id, location_id, root_url, st
 values
   (current_setting('avenlyo.hardening_org')::uuid, current_setting('avenlyo.hardening_location_a')::uuid, 'https://location-a-old.example', 'completed', now()),
   (current_setting('avenlyo.hardening_org')::uuid, current_setting('avenlyo.hardening_location_b')::uuid, 'https://location-b-old.example', 'completed', now()),
-  (current_setting('avenlyo.hardening_org')::uuid, current_setting('avenlyo.hardening_location_a')::uuid, 'https://location-a-new.example', 'awaiting_review');
+  (current_setting('avenlyo.hardening_org')::uuid, current_setting('avenlyo.hardening_location_a')::uuid, 'https://location-a-new.example', 'awaiting_review', null);
 
 select set_config('avenlyo.hardening_import_a_old', (select id::text from public.knowledge_imports where root_url = 'https://location-a-old.example'), true);
 select set_config('avenlyo.hardening_import_b_old', (select id::text from public.knowledge_imports where root_url = 'https://location-b-old.example'), true);
