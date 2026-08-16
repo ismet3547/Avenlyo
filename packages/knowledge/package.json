@@ -13,7 +13,7 @@
   "dependencies": {
     "cheerio": "^1.0.0",
     "ipaddr.js": "^2.2.0",
-    "openai": "^4.86.1",
+    "openai": "^6.49.0",
     "robots-parser": "3.0.1",
     "tldts": "^6.1.86"
   }

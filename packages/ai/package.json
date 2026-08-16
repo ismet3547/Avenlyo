@@ -9,5 +9,10 @@
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@avenlyo/industries": "workspace:*",
+    "openai": "^6.49.0",
+    "zod": "^3.24.2"
   }
 }
