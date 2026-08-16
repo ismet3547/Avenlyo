@@ -17,7 +17,7 @@ where id in (
   '70000000-0000-0000-0000-000000000001',
   '70000000-0000-0000-0000-000000000002',
   '70000000-0000-0000-0000-000000000003'
-);
+) on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug, created_by, primary_industry_id)
 values
