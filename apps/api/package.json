@@ -7,17 +7,28 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc --noEmit",
     "start": "tsx src/server.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "voice:assign-number": "tsx src/scripts/assign-voice-number.ts",
+    "voice:set-transfer-capability": "tsx src/scripts/set-voice-transfer-capability.ts"
   },
   "dependencies": {
+    "@avenlyo/ai": "workspace:*",
     "@avenlyo/database": "workspace:*",
+    "@avenlyo/industries": "workspace:*",
+    "@avenlyo/knowledge": "workspace:*",
     "@avenlyo/shared": "workspace:*",
+    "@avenlyo/voice": "workspace:*",
     "@fastify/cors": "^11.0.1",
     "@supabase/supabase-js": "^2.49.1",
     "dotenv": "^16.5.0",
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.0.1",
+    "openai": "^6.49.0",
     "tsx": "^4.19.3",
+    "ws": "^8.18.0",
     "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.14"
   }
 }

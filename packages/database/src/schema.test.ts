@@ -51,6 +51,21 @@ const agentRuntimeReliabilityMigration = readFileSync(
   ),
   'utf8',
 );
+const voiceMigration = readFileSync(
+  new URL('../../../supabase/migrations/20260816060000_phase_4_inbound_voice.sql', import.meta.url),
+  'utf8',
+);
+const voiceReliabilityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816061000_phase_4_voice_reliability.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const voiceSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/voice_security.test.sql', import.meta.url),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -247,5 +262,45 @@ describe('agent runtime migration definition', () => {
     expect(agentRuntimeReliabilityMigration).toContain(
       'create function public.get_agent_test_turn_result',
     );
+  });
+});
+
+describe('inbound voice migration definition', () => {
+  it('makes DID routing globally unique and provider operations service-role only', () => {
+    expect(voiceMigration).toContain('phone_numbers_provider_e164_key');
+    expect(voiceMigration).toContain('create function public.require_voice_service_role()');
+    expect(voiceMigration).toContain(
+      'grant execute on function public.bootstrap_inbound_voice_call',
+    );
+    expect(voiceMigration).toContain('to service_role');
+    expect(voiceMigration).toContain('revoke insert, update, delete on public.phone_numbers');
+  });
+
+  it('models explicit voice configuration, call idempotency, and final transcripts', () => {
+    expect(voiceMigration).toContain('create table public.voice_configurations');
+    expect(voiceMigration).toContain('create table public.voice_webhook_events');
+    expect(voiceMigration).toContain('calls_provider_external_call_id_key');
+    expect(voiceMigration).toContain('record_inbound_voice_transcript');
+    expect(voiceMigration).toContain(
+      "'voice:' || target_call_id || ':' || target_external_item_id",
+    );
+  });
+
+  it('has executable pgTAP coverage for caller isolation and backend-only functions', () => {
+    expect(voiceSecurityTest).toContain('global Twilio DID cannot be assigned');
+    expect(voiceSecurityTest).toContain(
+      'location-scoped member reads only their location voice call',
+    );
+    expect(voiceSecurityTest).toContain(
+      'authenticated clients cannot execute the inbound bootstrap RPC',
+    );
+    expect(voiceSecurityTest).toContain('transcript external identity is idempotent');
+  });
+
+  it('fails safely on replayed provider calls and converges handoffs per live call', () => {
+    expect(voiceReliabilityMigration).toContain('where event_type = target_event_type');
+    expect(voiceReliabilityMigration).toContain('on conflict do nothing');
+    expect(voiceReliabilityMigration).toContain("'voice-handoff:' || target_call.id::text");
+    expect(voiceReliabilityMigration).toContain("and mode = 'customer'");
   });
 });
