@@ -114,16 +114,16 @@ select extensions.is(
   'location-scoped member can read permitted operational data'
 );
 
-select extensions.is(
-  (
+select extensions.results_eq(
+  $$
     with deleted as (
       delete from public.locations
       where id = '11000000-0000-0000-0000-000000000001'
       returning 1
     )
     select count(*)::integer from deleted
-  ),
-  0,
+  $$,
+  array[0],
   'member cannot delete protected configuration'
 );
 
@@ -141,8 +141,8 @@ select extensions.throws_ok(
 
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000001', true);
 
-select extensions.is(
-  (
+select extensions.results_eq(
+  $$
     with updated as (
       update public.locations
       set timezone = 'Europe/Istanbul'
@@ -150,8 +150,8 @@ select extensions.is(
       returning 1
     )
     select count(*)::integer from updated
-  ),
-  1,
+  $$,
+  array[1],
   'admin can manage protected configuration'
 );
 

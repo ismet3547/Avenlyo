@@ -58,6 +58,7 @@ select set_config(
 select extensions.throws_ok(
   $$ select public.save_onboarding_industry('dentistry') $$,
   '22023',
+  'Unsupported industry identifier',
   'unsupported industry identifiers are rejected by the database'
 );
 
@@ -83,8 +84,8 @@ select set_config(
   true
 );
 
-select extensions.is(
-  (
+select extensions.results_eq(
+  $$
     with changed as (
       update public.organization_onboarding
       set current_step = 'review'
@@ -92,8 +93,8 @@ select extensions.is(
       returning 1
     )
     select count(*)::integer from changed
-  ),
-  0,
+  $$,
+  array[0],
   'a second user cannot mutate the first organization onboarding row'
 );
 
@@ -109,8 +110,8 @@ select extensions.is(
 
 select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', true);
 
-select extensions.is(
-  (
+select extensions.results_eq(
+  $$
     with changed as (
       update public.organization_onboarding
       set current_step = current_step
@@ -118,13 +119,14 @@ select extensions.is(
       returning 1
     )
     select count(*)::integer from changed
-  ),
-  1,
+  $$,
+  array[1],
   'the organization owner can update their onboarding state'
 );
 
 reset role;
 
+-- onboarding cannot reference a location from another tenant
 select extensions.throws_ok(
   format(
     'update public.organization_onboarding set location_id = %L where organization_id = %L',
@@ -135,8 +137,7 @@ select extensions.throws_ok(
     ),
     current_setting('avenlyo.test_org_a')
   ),
-  '23503',
-  'onboarding cannot reference a location from another tenant'
+  '23503'
 );
 
 set local role authenticated;
