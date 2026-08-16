@@ -78,7 +78,13 @@ describe('onboarding migration definition', () => {
     expect(onboardingMigration).toContain('create table public.organization_onboarding');
     expect(onboardingMigration).toContain('organization_onboarding_location_fk');
     expect(onboardingMigration).toContain("current_step in ('industry', 'business', 'location'");
-    expect(onboardingMigration).toContain('organization_onboarding_update_owner');
+    expect(onboardingMigration).toContain(
+      'grant select on public.organization_onboarding to authenticated',
+    );
+    expect(onboardingMigration).toContain(
+      'revoke insert, update, delete on public.organization_onboarding from authenticated',
+    );
+    expect(onboardingMigration).not.toContain('organization_onboarding_update_owner');
   });
 
   it('pairs authenticated table privileges with the existing per-operation RLS policies', () => {
@@ -94,6 +100,9 @@ describe('onboarding migration definition', () => {
     expect(onboardingSecurityTest).toContain('public.bootstrap_workspace()');
     expect(onboardingSecurityTest).toContain("public.save_onboarding_industry('dentistry')");
     expect(onboardingSecurityTest).toContain('a second user cannot mutate');
+    expect(onboardingSecurityTest).toContain(
+      'an organization owner cannot directly complete onboarding',
+    );
     expect(onboardingSecurityTest).toContain(
       'onboarding cannot reference a location from another tenant',
     );

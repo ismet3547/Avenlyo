@@ -110,18 +110,18 @@ select extensions.is(
 
 select set_config('request.jwt.claim.sub', '30000000-0000-0000-0000-000000000001', true);
 
-select extensions.results_eq(
+select extensions.throws_ok(
   $$
-    with changed as (
-      update public.organization_onboarding
-      set current_step = current_step
-      where organization_id = current_setting('avenlyo.test_org_a')::uuid
-      returning 1
-    )
-    select count(*)::integer from changed
+    update public.organization_onboarding
+    set
+      status = 'completed',
+      current_step = 'completed',
+      completed_at = now()
+    where organization_id = current_setting('avenlyo.test_org_a')::uuid
   $$,
-  array[1],
-  'the organization owner can update their onboarding state'
+  '42501',
+  'permission denied for table organization_onboarding',
+  'an organization owner cannot directly complete onboarding'
 );
 
 reset role;
@@ -178,7 +178,7 @@ select extensions.lives_ok(
     end
     $setup$
   $onboarding$,
-  'a valid onboarding workflow can be completed atomically per step'
+  'trusted onboarding RPCs persist valid steps and complete the workflow'
 );
 
 select extensions.is(

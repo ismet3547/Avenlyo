@@ -166,13 +166,10 @@ create policy organization_onboarding_select_member
   for select to authenticated
   using (public.is_organization_member(organization_id));
 
-create policy organization_onboarding_update_owner
-  on public.organization_onboarding
-  for update to authenticated
-  using (public.is_organization_owner(organization_id))
-  with check (public.is_organization_owner(organization_id));
-
-grant select, update on public.organization_onboarding to authenticated;
+-- Onboarding is a state machine. Authenticated clients can inspect their own state,
+-- but only the security-definer onboarding RPCs below may create or transition it.
+grant select on public.organization_onboarding to authenticated;
+revoke insert, update, delete on public.organization_onboarding from authenticated;
 
 -- PostgreSQL privileges are the outer gate and RLS is the tenant/role gate. Phase 0 defined the
 -- per-operation policies but intentionally did not grant blanket table access. Grant only the
