@@ -721,7 +721,7 @@ begin
     knowledge_document.title,
     knowledge_document.canonical_url,
     knowledge_chunk.content,
-    1 - (knowledge_chunk.embedding <=> query_embedding)
+    1 - (knowledge_chunk.embedding OPERATOR(extensions.<=>) query_embedding)
   from public.knowledge_chunks as knowledge_chunk
   join public.knowledge_documents as knowledge_document
     on knowledge_document.organization_id = knowledge_chunk.organization_id
@@ -730,7 +730,7 @@ begin
     and knowledge_chunk.embedding is not null
     and public.has_location_access(knowledge_chunk.organization_id, knowledge_chunk.location_id)
     and (requested_location_id is null or knowledge_chunk.location_id = requested_location_id)
-  order by knowledge_chunk.embedding <=> query_embedding
+  order by knowledge_chunk.embedding OPERATOR(extensions.<=>) query_embedding
   limit requested_match_count;
 end;
 $$;

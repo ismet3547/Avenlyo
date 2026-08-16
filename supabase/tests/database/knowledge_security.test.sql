@@ -171,6 +171,7 @@ select extensions.throws_ok(
     current_setting('avenlyo.knowledge_import_b')
   ),
   '23503',
+  'insert or update on table "knowledge_documents" violates foreign key constraint "knowledge_documents_import_fk"',
   'knowledge import/document relationships reject cross-tenant references'
 );
 
