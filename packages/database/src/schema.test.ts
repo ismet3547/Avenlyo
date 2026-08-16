@@ -7,6 +7,16 @@ const migration = readFileSync(
   'utf8',
 );
 
+const onboardingMigration = readFileSync(
+  new URL('../../../supabase/migrations/20260816010000_phase_1_onboarding.sql', import.meta.url),
+  'utf8',
+);
+
+const onboardingSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/onboarding_security.test.sql', import.meta.url),
+  'utf8',
+);
+
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
     expect(migration).not.toMatch(/create policy[\s\S]*?for all/i);
@@ -53,5 +63,51 @@ describe('foundation migration definition', () => {
     expect(migration).toContain('industry_templates_scope_check');
     expect(migration).toContain('(not is_system and organization_id is not null)');
     expect(migration).toContain('validate_ai_agent_template_scope');
+  });
+});
+
+describe('onboarding migration definition', () => {
+  it('uses auth-derived atomic workspace bootstrap without caller-supplied tenant identity', () => {
+    expect(onboardingMigration).toContain('create function public.bootstrap_workspace()');
+    expect(onboardingMigration).toContain('current_user_id uuid := auth.uid()');
+    expect(onboardingMigration).not.toMatch(/bootstrap_workspace\([^)]*(user|organization)_id/i);
+    expect(onboardingMigration).toContain('drop policy organizations_insert_authenticated');
+  });
+
+  it('persists constrained onboarding state and tenant-safe location ownership', () => {
+    expect(onboardingMigration).toContain('create table public.organization_onboarding');
+    expect(onboardingMigration).toContain('organization_onboarding_location_fk');
+    expect(onboardingMigration).toContain("current_step in ('industry', 'business', 'location'");
+    expect(onboardingMigration).toContain(
+      'grant select on public.organization_onboarding to authenticated',
+    );
+    expect(onboardingMigration).toContain(
+      'revoke insert, update, delete on public.organization_onboarding from authenticated',
+    );
+    expect(onboardingMigration).not.toContain('organization_onboarding_update_owner');
+  });
+
+  it('pairs authenticated table privileges with the existing per-operation RLS policies', () => {
+    expect(onboardingMigration).toContain(
+      'grant select, insert, update, delete on public.organization_members to authenticated',
+    );
+    expect(onboardingMigration).toContain('public.contacts,');
+    expect(onboardingMigration).toContain('grant select on public.action_logs to authenticated');
+    expect(onboardingMigration).not.toContain('grant all');
+  });
+
+  it('executes the required onboarding security cases through pgTAP', () => {
+    expect(onboardingSecurityTest).toContain('public.bootstrap_workspace()');
+    expect(onboardingSecurityTest).toContain("public.save_onboarding_industry('dentistry')");
+    expect(onboardingSecurityTest).toContain('a second user cannot directly mutate');
+    expect(onboardingSecurityTest).toContain(
+      'an organization owner cannot directly complete onboarding',
+    );
+    expect(onboardingSecurityTest).toContain(
+      'onboarding cannot reference a location from another tenant',
+    );
+    expect(onboardingSecurityTest).toContain(
+      'Phase 0 location-scoped RLS still hides unrelated locations',
+    );
   });
 });

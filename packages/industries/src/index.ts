@@ -3,9 +3,11 @@ export {
   getIndustryPack,
   industryPacks,
   medspaPack,
+  resolveIndustryPack,
   veterinaryPack,
 } from './packs';
-export { industryIds } from './types';
+export { industryIdSchema, industrySelectionSchema } from './validation';
+export { industryIds, isIndustryId } from './types';
 export type {
   AgentAction,
   BookingCapabilities,

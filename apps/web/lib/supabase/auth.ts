@@ -2,7 +2,7 @@ import type { User } from '@supabase/supabase-js';
 
 import { createServerSupabaseClient } from './server';
 
-export async function getOptionalCurrentUser(): Promise<User | null> {
+export async function getRequiredAuthContext() {
   const supabase = await createServerSupabaseClient();
 
   if (!supabase) {
@@ -11,9 +11,13 @@ export async function getOptionalCurrentUser(): Promise<User | null> {
 
   const { data, error } = await supabase.auth.getUser();
 
-  if (error) {
+  if (error || !data.user) {
     return null;
   }
 
-  return data.user;
+  return { supabase, user: data.user };
+}
+
+export async function getOptionalCurrentUser(): Promise<User | null> {
+  return (await getRequiredAuthContext())?.user ?? null;
 }

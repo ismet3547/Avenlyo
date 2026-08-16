@@ -1,7 +1,15 @@
 import { createServerClient } from '@supabase/ssr';
+import type { CookieOptions } from '@supabase/ssr';
+import type { Database } from '@avenlyo/database';
 import { cookies } from 'next/headers';
 
 import { getSupabaseCredentials } from './config';
+
+interface SupabaseCookie {
+  name: string;
+  options: CookieOptions;
+  value: string;
+}
 
 export async function createServerSupabaseClient() {
   const credentials = getSupabaseCredentials();
@@ -12,12 +20,12 @@ export async function createServerSupabaseClient() {
 
   const cookieStore = await cookies();
 
-  return createServerClient(credentials.url, credentials.anonKey, {
+  return createServerClient<Database>(credentials.url, credentials.anonKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
       },
-      setAll(values) {
+      setAll(values: SupabaseCookie[]) {
         try {
           values.forEach(({ name, options, value }) => cookieStore.set(name, value, options));
         } catch {
@@ -27,3 +35,7 @@ export async function createServerSupabaseClient() {
     },
   });
 }
+
+export type AvenlyoSupabaseClient = NonNullable<
+  Awaited<ReturnType<typeof createServerSupabaseClient>>
+>;

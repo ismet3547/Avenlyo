@@ -83,6 +83,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@avenlyo/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@avenlyo/industries':
+        specifier: workspace:*
+        version: link:../../packages/industries
       '@avenlyo/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -113,6 +119,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.8(react@19.2.8)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
     devDependencies:
       '@types/react':
         specifier: ^19.0.10
@@ -138,7 +147,11 @@ importers:
         specifier: ^2.49.1
         version: 2.112.3
 
-  packages/industries: {}
+  packages/industries:
+    dependencies:
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
 
   packages/integrations: {}
 

@@ -4,15 +4,15 @@
 
 @layer base {
   :root {
-    --background: 210 40% 98%;
-    --foreground: 222 47% 11%;
-    --primary: 221 83% 53%;
-    --primary-foreground: 210 40% 98%;
-    --muted: 214 32% 91%;
-    --muted-foreground: 215 16% 47%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 221 83% 53%;
+    --background: 216 33% 98%;
+    --foreground: 221 46% 12%;
+    --primary: 228 64% 51%;
+    --primary-foreground: 0 0% 100%;
+    --muted: 218 27% 94%;
+    --muted-foreground: 218 13% 43%;
+    --border: 218 25% 88%;
+    --input: 218 25% 84%;
+    --ring: 228 64% 51%;
   }
 
   * {
@@ -20,6 +20,36 @@
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background font-body text-foreground antialiased;
   }
+}
+
+@layer components {
+  .avenlyo-input {
+    @apply block h-11 w-full rounded-xl border border-input bg-white px-3.5 text-sm text-ink shadow-sm outline-none transition placeholder:text-slate-400 focus:border-primary focus:ring-4 focus:ring-primary/10;
+  }
+
+  .avenlyo-textarea {
+    @apply block w-full rounded-xl border border-input bg-white px-3.5 py-3 text-sm text-ink shadow-sm outline-none transition placeholder:text-slate-400 focus:border-primary focus:ring-4 focus:ring-primary/10;
+  }
+}
+
+.auth-signal-panel {
+  background:
+    radial-gradient(circle at 75% 24%, rgba(120, 224, 194, 0.16), transparent 28%),
+    linear-gradient(145deg, #111a2e 0%, #172958 58%, #263f92 100%);
+}
+
+.auth-signal-panel::after {
+  position: absolute;
+  right: -12rem;
+  bottom: -15rem;
+  width: 34rem;
+  height: 34rem;
+  content: '';
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 5rem rgba(255, 255, 255, 0.025),
+    0 0 0 10rem rgba(255, 255, 255, 0.018);
 }
