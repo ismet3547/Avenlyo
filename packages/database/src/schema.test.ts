@@ -81,6 +81,15 @@ describe('onboarding migration definition', () => {
     expect(onboardingMigration).toContain('organization_onboarding_update_owner');
   });
 
+  it('pairs authenticated table privileges with the existing per-operation RLS policies', () => {
+    expect(onboardingMigration).toContain(
+      'grant select, insert, update, delete on public.organization_members to authenticated',
+    );
+    expect(onboardingMigration).toContain('public.contacts,');
+    expect(onboardingMigration).toContain('grant select on public.action_logs to authenticated');
+    expect(onboardingMigration).not.toContain('grant all');
+  });
+
   it('executes the required onboarding security cases through pgTAP', () => {
     expect(onboardingSecurityTest).toContain('public.bootstrap_workspace()');
     expect(onboardingSecurityTest).toContain("public.save_onboarding_industry('dentistry')");

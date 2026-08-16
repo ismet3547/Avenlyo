@@ -174,6 +174,34 @@ create policy organization_onboarding_update_owner
 
 grant select, update on public.organization_onboarding to authenticated;
 
+-- PostgreSQL privileges are the outer gate and RLS is the tenant/role gate. Phase 0 defined the
+-- per-operation policies but intentionally did not grant blanket table access. Grant only the
+-- operations for which an authenticated policy exists; RLS still decides which rows are visible
+-- or mutable for each owner, admin, or location-scoped member.
+grant select, update on public.users to authenticated;
+grant select, update, delete on public.organizations to authenticated;
+grant select, insert, update, delete on public.organization_members to authenticated;
+grant select, insert, update, delete on public.organization_member_locations to authenticated;
+grant select, insert, update, delete on public.industry_templates to authenticated;
+grant select, insert, update, delete on public.locations to authenticated;
+grant select, insert, update, delete on
+  public.ai_agents,
+  public.agent_rules,
+  public.phone_numbers,
+  public.channels,
+  public.integrations,
+  public.knowledge_documents,
+  public.knowledge_chunks,
+  public.contacts,
+  public.conversations,
+  public.messages,
+  public.calls,
+  public.appointments,
+  public.leads,
+  public.handoffs
+to authenticated;
+grant select on public.action_logs to authenticated;
+
 -- Workspace creation is now exclusively atomic. Authenticated clients can no longer create an
 -- organization and its first privileged membership as separate, partially valid writes.
 drop policy organizations_insert_authenticated on public.organizations;
