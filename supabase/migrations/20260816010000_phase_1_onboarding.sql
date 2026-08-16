@@ -633,6 +633,8 @@ revoke all on function public.advance_onboarding_website() from public;
 revoke all on function public.complete_onboarding() from public;
 revoke all on function public.get_my_tenant_context() from public;
 
+grant execute on function public.is_valid_business_hours(jsonb) to authenticated;
+grant execute on function public.is_valid_location_address(jsonb) to authenticated;
 grant execute on function public.bootstrap_workspace() to authenticated;
 grant execute on function public.save_onboarding_industry(text) to authenticated;
 grant execute on function public.save_onboarding_business(text, text, text) to authenticated;
