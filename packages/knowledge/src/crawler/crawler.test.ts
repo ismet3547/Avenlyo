@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { WebsiteCrawler } from './crawler';
 import { SecureFetcher, type FetchedResponse, type PinnedTransport } from './fetcher';
-import { defaultCrawlLimits } from './types';
+import { CrawlPolicyError, defaultCrawlLimits, type CrawlLimits } from './types';
 
 interface FixtureResponse {
   readonly body?: string;
@@ -19,40 +19,69 @@ function page(
   return { body, bytes: Buffer.byteLength(body), headers, statusCode: 200, url };
 }
 
+interface TestCrawlerOptions {
+  readonly byteLimits?: number[];
+  readonly limits?: CrawlLimits;
+}
+
 function testCrawler(
   pages: ReadonlyMap<string, string | FixtureResponse>,
   robotsByOrigin = new Map<string, string>(),
   requests: string[] = [],
+  options: TestCrawlerOptions = {},
 ): WebsiteCrawler {
+  const limits = options.limits ?? defaultCrawlLimits;
   const transport: PinnedTransport = {
-    request(url) {
+    request(url, _address, _timeoutMs, maxBytes, onBodyBytes) {
       requests.push(url.toString());
+      options.byteLimits?.push(maxBytes);
+      let result: FetchedResponse;
       if (url.pathname === '/robots.txt') {
-        return Promise.resolve(
-          page(url, robotsByOrigin.get(url.origin) ?? '', { 'content-type': 'text/plain' }),
+        result = page(url, robotsByOrigin.get(url.origin) ?? '', { 'content-type': 'text/plain' });
+      } else {
+        const fixture = pages.get(url.toString());
+        if (!fixture) result = { body: '', bytes: 0, headers: {}, statusCode: 404, url };
+        else if (typeof fixture === 'string') result = page(url, fixture);
+        else {
+          const body = fixture.body ?? '';
+          result = {
+            body,
+            bytes: Buffer.byteLength(body),
+            headers: fixture.headers ?? {},
+            statusCode: fixture.statusCode,
+            url,
+          };
+        }
+      }
+      if (result.bytes > maxBytes) {
+        return Promise.reject(
+          new CrawlPolicyError('body_too_large', 'The response exceeded its byte allowance.'),
         );
       }
-      const fixture = pages.get(url.toString());
-      if (!fixture)
-        return Promise.resolve({ body: '', bytes: 0, headers: {}, statusCode: 404, url });
-      if (typeof fixture === 'string') return Promise.resolve(page(url, fixture));
-      const body = fixture.body ?? '';
-      return Promise.resolve({
-        body,
-        bytes: Buffer.byteLength(body),
-        headers: fixture.headers ?? {},
-        statusCode: fixture.statusCode,
-        url,
-      });
+      try {
+        onBodyBytes?.(result.bytes);
+        return Promise.resolve(result);
+      } catch (error) {
+        return Promise.reject(
+          error instanceof Error ? error : new Error('The response byte accounting failed.'),
+        );
+      }
     },
   };
   return new WebsiteCrawler({
     fetcher: new SecureFetcher({
       dnsResolver: () => Promise.resolve([{ address: '8.8.8.8', family: 4 }]),
-      limits: defaultCrawlLimits,
+      limits,
       transport,
     }),
+    limits,
   });
+}
+
+function usefulPage(content: string, href?: string, additionalHtml = ''): string {
+  return `<main><h1>Business information</h1><p>${content}</p>${
+    href ? `<a href="${href}">Learn more</a>` : ''
+  }${additionalHtml}</main>`;
 }
 
 describe('website crawler', () => {
@@ -188,5 +217,207 @@ describe('website crawler', () => {
     expect(result.pages).toHaveLength(1);
     expect(result.pages[0]?.content).not.toContain('must never be imported');
     expect(requests).not.toContain('https://unrelated.example/services');
+  });
+
+  it('bounds the queue and counts short content pages toward the logical page-attempt limit', async () => {
+    const requests: string[] = [];
+    const links = Array.from({ length: 100 }, (_, index) => `/tiny-${index}`);
+    const pages = new Map<string, string | FixtureResponse>([
+      [
+        'https://clinic.example/',
+        usefulPage('Useful root content for customers and their pets.', links[0]),
+      ],
+    ]);
+    for (const link of links) {
+      pages.set(`https://clinic.example${link}`, '<main><p>Too short</p></main>');
+    }
+    // Include every link in the root without retaining more than the remaining 19 candidates.
+    pages.set(
+      'https://clinic.example/',
+      usefulPage(
+        'Useful root content for customers and their pets.',
+        undefined,
+        links.map((link) => `<a href="${link}">Tiny</a>`).join(''),
+      ),
+    );
+    const crawler = testCrawler(pages, new Map(), requests, {
+      limits: { ...defaultCrawlLimits, maxPages: 20 },
+    });
+
+    const result = await crawler.crawl('https://clinic.example');
+
+    expect(requests.filter((request) => !request.endsWith('/robots.txt'))).toHaveLength(20);
+    expect(result.pagesDiscovered).toBe(20);
+    expect(result.pagesSkipped).toBe(19);
+  });
+
+  it('counts failed content-page fetches toward the logical page-attempt limit', async () => {
+    const requests: string[] = [];
+    const links = Array.from(
+      { length: 100 },
+      (_, index) => `<a href="/missing-${index}">Missing</a>`,
+    ).join('');
+    const crawler = testCrawler(
+      new Map([
+        [
+          'https://clinic.example/',
+          usefulPage('Useful root content for customers and their pets.', undefined, links),
+        ],
+      ]),
+      new Map(),
+      requests,
+      { limits: { ...defaultCrawlLimits, maxPages: 20 } },
+    );
+
+    const result = await crawler.crawl('https://clinic.example');
+
+    expect(requests.filter((request) => !request.endsWith('/robots.txt'))).toHaveLength(20);
+    expect(result.pagesDiscovered).toBe(20);
+    expect(result.pagesSkipped).toBe(19);
+  });
+
+  it('counts non-HTML pages toward the logical page-attempt limit', async () => {
+    const requests: string[] = [];
+    const links = Array.from(
+      { length: 100 },
+      (_, index) => `<a href="/not-html-${index}">Not HTML</a>`,
+    ).join('');
+    const pages = new Map<string, string | FixtureResponse>([
+      [
+        'https://clinic.example/',
+        usefulPage('Useful root content for customers and their pets.', undefined, links),
+      ],
+    ]);
+    for (let index = 0; index < 100; index += 1) {
+      pages.set(`https://clinic.example/not-html-${index}`, {
+        body: 'plain text response',
+        headers: { 'content-type': 'text/plain' },
+        statusCode: 200,
+      });
+    }
+    const crawler = testCrawler(pages, new Map(), requests, {
+      limits: { ...defaultCrawlLimits, maxPages: 20 },
+    });
+
+    const result = await crawler.crawl('https://clinic.example');
+
+    expect(requests.filter((request) => !request.endsWith('/robots.txt'))).toHaveLength(20);
+    expect(result.pagesDiscovered).toBe(20);
+    expect(result.pagesSkipped).toBe(19);
+  });
+
+  it('caps a final HTML response to the remaining aggregate download allowance', async () => {
+    const requests: string[] = [];
+    const byteLimits: number[] = [];
+    const root = usefulPage('r'.repeat(80), '/final');
+    const final = usefulPage('f'.repeat(80));
+    const crawler = testCrawler(
+      new Map([
+        ['https://clinic.example/', root],
+        ['https://clinic.example/final', final],
+      ]),
+      new Map(),
+      requests,
+      {
+        byteLimits,
+        limits: {
+          ...defaultCrawlLimits,
+          maxTotalDownloadBytes: Buffer.byteLength(root) + Buffer.byteLength(final) - 1,
+        },
+      },
+    );
+
+    await expect(crawler.crawl('https://clinic.example')).rejects.toMatchObject({
+      code: 'body_too_large',
+    });
+    expect(byteLimits[requests.indexOf('https://clinic.example/final')]).toBe(
+      Buffer.byteLength(final) - 1,
+    );
+  });
+
+  it('charges redirect bodies before fetching the final HTML response', async () => {
+    const requests: string[] = [];
+    const byteLimits: number[] = [];
+    const root = usefulPage('r'.repeat(80), '/redirect');
+    const redirectBody = 'redirect-body'.repeat(5);
+    const final = usefulPage('f'.repeat(80));
+    const crawler = testCrawler(
+      new Map<string, string | FixtureResponse>([
+        ['https://clinic.example/', root],
+        [
+          'https://clinic.example/redirect',
+          { body: redirectBody, headers: { location: '/final' }, statusCode: 302 },
+        ],
+        ['https://clinic.example/final', final],
+      ]),
+      new Map(),
+      requests,
+      {
+        byteLimits,
+        limits: {
+          ...defaultCrawlLimits,
+          maxTotalDownloadBytes:
+            Buffer.byteLength(root) +
+            Buffer.byteLength(redirectBody) +
+            Buffer.byteLength(final) -
+            1,
+        },
+      },
+    );
+
+    await expect(crawler.crawl('https://clinic.example')).rejects.toMatchObject({
+      code: 'body_too_large',
+    });
+    expect(byteLimits[requests.indexOf('https://clinic.example/final')]).toBe(
+      Buffer.byteLength(final) - 1,
+    );
+  });
+
+  it('charges robots.txt against the aggregate download allowance', async () => {
+    const root = usefulPage('r'.repeat(80));
+    const robots = '# crawler policy\n'.repeat(8);
+    const crawler = testCrawler(
+      new Map([['https://clinic.example/', root]]),
+      new Map([['https://clinic.example', robots]]),
+      [],
+      {
+        limits: {
+          ...defaultCrawlLimits,
+          maxTotalDownloadBytes: Buffer.byteLength(robots) + Buffer.byteLength(root) - 1,
+        },
+      },
+    );
+
+    await expect(crawler.crawl('https://clinic.example')).rejects.toMatchObject({
+      code: 'body_too_large',
+    });
+  });
+
+  it('completes a crawl when robots, HTML, and linked pages fit within the aggregate budget', async () => {
+    const root = usefulPage('r'.repeat(80), '/services');
+    const services = usefulPage('s'.repeat(80));
+    const robots = 'User-agent: *\nAllow: /\n';
+    const crawler = testCrawler(
+      new Map([
+        ['https://clinic.example/', root],
+        ['https://clinic.example/services', services],
+      ]),
+      new Map([['https://clinic.example', robots]]),
+      [],
+      {
+        limits: {
+          ...defaultCrawlLimits,
+          maxTotalDownloadBytes:
+            Buffer.byteLength(robots) + Buffer.byteLength(root) + Buffer.byteLength(services),
+        },
+      },
+    );
+
+    await expect(crawler.crawl('https://clinic.example')).resolves.toMatchObject({
+      pages: expect.arrayContaining([
+        expect.objectContaining({ canonicalUrl: 'https://clinic.example/' }),
+        expect.objectContaining({ canonicalUrl: 'https://clinic.example/services' }),
+      ]),
+    });
   });
 });

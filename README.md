@@ -178,8 +178,11 @@ or publication. A retrieval test returns source chunks only; it does not generat
 
 - Static HTML/XHTML only; scripts, navigation noise, forms, iframes, and raw HTML rendering are
   excluded. JavaScript-rendered sites and PDFs are intentionally unsupported.
-- Each import is capped at 20 pages, depth 2, five redirects per request, 8 seconds per request,
-  1 MB of HTML per page, and 5 MB total HTML.
+- Each import is capped at 20 logical content-page attempts (including the root and unsuccessful,
+  short, or non-HTML responses), depth 2, five redirects per request, 8 seconds per request,
+  1 MB per response, and 5 MB of aggregate response bodies. The aggregate allowance includes
+  HTML, redirect bodies, and `robots.txt`; it is charged as bytes arrive and the crawl queue is
+  bounded by the remaining page-attempt capacity.
 - The synchronous `KnowledgeImportRunner` is an MVP boundary designed to move to a queue/worker
   later. A failed rescan never removes already published knowledge. Publishing first reserves an
   immutable review snapshot, performs embeddings outside a database transaction, then completes

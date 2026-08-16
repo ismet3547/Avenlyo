@@ -1,6 +1,7 @@
 export { chunkKnowledgeContent } from './chunking/chunker';
 export type { ChunkingOptions, KnowledgeChunkDraft } from './chunking/chunker';
 export { WebsiteCrawler } from './crawler/crawler';
+export { CrawlDownloadBudget } from './crawler/download-budget';
 export { resolvePublicAddresses, isPublicAddress } from './crawler/dns-policy';
 export { SecureFetcher, nodePinnedTransport } from './crawler/fetcher';
 export { extractHtml } from './crawler/html-extractor';

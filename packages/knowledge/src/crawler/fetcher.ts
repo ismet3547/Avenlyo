@@ -3,6 +3,7 @@ import { request as httpsRequest } from 'node:https';
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
 
 import { resolvePublicAddresses, type DnsResolver, type ResolvedAddress } from './dns-policy';
+import type { CrawlDownloadBudget } from './download-budget';
 import { CrawlPolicyError, type CrawlLimits } from './types';
 import { normalizeCrawlUrl } from './url-policy';
 
@@ -17,11 +18,13 @@ export interface FetchedResponse {
 }
 
 export interface PinnedTransport {
+  /** Calls `onBodyBytes` for every accepted response-body chunk before buffering it. */
   request(
     url: URL,
     address: ResolvedAddress,
     timeoutMs: number,
     maxBytes: number,
+    onBodyBytes: (bytes: number) => void,
   ): Promise<FetchedResponse>;
 }
 
@@ -42,7 +45,7 @@ function contentTypeIsHtml(headers: IncomingHttpHeaders): boolean {
  * the original public hostname rather than the resolved IP address.
  */
 export const nodePinnedTransport: PinnedTransport = {
-  request(url, address, timeoutMs, maxBytes) {
+  request(url, address, timeoutMs, maxBytes, onBodyBytes) {
     return new Promise((resolve, reject) => {
       const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
       const requestStartedAt = Date.now();
@@ -91,8 +94,9 @@ export const nodePinnedTransport: PinnedTransport = {
           const chunks: Buffer[] = [];
           let bytes = 0;
           response.on('data', (chunk: Buffer) => {
-            bytes += chunk.length;
-            if (bytes > maxBytes) {
+            if (settled) return;
+            const nextBytes = bytes + chunk.length;
+            if (nextBytes > maxBytes) {
               fail(
                 new CrawlPolicyError(
                   'body_too_large',
@@ -101,6 +105,20 @@ export const nodePinnedTransport: PinnedTransport = {
               );
               return;
             }
+            try {
+              onBodyBytes(chunk.length);
+            } catch (error) {
+              fail(
+                error instanceof CrawlPolicyError
+                  ? error
+                  : new CrawlPolicyError(
+                      'body_too_large',
+                      'The website exceeded the total import size limit.',
+                    ),
+              );
+              return;
+            }
+            bytes = nextBytes;
             chunks.push(chunk);
           });
           response.once('aborted', failNetwork);
@@ -143,6 +161,8 @@ export interface SecureFetcherOptions {
 export interface FetchOptions {
   /** Runs after URL/DNS validation and before every request, including redirects. */
   readonly beforeRequest?: (targetUrl: URL) => Promise<void> | void;
+  /** Aggregate response-body allowance shared by all requests in a crawl. */
+  readonly downloadBudget?: CrawlDownloadBudget;
   readonly requireHtml?: boolean;
 }
 
@@ -167,11 +187,19 @@ export class SecureFetcher {
     ) {
       const addresses = await resolvePublicAddresses(current.hostname, this.dnsResolver);
       await fetchOptions.beforeRequest?.(current);
+      const remainingBytes = fetchOptions.downloadBudget?.remainingBytes();
+      if (remainingBytes !== undefined && remainingBytes <= 0) {
+        throw new CrawlPolicyError(
+          'body_too_large',
+          'The website exceeded the total import size limit.',
+        );
+      }
       const response = await this.transport.request(
         current,
         addresses[0]!,
         this.options.limits.requestTimeoutMs,
-        this.options.limits.maxHtmlBytesPerPage,
+        Math.min(this.options.limits.maxHtmlBytesPerPage, remainingBytes ?? Infinity),
+        (bytes) => fetchOptions.downloadBudget?.consumeBytes(bytes),
       );
 
       if (redirectStatuses.has(response.statusCode)) {

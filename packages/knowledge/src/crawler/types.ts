@@ -3,7 +3,8 @@ export interface CrawlLimits {
   readonly maxHtmlBytesPerPage: number;
   readonly maxPages: number;
   readonly maxRedirects: number;
-  readonly maxTotalHtmlBytes: number;
+  /** Aggregate response-body limit for HTML pages, redirects, and robots.txt. */
+  readonly maxTotalDownloadBytes: number;
   readonly requestTimeoutMs: number;
 }
 
@@ -12,7 +13,7 @@ export const defaultCrawlLimits: CrawlLimits = {
   maxHtmlBytesPerPage: 1_000_000,
   maxPages: 20,
   maxRedirects: 5,
-  maxTotalHtmlBytes: 5_000_000,
+  maxTotalDownloadBytes: 5_000_000,
   requestTimeoutMs: 8_000,
 };
 

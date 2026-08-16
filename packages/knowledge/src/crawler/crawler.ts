@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { extractHtml } from './html-extractor';
 import { extractLinks } from './link-extractor';
 import { parseRobots, robotsUrlFor, type RobotsPolicy } from './robots';
+import { CrawlDownloadBudget } from './download-budget';
 import { SecureFetcher } from './fetcher';
 import {
   CrawlPolicyError,
@@ -52,9 +53,10 @@ export class WebsiteCrawler {
   public async crawl(input: string): Promise<CrawlResult> {
     this.robotsByOrigin.clear();
     const initial = normalizeCrawlUrl(input);
+    const downloadBudget = new CrawlDownloadBudget(this.limits.maxTotalDownloadBytes);
     // The initial URL is allowed to establish the final root site after safe redirects.
     // Every request in that redirect chain still has its own origin-specific robots check.
-    const rootResponse = await this.fetchHtml(initial);
+    const rootResponse = await this.fetchHtml(initial, undefined, downloadBudget);
     const root = normalizeCrawlUrl(rootResponse.url.toString());
     const rootDomain = registrableDomain(root);
 
@@ -63,9 +65,10 @@ export class WebsiteCrawler {
     const visited = new Set<string>();
     const pages: CrawledPage[] = [];
     let pagesSkipped = 0;
-    let totalBytes = 0;
+    // A redirected request remains one logical page attempt. The root request counts as the first.
+    let pageAttempts = 1;
 
-    while (queue.length > 0 && pages.length < this.limits.maxPages) {
+    while (queue.length > 0) {
       queue.sort(
         (left, right) => left.depth - right.depth || priority(left.url) - priority(right.url),
       );
@@ -75,11 +78,15 @@ export class WebsiteCrawler {
 
       let response;
       try {
-        response =
-          current.url.toString() === root.toString()
-            ? rootResponse
-            : await this.fetchHtml(current.url, rootDomain);
+        if (current.url.toString() === root.toString()) {
+          response = rootResponse;
+        } else {
+          if (pageAttempts >= this.limits.maxPages) break;
+          pageAttempts += 1;
+          response = await this.fetchHtml(current.url, rootDomain, downloadBudget);
+        }
       } catch (error) {
+        if (error instanceof CrawlPolicyError && error.code === 'body_too_large') throw error;
         if (error instanceof CrawlPolicyError && error.code === 'invalid_content_type')
           pagesSkipped += 1;
         else if (current.depth === 0) throw error;
@@ -87,13 +94,6 @@ export class WebsiteCrawler {
         continue;
       }
 
-      totalBytes += response.bytes;
-      if (totalBytes > this.limits.maxTotalHtmlBytes) {
-        throw new CrawlPolicyError(
-          'body_too_large',
-          'The website exceeded the total import size limit.',
-        );
-      }
       const extracted = extractHtml(response.body);
       if (extracted.content.length >= 40) {
         const canonicalUrl = normalizeCrawlUrl(response.url.toString()).toString();
@@ -109,16 +109,22 @@ export class WebsiteCrawler {
 
       if (current.depth >= this.limits.maxDepth) continue;
       for (const link of extractLinks(response.body, response.url.toString())) {
+        // There is no value in retaining candidates that cannot be attempted under the page cap.
+        if (queue.length >= Math.max(0, this.limits.maxPages - pageAttempts)) break;
         if (!isInCrawlScope(link, rootDomain) || queued.has(link.toString())) continue;
         queued.add(link.toString());
         queue.push({ depth: current.depth + 1, url: link });
       }
     }
 
-    return { pages, pagesDiscovered: visited.size, pagesSkipped, rootUrl: root.toString() };
+    return { pages, pagesDiscovered: pageAttempts, pagesSkipped, rootUrl: root.toString() };
   }
 
-  private async fetchHtml(candidate: URL, rootDomain?: string) {
+  private async fetchHtml(
+    candidate: URL,
+    rootDomain: string | undefined,
+    downloadBudget: CrawlDownloadBudget,
+  ) {
     return this.fetcher.fetch(candidate, {
       beforeRequest: async (target) => {
         if (rootDomain && !isInCrawlScope(target, rootDomain)) {
@@ -127,13 +133,17 @@ export class WebsiteCrawler {
             'The website redirected outside its allowed domain.',
           );
         }
-        await this.assertRobotsAllowed(target);
+        await this.assertRobotsAllowed(target, downloadBudget);
       },
+      downloadBudget,
     });
   }
 
-  private async assertRobotsAllowed(candidate: URL): Promise<void> {
-    const policy = await this.loadRobots(candidate);
+  private async assertRobotsAllowed(
+    candidate: URL,
+    downloadBudget: CrawlDownloadBudget,
+  ): Promise<void> {
+    const policy = await this.loadRobots(candidate, downloadBudget);
     if (policy && !policy.isAllowed(candidate)) {
       throw new CrawlPolicyError(
         'robots_disallowed',
@@ -142,20 +152,29 @@ export class WebsiteCrawler {
     }
   }
 
-  private async loadRobots(candidate: URL): Promise<RobotsPolicy | null> {
+  private async loadRobots(
+    candidate: URL,
+    downloadBudget: CrawlDownloadBudget,
+  ): Promise<RobotsPolicy | null> {
     const origin = candidate.origin;
     const cached = this.robotsByOrigin.get(origin);
     if (cached) return cached;
-    const policy = this.fetchRobots(candidate);
+    const policy = this.fetchRobots(candidate, downloadBudget);
     this.robotsByOrigin.set(origin, policy);
     return policy;
   }
 
-  private async fetchRobots(candidate: URL): Promise<RobotsPolicy | null> {
+  private async fetchRobots(
+    candidate: URL,
+    downloadBudget: CrawlDownloadBudget,
+  ): Promise<RobotsPolicy | null> {
     try {
       // `robots.txt` is fetched through the same URL/DNS-pinned policy. It need not be HTML.
       const robotsUrl = robotsUrlFor(candidate);
-      const robotsResponse = await this.fetcher.fetch(robotsUrl, { requireHtml: false });
+      const robotsResponse = await this.fetcher.fetch(robotsUrl, {
+        downloadBudget,
+        requireHtml: false,
+      });
       return parseRobots(robotsUrl, robotsResponse.body);
     } catch (error) {
       if (error instanceof CrawlPolicyError && error.code === 'request_failed') return null;

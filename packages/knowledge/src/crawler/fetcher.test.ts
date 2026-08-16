@@ -92,6 +92,7 @@ describe('secure redirect handling', () => {
           { address: '127.0.0.1', family: 4 },
           30,
           1_000_000,
+          () => undefined,
         ),
       ).rejects.toMatchObject({ code: 'request_timeout' });
     } finally {
