@@ -1,21 +1,32 @@
-import Link from 'next/link';
+import { redirect } from 'next/navigation';
 
-import { Button } from '@/components/ui/button';
+import { signInAction } from '@/app/auth/actions';
+import { AuthForm } from '@/components/auth-form';
+import { AuthShell } from '@/components/auth-shell';
+import { getOptionalCurrentUser } from '@/lib/supabase/auth';
 
-export default function SignInPage() {
+interface SignInPageProps {
+  searchParams: Promise<{ error?: string }>;
+}
+
+export default async function SignInPage({ searchParams }: SignInPageProps) {
+  if (await getOptionalCurrentUser()) {
+    redirect('/onboarding');
+  }
+
+  const { error } = await searchParams;
+
   return (
-    <main className="mx-auto flex min-h-screen max-w-md items-center px-6 py-16">
-      <section className="w-full rounded-xl border bg-white p-8 shadow-sm">
-        <p className="text-sm font-semibold text-primary">Avenlyo</p>
-        <h1 className="mt-2 text-2xl font-semibold">Sign in</h1>
-        <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Supabase Auth will be connected here once public Supabase environment variables are
-          configured.
+    <AuthShell
+      description="Use the email and password connected to your Avenlyo workspace."
+      title="Welcome back."
+    >
+      {error === 'callback' ? (
+        <p className="mt-6 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-900">
+          The confirmation link could not be completed. Request a new link or sign in again.
         </p>
-        <Button asChild className="mt-6 w-full">
-          <Link href="/dashboard">Continue to dashboard shell</Link>
-        </Button>
-      </section>
-    </main>
+      ) : null}
+      <AuthForm action={signInAction} mode="sign-in" />
+    </AuthShell>
   );
 }

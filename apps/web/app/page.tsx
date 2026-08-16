@@ -18,10 +18,10 @@ export default function LandingPage() {
         </p>
         <div className="mt-10 flex flex-wrap gap-3">
           <Button asChild>
-            <Link href="/auth/sign-in">Sign in</Link>
+            <Link href="/auth/sign-up">Create your workspace</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href="/dashboard">View dashboard shell</Link>
+            <Link href="/auth/sign-in">Sign in</Link>
           </Button>
         </div>
       </section>

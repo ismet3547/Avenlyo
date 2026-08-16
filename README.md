@@ -3,9 +3,10 @@
 Avenlyo is an AI Front Office for service businesses. It will handle customer conversations,
 capture leads, book appointments, and hand off to people when appropriate.
 
-This repository contains **Phase 0: Foundation Bootstrap** only. It provides the monorepo,
-application shells, multi-tenant database foundation, and industry-pack contracts. It does not
-include production integrations, billing, RAG ingestion, or industry-specific workflows.
+This repository contains the Phase 0 foundation and **Phase 1 authenticated onboarding**. It
+provides the monorepo, application shells, multi-tenant database foundation, industry-pack
+contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
+empty state. It does not include production integrations, billing, RAG ingestion, or AI workflows.
 
 ## Prerequisites
 
@@ -22,8 +23,8 @@ pnpm dev
 ```
 
 The web app starts at `http://localhost:3000` and the API starts at `http://localhost:4000`.
-The web application and `/health` API endpoint boot without Supabase credentials. Configure
-Supabase before using an authenticated route.
+The public web application and `/health` API endpoint boot without Supabase credentials. Configure
+Supabase before using sign-up, sign-in, onboarding, or the dashboard.
 
 To run one application:
 
@@ -63,7 +64,7 @@ startup; the web app validates its public configuration once when loaded.
 
 ## Local Supabase
 
-The initial schema migration lives in `supabase/migrations`. With the Supabase CLI and Docker
+Versioned schema migrations live in `supabase/migrations`. With the Supabase CLI and Docker
 available, apply it locally from the repository root:
 
 ```bash
@@ -72,8 +73,8 @@ pnpm db:reset
 ```
 
 Copy the URL and anonymous key reported by `supabase start` to the application environment files.
-The migration enables `pgvector`, creates the multi-tenant base tables, and applies row-level
-security policies.
+The migrations enable `pgvector`, create the multi-tenant base tables, apply row-level security,
+and add the Phase 1 onboarding state and transactional tenant-bootstrap RPCs.
 
 Database authorization and tenant-integrity behavior is exercised by pgTAP tests in
 `supabase/tests/database`:
@@ -100,7 +101,7 @@ pnpm build
 ```text
 apps/
   api/                 Fastify API and HTTP boundary
-  web/                 Next.js public site, auth pages, dashboard shell
+  web/                 Next.js public site, auth, onboarding, and tenant dashboard
 packages/
   ai/                  Future AI provider contracts
   database/            Supabase client factory and database boundary
@@ -131,5 +132,28 @@ supabase/migrations/   Versioned PostgreSQL schema and RLS policies
   template relationship uses a validation trigger because a composite foreign key cannot express
   "system template or same organization" semantics.
 - Industry differences live in `@avenlyo/industries` packs rather than scattered conditionals.
-- The web dashboard uses real Supabase Auth when public Supabase variables are configured. Without
-  them it remains a local-only shell so a new checkout can boot immediately.
+- Workspace bootstrap is a security-definer PostgreSQL function that derives the owner from
+  `auth.uid()` and atomically creates the organization, owner membership, primary location, and
+  resumable onboarding record.
+- Onboarding progress is database-backed. Server-side routing resumes the persisted step and RLS
+  remains the authority for every tenant mutation.
+- The web dashboard uses real Supabase Auth and reads organization/location context from a trusted
+  RPC. Without public Supabase variables, only public pages boot; protected routes return users to
+  sign-in.
+
+## Authenticated onboarding
+
+After configuring local Supabase, create an account at `http://localhost:3000/auth/sign-up`. The
+application follows this persisted flow:
+
+```text
+Industry → Business → Location and hours → Website preview → Review → Dashboard
+```
+
+Only the three IDs exported by `@avenlyo/industries` are accepted. Website import is intentionally
+a preview only, and the dashboard contains empty states rather than fabricated data. The current
+MVP automatically selects the tenant when a user belongs to exactly one organization; a future
+organization switcher is outside Phase 1.
+
+GitHub Actions runs the full application validation on pull requests to `main`. A separate database
+security job starts Supabase, resets all migrations from scratch, and executes the pgTAP suites.

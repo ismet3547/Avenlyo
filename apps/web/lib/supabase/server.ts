@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr';
+import type { Database } from '@avenlyo/database';
 import { cookies } from 'next/headers';
 
 import { getSupabaseCredentials } from './config';
@@ -12,7 +13,7 @@ export async function createServerSupabaseClient() {
 
   const cookieStore = await cookies();
 
-  return createServerClient(credentials.url, credentials.anonKey, {
+  return createServerClient<Database>(credentials.url, credentials.anonKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll();
@@ -27,3 +28,7 @@ export async function createServerSupabaseClient() {
     },
   });
 }
+
+export type AvenlyoSupabaseClient = NonNullable<
+  Awaited<ReturnType<typeof createServerSupabaseClient>>
+>;

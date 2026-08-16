@@ -2,6 +2,10 @@ export const industryIds = ['veterinary', 'auto-repair', 'medspa'] as const;
 
 export type IndustryId = (typeof industryIds)[number];
 
+export function isIndustryId(value: unknown): value is IndustryId {
+  return typeof value === 'string' && industryIds.some((industryId) => industryId === value);
+}
+
 export type AgentAction = 'capture_lead' | 'book_appointment' | 'handoff_to_human';
 
 export interface EscalationRule {

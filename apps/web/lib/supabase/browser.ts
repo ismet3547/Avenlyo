@@ -1,6 +1,7 @@
 'use client';
 
 import { createBrowserClient } from '@supabase/ssr';
+import type { Database } from '@avenlyo/database';
 
 import { getSupabaseCredentials } from './config';
 
@@ -11,5 +12,5 @@ export function createBrowserSupabaseClient() {
     return null;
   }
 
-  return createBrowserClient(credentials.url, credentials.anonKey);
+  return createBrowserClient<Database>(credentials.url, credentials.anonKey);
 }
