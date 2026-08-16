@@ -1,8 +1,15 @@
 import { createServerClient } from '@supabase/ssr';
+import type { CookieOptions } from '@supabase/ssr';
 import type { Database } from '@avenlyo/database';
 import { cookies } from 'next/headers';
 
 import { getSupabaseCredentials } from './config';
+
+interface SupabaseCookie {
+  name: string;
+  options: CookieOptions;
+  value: string;
+}
 
 export async function createServerSupabaseClient() {
   const credentials = getSupabaseCredentials();
@@ -18,7 +25,7 @@ export async function createServerSupabaseClient() {
       getAll() {
         return cookieStore.getAll();
       },
-      setAll(values) {
+      setAll(values: SupabaseCookie[]) {
         try {
           values.forEach(({ name, options, value }) => cookieStore.set(name, value, options));
         } catch {
