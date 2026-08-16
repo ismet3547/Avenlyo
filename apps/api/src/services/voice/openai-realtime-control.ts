@@ -35,7 +35,7 @@ class OpenAIRealtimeSocket implements VoiceRealtimeSocket {
   }
 
   public onMessage(listener: (raw: string) => void): void {
-    this.socket.on('message', (data) => listener(rawDataToText(data)));
+    this.socket.on('message', (data: WebSocket.RawData) => listener(rawDataToText(data)));
   }
 
   public send(event: Readonly<Record<string, unknown>>): void {

@@ -125,4 +125,31 @@ describe('inbound voice call service', () => {
     expect(control.accepted).toEqual([]);
     expect(control.rejected).toEqual([{ callId: 'rtc_inbound_1', statusCode: 404 }]);
   });
+
+  it('does not re-accept a provider call replay already owned by a sideband session', async () => {
+    const control = new FakeRealtimeCallControlProvider();
+    const duplicate = { ...bootstrap(), accepted: false, isDuplicate: true };
+    const { store, bootstrapIncomingCall } = storeWith(duplicate);
+    const sessions = new VoiceSessionManager({
+      control,
+      finalizer: { finalize: vi.fn().mockResolvedValue(undefined) },
+    });
+    const service = new VoiceInboundCallService({
+      control,
+      embed: vi.fn(),
+      model: 'gpt-realtime-2.1',
+      sessions,
+      store,
+    });
+
+    await expect(service.handleIncoming(event)).resolves.toBe('duplicate');
+    await expect(service.handleIncoming({ ...event, id: 'evt_inbound_replay' })).resolves.toBe(
+      'duplicate',
+    );
+
+    expect(bootstrapIncomingCall).toHaveBeenCalledTimes(2);
+    expect(control.accepted).toEqual([]);
+    expect(control.rejected).toEqual([]);
+    expect(sessions.has(event.data.call_id)).toBe(false);
+  });
 });

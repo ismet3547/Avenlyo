@@ -31,6 +31,64 @@ describe('VoiceSessionManager', () => {
     expect(manager.has('rtc_1')).toBe(false);
   });
 
+  it('fails closed when an unexpected sideband close occurs', async () => {
+    const control = new FakeRealtimeCallControlProvider();
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const manager = new VoiceSessionManager({ control, finalizer: { finalize } });
+    const socket = new FakeRealtimeSocket();
+    manager.start('rtc_closed', socket);
+
+    socket.emitClose();
+    await vi.waitFor(() => expect(finalize).toHaveBeenCalledOnce());
+
+    expect(control.hungUp).toEqual(['rtc_closed']);
+    expect(finalize).toHaveBeenCalledWith({
+      callId: 'rtc_closed',
+      endReason: 'sideband_closed',
+      status: 'completed',
+    });
+  });
+
+  it('fails closed once when sideband error and close callbacks repeat', async () => {
+    const control = new FakeRealtimeCallControlProvider();
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const manager = new VoiceSessionManager({ control, finalizer: { finalize } });
+    const socket = new FakeRealtimeSocket();
+    manager.start('rtc_error', socket);
+
+    socket.emitError();
+    socket.emitClose();
+    socket.emitError();
+    await vi.waitFor(() => expect(finalize).toHaveBeenCalledOnce());
+
+    expect(control.hungUp).toEqual(['rtc_error']);
+    expect(finalize).toHaveBeenCalledWith({
+      callId: 'rtc_error',
+      endReason: 'provider_error',
+      status: 'failed',
+    });
+  });
+
+  it('does not hang up after an intentional transfer', async () => {
+    const control = new FakeRealtimeCallControlProvider();
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const manager = new VoiceSessionManager({ control, finalizer: { finalize } });
+    const socket = new FakeRealtimeSocket();
+    manager.start('rtc_transferred', socket);
+
+    await manager.finalizeTransferred('rtc_transferred');
+    socket.emitClose();
+    socket.emitError();
+
+    expect(control.hungUp).toEqual([]);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize).toHaveBeenCalledWith({
+      callId: 'rtc_transferred',
+      endReason: 'transfer',
+      status: 'transferred',
+    });
+  });
+
   it('does not close after one idle event but does after the second', async () => {
     const control = new FakeRealtimeCallControlProvider();
     const finalize = vi.fn().mockResolvedValue(undefined);

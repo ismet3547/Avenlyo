@@ -59,7 +59,9 @@ export class VoiceSessionManager {
     };
     this.sessions.set(callId, session);
     socket.onClose(() => {
-      void this.finish(callId, 'completed', 'sideband_closed', false);
+      // A sideband loss is not evidence that the SIP leg has ended. Fail closed so an
+      // orphaned provider call cannot continue without Avenlyo's trusted orchestrator.
+      void this.finish(callId, 'completed', 'sideband_closed', true);
     });
     socket.onError(() => {
       void this.finish(callId, 'failed', 'provider_error', true);

@@ -131,8 +131,81 @@ describe('voice sideband runtime', () => {
     expect(searchKnowledge).toHaveBeenCalledOnce();
     expect(recordToolExecution).toHaveBeenCalledOnce();
     expect(socket.sent.filter((event) => event.type === 'conversation.item.create')).toHaveLength(
-      2,
+      1,
     );
-    expect(socket.sent.filter((event) => event.type === 'response.create')).toHaveLength(2);
+    expect(socket.sent.filter((event) => event.type === 'response.create')).toHaveLength(1);
+  });
+
+  it('suppresses replayed human-help and transfer tool events', async () => {
+    const control = new FakeRealtimeCallControlProvider();
+    const socket = new FakeRealtimeSocket();
+    const { store, recordToolExecution, requestHandoff } = testStore();
+    const sessions = new VoiceSessionManager({
+      control,
+      finalizer: {
+        finalize: async ({ callId, endReason, status }) => {
+          await store.finalizeCall({ externalCallId: callId, endReason, status });
+        },
+      },
+    });
+    sessions.start('rtc_replays', socket);
+    const runtime = new VoiceSidebandRuntime({
+      configuration: {
+        enabled: true,
+        providerTransferEnabled: true,
+        transferEnabled: true,
+        transferTargetE164: '+14155550124',
+        voice: 'marin',
+      },
+      context: {
+        callId: 'rtc_replays',
+        contactId: null,
+        conversationId: '00000000-0000-0000-0000-000000000010',
+        industry: veterinaryPack,
+        locationId: '00000000-0000-0000-0000-000000000011',
+        organizationId: '00000000-0000-0000-0000-000000000012',
+        phoneNumberId: '00000000-0000-0000-0000-000000000013',
+      },
+      control,
+      embed: vi.fn().mockResolvedValue([0.1, 0.2]),
+      sessions,
+      socket,
+      store,
+    });
+    runtime.attach();
+
+    const humanHelp = {
+      arguments: '{"reason":"Please connect me with a person.","urgency":"normal"}',
+      call_id: 'function_handoff',
+      event_id: 'evt_handoff',
+      name: 'request_human_help',
+      type: 'response.function_call_arguments.done' as const,
+    };
+    socket.emitMessage(humanHelp);
+    socket.emitMessage(humanHelp);
+    await flushQueue();
+
+    expect(requestHandoff).toHaveBeenCalledOnce();
+    expect(recordToolExecution).toHaveBeenCalledOnce();
+    expect(socket.sent.filter((item) => item.type === 'conversation.item.create')).toHaveLength(1);
+    expect(socket.sent.filter((item) => item.type === 'response.create')).toHaveLength(1);
+
+    const transfer = {
+      arguments: '{"reason":"Please transfer me to a person."}',
+      call_id: 'function_transfer',
+      event_id: 'evt_transfer',
+      name: 'transfer_call',
+      type: 'response.function_call_arguments.done' as const,
+    };
+    socket.emitMessage(transfer);
+    socket.emitMessage(transfer);
+    await flushQueue();
+
+    expect(control.referred).toEqual([{ callId: 'rtc_replays', target: '+14155550124' }]);
+    expect(control.hungUp).toEqual([]);
+    expect(requestHandoff).toHaveBeenCalledTimes(2);
+    expect(recordToolExecution).toHaveBeenCalledTimes(2);
+    expect(socket.sent.filter((item) => item.type === 'conversation.item.create')).toHaveLength(2);
+    expect(socket.sent.filter((item) => item.type === 'response.create')).toHaveLength(1);
   });
 });

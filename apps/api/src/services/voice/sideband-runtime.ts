@@ -29,6 +29,7 @@ export class VoiceSidebandRuntime {
   private readonly executor: VoiceToolExecutor;
   private executionQueue: Promise<void> = Promise.resolve();
   private readonly auditedToolCallIds = new Set<string>();
+  private readonly completedToolCallIds = new Set<string>();
 
   public constructor(private readonly options: VoiceSidebandRuntimeOptions) {
     const transferAllowed =
@@ -132,6 +133,9 @@ export class VoiceSidebandRuntime {
     readonly call_id: string;
     readonly name: string;
   }): Promise<void> {
+    // Realtime may replay a completed function call after a reconnect. The provider call ID is
+    // the authoritative idempotency key for the entire sideband response sequence.
+    if (this.completedToolCallIds.has(event.call_id)) return;
     const result = await this.executor.execute({
       arguments: event.arguments,
       callId: event.call_id,
@@ -154,6 +158,7 @@ export class VoiceSidebandRuntime {
       },
       type: 'conversation.item.create',
     });
+    this.completedToolCallIds.add(event.call_id);
     if (result.transferred) return;
     this.options.socket.send({ type: 'response.create' });
   }

@@ -55,6 +55,13 @@ const voiceMigration = readFileSync(
   new URL('../../../supabase/migrations/20260816060000_phase_4_inbound_voice.sql', import.meta.url),
   'utf8',
 );
+const voiceReliabilityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816061000_phase_4_voice_reliability.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 const voiceSecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/voice_security.test.sql', import.meta.url),
   'utf8',
@@ -288,5 +295,12 @@ describe('inbound voice migration definition', () => {
       'authenticated clients cannot execute the inbound bootstrap RPC',
     );
     expect(voiceSecurityTest).toContain('transcript external identity is idempotent');
+  });
+
+  it('fails safely on replayed provider calls and converges handoffs per live call', () => {
+    expect(voiceReliabilityMigration).toContain('where event_type = target_event_type');
+    expect(voiceReliabilityMigration).toContain('on conflict do nothing');
+    expect(voiceReliabilityMigration).toContain("'voice-handoff:' || target_call.id::text");
+    expect(voiceReliabilityMigration).toContain("and mode = 'customer'");
   });
 });
