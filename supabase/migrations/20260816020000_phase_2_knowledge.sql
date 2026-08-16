@@ -6,7 +6,7 @@ create table public.knowledge_imports (
   organization_id uuid not null references public.organizations (id) on delete cascade,
   location_id uuid,
   source_type text not null default 'website' check (source_type = 'website'),
-  root_url text not null check (length(btrim(root_url)) between 1 and 2_048),
+  root_url text not null check (length(btrim(root_url)) between 1 and 2048),
   status text not null default 'pending' check (
     status in ('pending', 'running', 'awaiting_review', 'publishing', 'completed', 'failed')
   ),
