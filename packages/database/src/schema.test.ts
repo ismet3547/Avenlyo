@@ -36,15 +36,19 @@ const knowledgeSecurityTest = readFileSync(
 );
 
 const agentRuntimeMigration = readFileSync(
-  new URL(
-    '../../../supabase/migrations/20260816040000_phase_3_agent_runtime.sql',
-    import.meta.url,
-  ),
+  new URL('../../../supabase/migrations/20260816040000_phase_3_agent_runtime.sql', import.meta.url),
   'utf8',
 );
 
 const agentRuntimeSecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/agent_runtime_security.test.sql', import.meta.url),
+  'utf8',
+);
+const agentRuntimeReliabilityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816050000_phase_3_runtime_reliability.sql',
+    import.meta.url,
+  ),
   'utf8',
 );
 
@@ -202,7 +206,9 @@ describe('agent runtime migration definition', () => {
   it('separates test conversation records and removes direct authenticated mutation paths', () => {
     expect(agentRuntimeMigration).toContain("add column mode text not null default 'customer'");
     expect(agentRuntimeMigration).toContain('create table public.agent_test_runs');
-    expect(agentRuntimeMigration).toContain('revoke all on public.agent_test_runs from anon, authenticated');
+    expect(agentRuntimeMigration).toContain(
+      'revoke all on public.agent_test_runs from anon, authenticated',
+    );
     expect(agentRuntimeMigration).toContain("and mode = 'customer'");
     expect(agentRuntimeMigration).toContain("conversation.mode = 'customer'");
   });
@@ -221,7 +227,25 @@ describe('agent runtime migration definition', () => {
     expect(agentRuntimeSecurityTest).toContain('test-mode messages cannot be directly inserted');
     expect(agentRuntimeSecurityTest).toContain('raw retrieved chunks');
     expect(agentRuntimeSecurityTest).toContain('handoff persistence is idempotent');
-    expect(agentRuntimeSecurityTest).toContain('location-scoped member cannot read test conversations');
-    expect(agentRuntimeSecurityTest).toContain('organization B cannot read organization A test records');
+    expect(agentRuntimeSecurityTest).toContain(
+      'location-scoped member cannot read test conversations',
+    );
+    expect(agentRuntimeSecurityTest).toContain(
+      'organization B cannot read organization A test records',
+    );
+  });
+
+  it('scopes retries to one conversation and recovers only stale in-flight turns', () => {
+    expect(agentRuntimeReliabilityMigration).toContain(
+      'unique (organization_id, conversation_id, idempotency_key)',
+    );
+    expect(agentRuntimeReliabilityMigration).toContain("where status = 'running'");
+    expect(agentRuntimeReliabilityMigration).toContain("interval '10 minutes'");
+    expect(agentRuntimeReliabilityMigration).toContain(
+      'create function public.fail_agent_test_turn',
+    );
+    expect(agentRuntimeReliabilityMigration).toContain(
+      'create function public.get_agent_test_turn_result',
+    );
   });
 });

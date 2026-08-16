@@ -105,6 +105,122 @@ describe('controlled agent runtime', () => {
     );
   });
 
+  it('keeps opaque reasoning continuation in memory for the next tool round only', async () => {
+    const { provider, runtime: agent } = runtime([
+      {
+        continuation: {
+          encryptedReasoningItems: [{ encryptedContent: 'opaque', id: 'reasoning-1' }],
+          provider: 'openai-responses',
+        },
+        text: '',
+        toolCalls: [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'knowledge-1',
+            name: 'search_business_knowledge',
+          },
+        ],
+      },
+      result('The published hours are listed above.'),
+    ]);
+    await turn(agent, 'What are your hours?');
+    expect(provider.inputs[1]?.input).toContainEqual(
+      expect.objectContaining({ type: 'provider_continuation' }),
+    );
+  });
+
+  it('does not allow low-similarity knowledge to support a business answer', async () => {
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'low',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('We are definitely open every day.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () => Promise.resolve([{ ...source, similarity: 0.77 }]),
+      }),
+    );
+    await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
+      sources: [],
+      text: "I don't have reliable information about that yet. I can ask the team to help.",
+    });
+  });
+
+  it('accepts a source exactly at the conservative similarity floor', async () => {
+    const floorSource = { ...source, similarity: 0.78 };
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'floor',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('The published source lists the hours.'),
+      ],
+      serviceDouble({ searchBusinessKnowledge: () => Promise.resolve([floorSource]) }),
+    );
+    await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
+      sources: [floorSource],
+    });
+  });
+
+  it('uses a deterministic fallback after a failed knowledge search', async () => {
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'failed',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('Invented business fact.'),
+      ],
+      serviceDouble({ searchBusinessKnowledge: () => Promise.reject(new Error('unavailable')) }),
+    );
+    await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
+      sources: [],
+      text: "I don't have reliable information about that yet. I can ask the team to help.",
+    });
+  });
+
+  it('allows a later reliable search to clear an earlier empty-search fallback state', async () => {
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'empty',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours today' }),
+            callId: 'good',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('The published page lists weekday hours.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: (input) =>
+          Promise.resolve(input.toolCallId === 'empty' ? [] : [source]),
+      }),
+    );
+    await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
+      text: 'The published page lists weekday hours.',
+      sources: [source],
+    });
+  });
+
   it('persists an explicit human-help request only through the injected service', async () => {
     const calls: Array<{ toolCallId: string; urgency: string }> = [];
     const { runtime: agent } = runtime(

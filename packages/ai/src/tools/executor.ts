@@ -7,6 +7,9 @@ import { activeToolDefinitions } from './registry';
 import { requestHumanHelpSchema, searchBusinessKnowledgeSchema } from './schemas';
 import type { AgentToolServices, ToolExecutionResult, ToolExecutor } from './types';
 
+/** Conservative starting floor: a nearest neighbour is not necessarily a reliable business fact. */
+export const MIN_AGENT_KNOWLEDGE_SIMILARITY = 0.78;
+
 function truncate(value: string, maximum: number): string {
   return value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
 }
@@ -16,12 +19,18 @@ function safeJson(value: unknown): string {
 }
 
 function sanitizedSources(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[] {
-  return matches.slice(0, 3).map((match) => ({
-    content: truncate(match.content, 1_200),
-    similarity: Number.isFinite(match.similarity) ? Math.max(0, Math.min(1, match.similarity)) : 0,
-    sourceUrl: match.sourceUrl ? truncate(match.sourceUrl, 1_000) : null,
-    title: truncate(match.title, 240),
-  }));
+  return matches
+    .filter(
+      (match) =>
+        Number.isFinite(match.similarity) && match.similarity >= MIN_AGENT_KNOWLEDGE_SIMILARITY,
+    )
+    .slice(0, 3)
+    .map((match) => ({
+      content: truncate(match.content, 1_200),
+      similarity: Math.max(0, Math.min(1, match.similarity)),
+      sourceUrl: match.sourceUrl ? truncate(match.sourceUrl, 1_000) : null,
+      title: truncate(match.title, 240),
+    }));
 }
 
 function rejected(call: AgentToolCall, summary: string): ToolExecutionResult {
@@ -77,6 +86,7 @@ export class ControlledToolExecutor implements ToolExecutor {
               : 'No knowledge found.',
           },
           handoffRequested: false,
+          knowledgeOutcome: sources.length ? 'reliable' : 'empty_or_unreliable',
           modelOutput: safeJson({ matches: sources }),
           sources,
         };
@@ -124,6 +134,7 @@ export class ControlledToolExecutor implements ToolExecutor {
           summary: 'Tool execution failed.',
         },
         handoffRequested: false,
+        knowledgeOutcome: call.name === 'search_business_knowledge' ? 'failed' : undefined,
         modelOutput: safeJson({
           ok: false,
           message: 'The requested action could not be completed.',

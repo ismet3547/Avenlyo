@@ -20,11 +20,17 @@ interface AgentTestConsoleProps {
   readonly hasPublishedKnowledge: boolean;
 }
 
+interface PendingSubmission {
+  readonly idempotencyKey: string;
+  readonly message: string;
+}
+
 export function AgentTestConsole({ available, hasPublishedKnowledge }: AgentTestConsoleProps) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState<readonly TranscriptMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingSubmission, setPendingSubmission] = useState<PendingSubmission | null>(null);
   const [isPending, startTransition] = useTransition();
 
   function startConversation() {
@@ -38,17 +44,24 @@ export function AgentTestConsole({ available, hasPublishedKnowledge }: AgentTest
       setConversationId(state.conversationId);
       setMessages([]);
       setDraft('');
+      setPendingSubmission(null);
     });
   }
 
   function sendMessage() {
     const message = draft.trim();
     if (!conversationId || !message) return;
+    const submission =
+      pendingSubmission?.message === message
+        ? pendingSubmission
+        : { idempotencyKey: crypto.randomUUID(), message };
+    setPendingSubmission(submission);
     setNotice(null);
     startTransition(async () => {
       const formData = new FormData();
       formData.set('conversationId', conversationId);
       formData.set('message', message);
+      formData.set('idempotencyKey', submission.idempotencyKey);
       const state = await sendAgentTestMessageAction(formData);
       const turn = state.turn;
       const submittedMessage = state.submittedMessage;
@@ -62,6 +75,7 @@ export function AgentTestConsole({ available, hasPublishedKnowledge }: AgentTest
         { body: turn.text, role: 'assistant', turn },
       ]);
       setDraft('');
+      setPendingSubmission(null);
     });
   }
 
@@ -152,7 +166,11 @@ export function AgentTestConsole({ available, hasPublishedKnowledge }: AgentTest
             disabled={!conversationId || isPending}
             id="agent-test-message"
             maxLength={4000}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              if (pendingSubmission?.message !== event.target.value.trim())
+                setPendingSubmission(null);
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();

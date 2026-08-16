@@ -51,6 +51,15 @@ export interface AgentToolExecution {
   readonly summary: string;
 }
 
+/** Opaque state retained only while a single provider tool loop is running. */
+export interface AgentProviderContinuation {
+  readonly encryptedReasoningItems: readonly {
+    readonly encryptedContent: string;
+    readonly id: string;
+  }[];
+  readonly provider: 'openai-responses';
+}
+
 export type AgentProviderInputItem =
   | {
       readonly content: string;
@@ -67,6 +76,10 @@ export type AgentProviderInputItem =
       readonly callId: string;
       readonly output: string;
       readonly type: 'function_call_output';
+    }
+  | {
+      readonly continuation: AgentProviderContinuation;
+      readonly type: 'provider_continuation';
     };
 
 export interface AgentFunctionTool {
@@ -90,6 +103,8 @@ export interface AgentProviderUsage {
 }
 
 export interface AgentProviderResult {
+  /** Never persisted or exposed outside the provider/runtime boundary. */
+  readonly continuation?: AgentProviderContinuation | undefined;
   readonly text: string;
   readonly toolCalls: readonly AgentToolCall[];
   readonly usage?: AgentProviderUsage | undefined;

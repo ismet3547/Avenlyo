@@ -9,6 +9,7 @@ import { PROVIDER_TIMEOUT_MS } from '../agent/limits';
 import {
   AgentProviderError,
   type AgentProvider,
+  type AgentProviderContinuation,
   type AgentProviderInput,
   type AgentProviderInputItem,
   type AgentProviderResult,
@@ -28,17 +29,32 @@ function getProviderStatus(error: unknown): number | undefined {
   return typeof status === 'number' ? status : undefined;
 }
 
-function toResponseInput(item: AgentProviderInputItem): ResponseInputItem {
-  if (item.type === 'message') return { content: item.content, role: item.role, type: 'message' };
-  if (item.type === 'function_call') {
-    return {
-      arguments: item.arguments,
-      call_id: item.callId,
-      name: item.name,
-      type: 'function_call',
-    };
+function toResponseInput(item: AgentProviderInputItem): readonly ResponseInputItem[] {
+  if (item.type === 'message') {
+    return [{ content: item.content, role: item.role, type: 'message' }];
   }
-  return { call_id: item.callId, output: item.output, type: 'function_call_output' };
+  if (item.type === 'function_call') {
+    return [
+      {
+        arguments: item.arguments,
+        call_id: item.callId,
+        name: item.name,
+        type: 'function_call',
+      },
+    ];
+  }
+  if (item.type === 'function_call_output') {
+    return [{ call_id: item.callId, output: item.output, type: 'function_call_output' }];
+  }
+  if (item.continuation.provider !== 'openai-responses') {
+    throw new AgentProviderError('configuration', 'Unsupported provider continuation.', false);
+  }
+  return item.continuation.encryptedReasoningItems.map((reasoning) => ({
+    encrypted_content: reasoning.encryptedContent,
+    id: reasoning.id,
+    summary: [],
+    type: 'reasoning' as const,
+  }));
 }
 
 function toOpenAITool(tool: AgentProviderInput['tools'][number]): FunctionTool {
@@ -54,7 +70,8 @@ function toOpenAITool(tool: AgentProviderInput['tools'][number]): FunctionTool {
 /** Kept pure so the retention and tool-safety contract is unit tested without network calls. */
 export function buildResponsesRequest(input: AgentProviderInput): ResponseCreateParamsNonStreaming {
   return {
-    input: input.input.map(toResponseInput),
+    input: input.input.flatMap(toResponseInput),
+    include: ['reasoning.encrypted_content'],
     instructions: input.instructions,
     max_output_tokens: input.maxOutputTokens,
     model: input.model,
@@ -98,7 +115,19 @@ export class OpenAIResponsesProvider implements AgentProvider {
   public async runTurn(input: AgentProviderInput): Promise<AgentProviderResult> {
     try {
       const response = await this.client.responses.create(buildResponsesRequest(input));
+      const encryptedReasoningItems = response.output.flatMap((item) => {
+        if (item.type !== 'reasoning') return [];
+        // The installed SDK's output union omits this optional stateless continuation field.
+        const reasoning = item as unknown as { encrypted_content?: unknown; id?: unknown };
+        return typeof reasoning.encrypted_content === 'string' && typeof reasoning.id === 'string'
+          ? [{ encryptedContent: reasoning.encrypted_content, id: reasoning.id }]
+          : [];
+      });
+      const continuation: AgentProviderContinuation | undefined = encryptedReasoningItems.length
+        ? { encryptedReasoningItems, provider: 'openai-responses' }
+        : undefined;
       return {
+        continuation,
         text: response.output_text,
         toolCalls: response.output
           .filter((item) => item.type === 'function_call')

@@ -17,6 +17,7 @@ export type {
   AgentFunctionTool,
   AgentMode,
   AgentProvider,
+  AgentProviderContinuation,
   AgentProviderInput,
   AgentProviderResult,
   AgentToolCall,
@@ -33,7 +34,11 @@ export {
   OpenAIResponsesProvider,
 } from './providers/openai-responses';
 export { FakeAgentProvider } from './testing/fake-provider';
-export { ControlledToolExecutor, policyHandoffCallId } from './tools/executor';
+export {
+  ControlledToolExecutor,
+  MIN_AGENT_KNOWLEDGE_SIMILARITY,
+  policyHandoffCallId,
+} from './tools/executor';
 export { activeToolDefinitions, activeToolsForIndustry } from './tools/registry';
 export {
   requestHumanHelpFunction,

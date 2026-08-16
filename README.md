@@ -45,13 +45,13 @@ Copy-Item apps/api/.env.example apps/api/.env
 
 `apps/web/.env.local` accepts these optional values:
 
-| Variable                        | Purpose                                                                      |
-| ------------------------------- | ---------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication.                 |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.                   |
-| `OPENAI_API_KEY`                | Optional, server-only; required to publish knowledge or run Agent Test.      |
-| `OPENAI_EMBEDDING_MODEL`        | Optional server-only embedding model. Defaults to `text-embedding-3-small`.  |
-| `OPENAI_AGENT_MODEL`            | Optional server-only Responses model. Defaults to `gpt-5.6`.                 |
+| Variable                        | Purpose                                                                     |
+| ------------------------------- | --------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication.                |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.                  |
+| `OPENAI_API_KEY`                | Optional, server-only; required to publish knowledge or run Agent Test.     |
+| `OPENAI_EMBEDDING_MODEL`        | Optional server-only embedding model. Defaults to `text-embedding-3-small`. |
+| `OPENAI_AGENT_MODEL`            | Optional server-only Responses model. Defaults to `gpt-5.6`.                |
 
 `apps/api/.env` accepts these values:
 
@@ -154,7 +154,8 @@ credentials.
 
 - Each provider request sends `store: false`, disables parallel tool calls, and sends the full
   bounded conversation context owned by Avenlyo. The runtime does not use provider conversation
-  chaining or `previous_response_id`.
+  chaining or `previous_response_id`. During a single tool loop it retains only opaque encrypted
+  reasoning continuation in memory; it is never persisted, logged, or shown in the dashboard.
 - Prompts are layered from fixed core safety rules, the selected industry pack, trusted business
   configuration, live server time, and bounded history. Website/retrieval text is explicitly
   treated as untrusted reference material.
@@ -163,7 +164,9 @@ credentials.
   are declared as inactive future contracts and are never exposed to the provider.
 - A turn is bounded to 12 recent / 12,000 historical characters, a 4,000-character customer
   message, 500 output tokens, six tool rounds, and eight total tool calls. Provider calls use a
-  15-second SDK timeout.
+  15-second SDK timeout. Browser-created UUID idempotency keys are scoped to one test
+  conversation; the database allows one running turn per conversation and automatically fails an
+  abandoned run only after 10 minutes, which is deliberately far beyond the expected bounded run.
 - The deterministic industry safety backstops escalate only narrow high-risk cases: veterinary
   emergency or medication-risk descriptions, medspa contraindication/clinical eligibility
   questions, and auto-repair drive-safety concerns. The agent does not diagnose, prescribe, or
@@ -178,7 +181,9 @@ book appointments, send SMS, transfer calls, or perform any live operation.
 Knowledge retrieval still uses only tenant-authorized, published chunks. Draft and archived chunks
 are excluded by the database retrieval RPC. The provider receives only the bounded snippets needed
 to answer; the dashboard stores and displays source titles/URLs and tool status, never raw provider
-responses, embeddings, or raw retrieval chunks.
+responses, embeddings, or raw retrieval chunks. A conservative internal similarity floor of 0.78
+filters nearest-but-unreliable matches. If the agent searched but found no reliable source, its final
+answer is replaced with a deterministic safe fallback rather than a business-specific assertion.
 
 To test manually after configuring Supabase and OpenAI, complete onboarding as an owner/admin,
 publish at least one approved website source, then open **AI Front Office -> Test Agent**. Start a

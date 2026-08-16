@@ -65,6 +65,28 @@ interface AgentRpcCaller {
     },
   ): PromiseLike<{ data: null; error: RpcError | null }>;
   (
+    name: 'fail_agent_test_turn',
+    args: { safe_failure_code?: string; target_run_id: string },
+  ): PromiseLike<{ data: null; error: RpcError | null }>;
+  (
+    name: 'get_agent_test_turn_result',
+    args: { target_run_id: string },
+  ): PromiseLike<{
+    data:
+      | {
+          assistant_body: string | null;
+          failure_code: AgentTestTurn['failureCode'];
+          handoff_requested: boolean;
+          model: string;
+          run_id: string;
+          source_references: Json;
+          status: 'completed' | 'failed' | 'running';
+          tool_executions: Json;
+        }[]
+      | null;
+    error: RpcError | null;
+  }>;
+  (
     name: 'record_agent_test_knowledge_search',
     args: { target_conversation_id: string; tool_call_id: string },
   ): PromiseLike<{ data: null; error: RpcError | null }>;
@@ -131,6 +153,46 @@ function executionMetadata(turn: Awaited<ReturnType<AgentRuntime['runTurn']>>): 
   return turn.toolCalls.map((tool) => ({ name: tool.name, status: tool.status }));
 }
 
+function persistedTurn(row: {
+  assistant_body: string | null;
+  failure_code: AgentTestTurn['failureCode'];
+  handoff_requested: boolean;
+  model: string;
+  source_references: Json;
+  tool_executions: Json;
+}): AgentTestTurn | null {
+  if (!row.assistant_body) return null;
+  const sources = Array.isArray(row.source_references)
+    ? row.source_references.flatMap((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+        const title = item.title;
+        const sourceUrl = item.source_url;
+        return typeof title === 'string'
+          ? [{ sourceUrl: typeof sourceUrl === 'string' ? sourceUrl : null, title }]
+          : [];
+      })
+    : [];
+  const tools: AgentTestTurn['tools'] = Array.isArray(row.tool_executions)
+    ? row.tool_executions.flatMap<AgentTestTurn['tools'][number]>((item) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+        const name = item.name;
+        const status = item.status;
+        return typeof name === 'string' &&
+          (status === 'succeeded' || status === 'failed' || status === 'rejected')
+          ? [{ name, status }]
+          : [];
+      })
+    : [];
+  return {
+    failureCode: row.failure_code,
+    handoffRequested: row.handoff_requested,
+    model: row.model,
+    sources,
+    text: row.assistant_body,
+    tools,
+  };
+}
+
 function requireIndustry(workspace: TenantContext) {
   if (!workspace.primaryIndustryId) {
     throw new AgentTestServiceError('Choose an industry before testing the AI Front Office.');
@@ -182,93 +244,113 @@ export async function runAgentTestTurn(
   const run = started[0];
   if (!run) throw new AgentTestServiceError();
   if (run.is_existing) {
+    if (run.status === 'running') {
+      throw new AgentTestServiceError('This test conversation is already processing a message.');
+    }
+    const persisted = (
+      await requireRpc(
+        agentRpc(client)('get_agent_test_turn_result', { target_run_id: run.run_id }),
+      )
+    )[0];
+    const turn = persisted ? persistedTurn(persisted) : null;
+    if (turn) return turn;
     throw new AgentTestServiceError(
-      'That test message was already submitted. Start a new message instead.',
+      'That earlier test message failed. Send it again as a new submission.',
     );
   }
-
-  const transcript = await requireRpc(
-    agentRpc(client)('get_agent_test_conversation', { target_conversation_id: conversationId }),
-  );
-  const history = conversationHistory(transcript).slice(0, -1);
-  const context = {
-    conversationId,
-    industryId: industry.id,
-    locationId: workspace.locationId,
-    mode: 'test' as AgentMode,
-    organizationId: workspace.organizationId,
-  };
-  const tools = new ControlledToolExecutor(industry, {
-    requestHumanHelp: async (input, trustedContext) => {
-      const handoffs = await requireRpc(
-        agentRpc(client)('request_agent_test_handoff', {
-          handoff_reason: input.reason,
-          handoff_urgency: input.urgency,
-          target_conversation_id: trustedContext.conversationId,
-          tool_call_id: input.toolCallId,
-        }),
-      );
-      return { created: handoffs[0]?.created === true };
-    },
-    searchBusinessKnowledge: async (input, trustedContext) => {
-      const matches = await searchKnowledge(client, input.query, trustedContext.locationId);
-      await requireRpc(
-        agentRpc(client)('record_agent_test_knowledge_search', {
-          target_conversation_id: trustedContext.conversationId,
-          tool_call_id: input.toolCallId,
-        }),
-      );
-      return matches.map((match) => ({
-        content: match.content,
-        similarity: match.similarity,
-        sourceUrl: match.sourceUrl,
-        title: match.title,
-      }));
-    },
-  });
-  const runtime = new AgentRuntime(
-    new OpenAIResponsesProvider({
-      apiKey: knowledgeServerEnv.OPENAI_API_KEY,
+  try {
+    const transcript = await requireRpc(
+      agentRpc(client)('get_agent_test_conversation', { target_conversation_id: conversationId }),
+    );
+    const history = conversationHistory(transcript).slice(0, -1);
+    const context = {
+      conversationId,
+      industryId: industry.id,
+      locationId: workspace.locationId,
+      mode: 'test' as AgentMode,
+      organizationId: workspace.organizationId,
+    };
+    const tools = new ControlledToolExecutor(industry, {
+      requestHumanHelp: async (input, trustedContext) => {
+        const handoffs = await requireRpc(
+          agentRpc(client)('request_agent_test_handoff', {
+            handoff_reason: input.reason,
+            handoff_urgency: input.urgency,
+            target_conversation_id: trustedContext.conversationId,
+            tool_call_id: input.toolCallId,
+          }),
+        );
+        return { created: handoffs[0]?.created === true };
+      },
+      searchBusinessKnowledge: async (input, trustedContext) => {
+        const matches = await searchKnowledge(client, input.query, trustedContext.locationId);
+        await requireRpc(
+          agentRpc(client)('record_agent_test_knowledge_search', {
+            target_conversation_id: trustedContext.conversationId,
+            tool_call_id: input.toolCallId,
+          }),
+        );
+        return matches.map((match) => ({
+          content: match.content,
+          similarity: match.similarity,
+          sourceUrl: match.sourceUrl,
+          title: match.title,
+        }));
+      },
+    });
+    const runtime = new AgentRuntime(
+      new OpenAIResponsesProvider({
+        apiKey: knowledgeServerEnv.OPENAI_API_KEY,
+        model,
+      }),
+      tools,
       model,
-    }),
-    tools,
-    model,
-  );
-  const result = await runtime.runTurn({
-    business: {
-      address: workspace.locationAddress
-        ? Object.values(workspace.locationAddress).filter(Boolean).join(', ')
-        : null,
-      businessHours: businessHoursText(workspace.businessHours),
-      locationName: workspace.locationName,
-      name: workspace.organizationName,
-      phone: workspace.businessPhone,
-      timezone: workspace.locationTimezone ?? 'UTC',
-      website: workspace.websiteUrl,
-    },
-    context,
-    history,
-    industry,
-    userMessage,
-  });
+    );
+    const result = await runtime.runTurn({
+      business: {
+        address: workspace.locationAddress
+          ? Object.values(workspace.locationAddress).filter(Boolean).join(', ')
+          : null,
+        businessHours: businessHoursText(workspace.businessHours),
+        locationName: workspace.locationName,
+        name: workspace.organizationName,
+        phone: workspace.businessPhone,
+        timezone: workspace.locationTimezone ?? 'UTC',
+        website: workspace.websiteUrl,
+      },
+      context,
+      history,
+      industry,
+      userMessage,
+    });
 
-  await requireRpc(
-    agentRpc(client)('complete_agent_test_turn', {
-      assistant_body: result.text,
-      handoff_requested: result.handoffRequested,
-      safe_failure_code: result.failureCode ?? null,
-      source_references: sourceReferences(result),
+    await requireRpc(
+      agentRpc(client)('complete_agent_test_turn', {
+        assistant_body: result.text,
+        handoff_requested: result.handoffRequested,
+        safe_failure_code: result.failureCode ?? null,
+        source_references: sourceReferences(result),
+        target_run_id: run.run_id,
+        tool_executions: executionMetadata(result),
+      }),
+    );
+
+    return {
+      failureCode: result.failureCode ?? null,
+      handoffRequested: result.handoffRequested,
+      model: result.model,
+      sources: result.sources.map((source) => ({
+        sourceUrl: source.sourceUrl,
+        title: source.title,
+      })),
+      text: result.text,
+      tools: result.toolCalls.map((tool) => ({ name: tool.name, status: tool.status })),
+    };
+  } catch {
+    await agentRpc(client)('fail_agent_test_turn', {
+      safe_failure_code: 'provider_error',
       target_run_id: run.run_id,
-      tool_executions: executionMetadata(result),
-    }),
-  );
-
-  return {
-    failureCode: result.failureCode ?? null,
-    handoffRequested: result.handoffRequested,
-    model: result.model,
-    sources: result.sources.map((source) => ({ sourceUrl: source.sourceUrl, title: source.title })),
-    text: result.text,
-    tools: result.toolCalls.map((tool) => ({ name: tool.name, status: tool.status })),
-  };
+    });
+    throw new AgentTestServiceError();
+  }
 }

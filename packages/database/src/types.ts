@@ -97,6 +97,17 @@ export interface AgentTestHandoffRow {
   created: boolean;
 }
 
+export interface AgentTestTurnResultRow {
+  run_id: string;
+  status: 'running' | 'completed' | 'failed';
+  failure_code: string | null;
+  model: string;
+  assistant_body: string | null;
+  source_references: Json;
+  tool_executions: Json;
+  handoff_requested: boolean;
+}
+
 type EmptyRecord = Record<never, never>;
 
 export interface Database {
@@ -226,6 +237,14 @@ export interface Database {
           tool_executions: Json;
         };
         Returns: undefined;
+      };
+      fail_agent_test_turn: {
+        Args: { safe_failure_code?: string; target_run_id: string };
+        Returns: undefined;
+      };
+      get_agent_test_turn_result: {
+        Args: { target_run_id: string };
+        Returns: AgentTestTurnResultRow[];
       };
       record_agent_test_knowledge_search: {
         Args: { target_conversation_id: string; tool_call_id: string };

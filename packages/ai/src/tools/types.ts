@@ -69,6 +69,7 @@ export interface ToolExecutionResult {
   readonly execution: AgentToolExecution;
   readonly handoffRequested: boolean;
   readonly modelOutput: string;
+  readonly knowledgeOutcome?: 'empty_or_unreliable' | 'reliable' | 'failed' | undefined;
   readonly sources: readonly KnowledgeSource[];
 }
 

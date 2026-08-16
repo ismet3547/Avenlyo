@@ -24,6 +24,8 @@ import type { ToolExecutor } from '../tools/types';
 const providerFailureReply = 'Avenlyo couldn’t respond right now. Please try again.';
 const loopLimitReply =
   'I couldn’t complete that request safely. I can ask the team to help with it.';
+const unknownKnowledgeReply =
+  "I don't have reliable information about that yet. I can ask the team to help.";
 
 function responseText(value: string): string {
   const trimmed = value.trim();
@@ -107,6 +109,8 @@ export class AgentRuntime {
     let toolCalls = 0;
     let latestUsage: AgentTurnResult['usage'];
     const executedCallIds = new Set<string>();
+    let knowledgeSearchAttempted = false;
+    let reliableKnowledgeFound = false;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       let providerResult;
@@ -135,10 +139,20 @@ export class AgentRuntime {
           handoffRequested,
           model: this.model,
           sources: distinctSources(sources),
-          text: responseText(providerResult.text),
+          text:
+            knowledgeSearchAttempted && !reliableKnowledgeFound
+              ? unknownKnowledgeReply
+              : responseText(providerResult.text),
           toolCalls: executions,
           usage: latestUsage,
         };
+      }
+
+      if (providerResult.continuation) {
+        providerInput.push({
+          continuation: providerResult.continuation,
+          type: 'provider_continuation',
+        });
       }
 
       for (const call of providerResult.toolCalls) {
@@ -183,6 +197,10 @@ export class AgentRuntime {
         executions.push(result.execution);
         handoffRequested ||= result.handoffRequested;
         sources.push(...result.sources);
+        if (call.name === 'search_business_knowledge') {
+          knowledgeSearchAttempted = true;
+          reliableKnowledgeFound ||= result.knowledgeOutcome === 'reliable';
+        }
         providerInput.push(
           {
             arguments: call.arguments,

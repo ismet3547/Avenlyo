@@ -1,7 +1,5 @@
 'use server';
 
-import { randomUUID } from 'node:crypto';
-
 import { z } from 'zod';
 
 import {
@@ -57,10 +55,12 @@ export async function sendAgentTestMessageAction(
   const parsed = z
     .object({
       conversationId: z.string().uuid(),
+      idempotencyKey: z.string().uuid(),
       message: z.string().trim().min(1).max(4000),
     })
     .safeParse({
       conversationId: formData.get('conversationId'),
+      idempotencyKey: formData.get('idempotencyKey'),
       message: formData.get('message'),
     });
   if (!parsed.success) return errorState('Enter a message up to 4,000 characters.');
@@ -79,7 +79,7 @@ export async function sendAgentTestMessageAction(
       context.workspace,
       parsed.data.conversationId,
       parsed.data.message,
-      randomUUID(),
+      parsed.data.idempotencyKey,
     );
     return {
       conversationId: parsed.data.conversationId,
