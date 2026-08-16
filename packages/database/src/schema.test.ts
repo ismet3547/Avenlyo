@@ -35,6 +35,19 @@ const knowledgeSecurityTest = readFileSync(
   'utf8',
 );
 
+const agentRuntimeMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816040000_phase_3_agent_runtime.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+
+const agentRuntimeSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/agent_runtime_security.test.sql', import.meta.url),
+  'utf8',
+);
+
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
     expect(migration).not.toMatch(/create policy[\s\S]*?for all/i);
@@ -182,5 +195,33 @@ describe('knowledge migration definition', () => {
     expect(knowledgeSecurityTest).toContain(
       'failed new import does not remove previously published knowledge',
     );
+  });
+});
+
+describe('agent runtime migration definition', () => {
+  it('separates test conversation records and removes direct authenticated mutation paths', () => {
+    expect(agentRuntimeMigration).toContain("add column mode text not null default 'customer'");
+    expect(agentRuntimeMigration).toContain('create table public.agent_test_runs');
+    expect(agentRuntimeMigration).toContain('revoke all on public.agent_test_runs from anon, authenticated');
+    expect(agentRuntimeMigration).toContain("and mode = 'customer'");
+    expect(agentRuntimeMigration).toContain("conversation.mode = 'customer'");
+  });
+
+  it('uses tenant-derived, owner/admin-only test RPCs and idempotent handoffs', () => {
+    expect(agentRuntimeMigration).toContain('create function public.require_agent_test_admin');
+    expect(agentRuntimeMigration).toContain('public.is_organization_admin');
+    expect(agentRuntimeMigration).toContain('create function public.begin_agent_test_turn');
+    expect(agentRuntimeMigration).toContain('create function public.complete_agent_test_turn');
+    expect(agentRuntimeMigration).toContain('create function public.request_agent_test_handoff');
+    expect(agentRuntimeMigration).toContain('pg_advisory_xact_lock');
+    expect(agentRuntimeMigration).toContain('on conflict (organization_id, idempotency_key)');
+  });
+
+  it('has executable pgTAP coverage for test-mode isolation and safe persistence', () => {
+    expect(agentRuntimeSecurityTest).toContain('test-mode messages cannot be directly inserted');
+    expect(agentRuntimeSecurityTest).toContain('raw retrieved chunks');
+    expect(agentRuntimeSecurityTest).toContain('handoff persistence is idempotent');
+    expect(agentRuntimeSecurityTest).toContain('location-scoped member cannot read test conversations');
+    expect(agentRuntimeSecurityTest).toContain('organization B cannot read organization A test records');
   });
 });

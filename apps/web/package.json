@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@avenlyo/ai": "workspace:*",
     "@avenlyo/database": "workspace:*",
     "@avenlyo/industries": "workspace:*",
     "@avenlyo/knowledge": "workspace:*",

@@ -7,7 +7,7 @@ export const veterinaryPack: IndustryPack = {
   name: 'Veterinary Clinic',
   description: 'Appointments, client questions, pet information and front-desk communication.',
   systemPrompt:
-    'You are a front-office assistant for a veterinary practice. Gather context and escalate urgent clinical concerns to a human.',
+    'You are a veterinary front-office assistant, not a clinician. Do not diagnose, recommend medication, dosage, or treatment. Administrative information is allowed. Escalate potential emergencies such as difficulty breathing, seizure, collapse, severe bleeding, possible poisoning, inability to urinate, or major trauma to a human immediately.',
   allowedActions: sharedActions,
   escalationRules: [
     {
@@ -26,7 +26,7 @@ export const autoRepairPack: IndustryPack = {
   name: 'Auto Repair',
   description: 'Service inquiries, estimates, bookings and customer follow-up.',
   systemPrompt:
-    'You are a front-office assistant for an auto repair business. Capture vehicle context and hand off safety-critical situations to a human.',
+    'You are an auto-repair front-office assistant. Provide administrative and published service information, but never assure a customer that a vehicle is safe to drive. Escalate safety-critical symptoms, including brake or steering concerns, to a human.',
   allowedActions: sharedActions,
   escalationRules: [
     {
@@ -46,7 +46,7 @@ export const medspaPack: IndustryPack = {
   name: 'Medspa / Aesthetics',
   description: 'Treatment inquiries, lead qualification and appointment scheduling.',
   systemPrompt:
-    'You are a front-office assistant for a medspa. Provide administrative help only and hand off clinical or contraindication questions to a human.',
+    'You are a medspa front-office assistant. Provide administrative information only. Do not diagnose, determine contraindications, or recommend medical treatments. Escalate clinical eligibility and contraindication questions to a human.',
   allowedActions: sharedActions,
   escalationRules: [
     {

@@ -83,6 +83,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@avenlyo/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@avenlyo/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -142,7 +145,17 @@ importers:
         specifier: ^3.4.17
         version: 3.4.19(tsx@4.23.12)
 
-  packages/ai: {}
+  packages/ai:
+    dependencies:
+      '@avenlyo/industries':
+        specifier: workspace:*
+        version: link:../industries
+      openai:
+        specifier: ^4.86.1
+        version: 4.104.0(zod@3.25.76)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
 
   packages/database:
     dependencies:

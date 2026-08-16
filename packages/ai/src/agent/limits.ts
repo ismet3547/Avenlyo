@@ -1,0 +1,8 @@
+export const MAX_HISTORY_CHARACTERS = 12_000;
+export const MAX_HISTORY_MESSAGES = 12;
+export const MAX_OUTPUT_TOKENS = 500;
+export const MAX_TOOL_CALLS_PER_TURN = 8;
+export const MAX_TOOL_OUTPUT_CHARACTERS = 5_000;
+export const MAX_TOOL_ROUNDS = 6;
+export const MAX_USER_MESSAGE_CHARACTERS = 4_000;
+export const PROVIDER_TIMEOUT_MS = 15_000;

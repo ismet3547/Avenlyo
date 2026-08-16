@@ -73,6 +73,30 @@ export interface KnowledgeMatchRow {
   similarity: number;
 }
 
+export interface AgentTestConversationRow {
+  conversation_id: string;
+  created_at: string;
+}
+
+export interface AgentTestRunRow {
+  run_id: string;
+  is_existing: boolean;
+  status: 'running' | 'completed' | 'failed';
+}
+
+export interface AgentTestMessageRow {
+  message_id: string;
+  body: string | null;
+  direction: 'inbound' | 'outbound' | 'internal';
+  metadata: Json;
+  created_at: string;
+}
+
+export interface AgentTestHandoffRow {
+  handoff_id: string;
+  created: boolean;
+}
+
 type EmptyRecord = Record<never, never>;
 
 export interface Database {
@@ -173,6 +197,48 @@ export interface Database {
           requested_match_count?: number;
         };
         Returns: KnowledgeMatchRow[];
+      };
+      create_agent_test_conversation: {
+        Args: { target_location_id: string };
+        Returns: AgentTestConversationRow[];
+      };
+      get_agent_test_conversation: {
+        Args: { target_conversation_id: string };
+        Returns: AgentTestMessageRow[];
+      };
+      begin_agent_test_turn: {
+        Args: {
+          customer_message: string;
+          model_name: string;
+          provider_name: string;
+          target_conversation_id: string;
+          target_idempotency_key: string;
+        };
+        Returns: AgentTestRunRow[];
+      };
+      complete_agent_test_turn: {
+        Args: {
+          assistant_body: string;
+          handoff_requested: boolean;
+          safe_failure_code?: string | null;
+          source_references: Json;
+          target_run_id: string;
+          tool_executions: Json;
+        };
+        Returns: undefined;
+      };
+      record_agent_test_knowledge_search: {
+        Args: { target_conversation_id: string; tool_call_id: string };
+        Returns: undefined;
+      };
+      request_agent_test_handoff: {
+        Args: {
+          handoff_reason: string;
+          handoff_urgency: 'normal' | 'urgent';
+          target_conversation_id: string;
+          tool_call_id: string;
+        };
+        Returns: AgentTestHandoffRow[];
       };
     };
     Enums: EmptyRecord;
