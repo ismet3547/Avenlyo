@@ -45,11 +45,35 @@ export const nodePinnedTransport: PinnedTransport = {
   request(url, address, timeoutMs, maxBytes) {
     return new Promise((resolve, reject) => {
       const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
-      const abort = () => {
-        req.destroy(
-          new CrawlPolicyError('request_timeout', 'The website did not respond in time.'),
+      const requestStartedAt = Date.now();
+      let settled = false;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+
+      const clearDeadline = () => {
+        if (deadline) clearTimeout(deadline);
+        deadline = undefined;
+      };
+      const succeed = (value: FetchedResponse) => {
+        if (settled) return;
+        settled = true;
+        clearDeadline();
+        resolve(value);
+      };
+      const fail = (error: CrawlPolicyError) => {
+        if (settled) return;
+        settled = true;
+        clearDeadline();
+        req.destroy(error);
+        reject(error);
+      };
+      const failNetwork = () => {
+        fail(
+          Date.now() - requestStartedAt >= timeoutMs
+            ? new CrawlPolicyError('request_timeout', 'The website did not respond in time.')
+            : new CrawlPolicyError('request_failed', 'The website could not be fetched.'),
         );
       };
+
       const req = request(
         url,
         {
@@ -69,7 +93,7 @@ export const nodePinnedTransport: PinnedTransport = {
           response.on('data', (chunk: Buffer) => {
             bytes += chunk.length;
             if (bytes > maxBytes) {
-              req.destroy(
+              fail(
                 new CrawlPolicyError(
                   'body_too_large',
                   'A website page exceeded the import size limit.',
@@ -79,9 +103,10 @@ export const nodePinnedTransport: PinnedTransport = {
             }
             chunks.push(chunk);
           });
-          response.once('error', reject);
+          response.once('aborted', failNetwork);
+          response.once('error', failNetwork);
           response.once('end', () => {
-            resolve({
+            succeed({
               body: Buffer.concat(chunks).toString('utf8'),
               bytes,
               headers: response.headers,
@@ -92,10 +117,18 @@ export const nodePinnedTransport: PinnedTransport = {
         },
       );
       req.once('error', (error: Error) => {
-        if (error instanceof CrawlPolicyError) reject(error);
-        else reject(new CrawlPolicyError('request_failed', 'The website could not be fetched.'));
+        if (error instanceof CrawlPolicyError) fail(error);
+        else failNetwork();
       });
-      req.once('timeout', abort);
+      req.once('timeout', () =>
+        fail(new CrawlPolicyError('request_timeout', 'The website did not respond in time.')),
+      );
+      // This deadline is intentionally independent from socket inactivity: a peer cannot
+      // keep an import alive forever by trickling bytes just before the idle timeout.
+      deadline = setTimeout(
+        () => fail(new CrawlPolicyError('request_timeout', 'The website did not respond in time.')),
+        timeoutMs,
+      );
       req.end();
     });
   },
@@ -108,6 +141,8 @@ export interface SecureFetcherOptions {
 }
 
 export interface FetchOptions {
+  /** Runs after URL/DNS validation and before every request, including redirects. */
+  readonly beforeRequest?: (targetUrl: URL) => Promise<void> | void;
   readonly requireHtml?: boolean;
 }
 
@@ -131,6 +166,7 @@ export class SecureFetcher {
       redirectCount += 1
     ) {
       const addresses = await resolvePublicAddresses(current.hostname, this.dnsResolver);
+      await fetchOptions.beforeRequest?.(current);
       const response = await this.transport.request(
         current,
         addresses[0]!,

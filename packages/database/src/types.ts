@@ -145,13 +145,21 @@ export interface Database {
         };
         Returns: undefined;
       };
-      get_knowledge_import_publication_snapshot: {
+      begin_knowledge_publish: {
         Args: { target_import_id: string };
         Returns: KnowledgePublicationSnapshotRow[];
       };
-      publish_knowledge_import: {
+      complete_knowledge_publish: {
         Args: { document_versions: Json; generated_chunks: Json; target_import_id: string };
         Returns: number;
+      };
+      release_knowledge_publish: {
+        Args: { safe_error_code: string; safe_error_message: string; target_import_id: string };
+        Returns: undefined;
+      };
+      recover_stale_knowledge_publish: {
+        Args: { target_import_id: string };
+        Returns: undefined;
       };
       get_my_knowledge_overview: { Args: EmptyRecord; Returns: KnowledgeOverviewRow[] };
       get_knowledge_import_review: {

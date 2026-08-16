@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { extractHtml } from './html-extractor';
 import { extractLinks } from './link-extractor';
-import { isRobotsAllowed, robotsUrlFor } from './robots';
+import { parseRobots, robotsUrlFor, type RobotsPolicy } from './robots';
 import { SecureFetcher } from './fetcher';
 import {
   CrawlPolicyError,
@@ -42,6 +42,7 @@ export interface WebsiteCrawlerOptions {
 export class WebsiteCrawler {
   private readonly limits: CrawlLimits;
   private readonly fetcher: SecureFetcher;
+  private readonly robotsByOrigin = new Map<string, Promise<RobotsPolicy | null>>();
 
   public constructor(options: WebsiteCrawlerOptions = {}) {
     this.limits = options.limits ?? defaultCrawlLimits;
@@ -49,17 +50,13 @@ export class WebsiteCrawler {
   }
 
   public async crawl(input: string): Promise<CrawlResult> {
+    this.robotsByOrigin.clear();
     const initial = normalizeCrawlUrl(input);
-    const rootResponse = await this.fetcher.fetch(initial);
+    // The initial URL is allowed to establish the final root site after safe redirects.
+    // Every request in that redirect chain still has its own origin-specific robots check.
+    const rootResponse = await this.fetchHtml(initial);
     const root = normalizeCrawlUrl(rootResponse.url.toString());
     const rootDomain = registrableDomain(root);
-    const robots = await this.loadRobots(root);
-    if (robots && !isRobotsAllowed(robots, root)) {
-      throw new CrawlPolicyError(
-        'robots_disallowed',
-        'This website does not allow automated crawling.',
-      );
-    }
 
     const queue: QueuedUrl[] = [{ depth: 0, url: root }];
     const queued = new Set([root.toString()]);
@@ -81,7 +78,7 @@ export class WebsiteCrawler {
         response =
           current.url.toString() === root.toString()
             ? rootResponse
-            : await this.fetcher.fetch(current.url);
+            : await this.fetchHtml(current.url, rootDomain);
       } catch (error) {
         if (error instanceof CrawlPolicyError && error.code === 'invalid_content_type')
           pagesSkipped += 1;
@@ -113,10 +110,6 @@ export class WebsiteCrawler {
       if (current.depth >= this.limits.maxDepth) continue;
       for (const link of extractLinks(response.body, response.url.toString())) {
         if (!isInCrawlScope(link, rootDomain) || queued.has(link.toString())) continue;
-        if (robots && !isRobotsAllowed(robots, link)) {
-          pagesSkipped += 1;
-          continue;
-        }
         queued.add(link.toString());
         queue.push({ depth: current.depth + 1, url: link });
       }
@@ -125,11 +118,45 @@ export class WebsiteCrawler {
     return { pages, pagesDiscovered: visited.size, pagesSkipped, rootUrl: root.toString() };
   }
 
-  private async loadRobots(root: URL): Promise<string | null> {
+  private async fetchHtml(candidate: URL, rootDomain?: string) {
+    return this.fetcher.fetch(candidate, {
+      beforeRequest: async (target) => {
+        if (rootDomain && !isInCrawlScope(target, rootDomain)) {
+          throw new CrawlPolicyError(
+            'domain_out_of_scope',
+            'The website redirected outside its allowed domain.',
+          );
+        }
+        await this.assertRobotsAllowed(target);
+      },
+    });
+  }
+
+  private async assertRobotsAllowed(candidate: URL): Promise<void> {
+    const policy = await this.loadRobots(candidate);
+    if (policy && !policy.isAllowed(candidate)) {
+      throw new CrawlPolicyError(
+        'robots_disallowed',
+        'This website does not allow automated crawling.',
+      );
+    }
+  }
+
+  private async loadRobots(candidate: URL): Promise<RobotsPolicy | null> {
+    const origin = candidate.origin;
+    const cached = this.robotsByOrigin.get(origin);
+    if (cached) return cached;
+    const policy = this.fetchRobots(candidate);
+    this.robotsByOrigin.set(origin, policy);
+    return policy;
+  }
+
+  private async fetchRobots(candidate: URL): Promise<RobotsPolicy | null> {
     try {
       // `robots.txt` is fetched through the same URL/DNS-pinned policy. It need not be HTML.
-      const robotsResponse = await this.fetcher.fetch(robotsUrlFor(root), { requireHtml: false });
-      return robotsResponse.body;
+      const robotsUrl = robotsUrlFor(candidate);
+      const robotsResponse = await this.fetcher.fetch(robotsUrl, { requireHtml: false });
+      return parseRobots(robotsUrl, robotsResponse.body);
     } catch (error) {
       if (error instanceof CrawlPolicyError && error.code === 'request_failed') return null;
       throw error;

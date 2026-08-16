@@ -1,7 +1,13 @@
-import type { IncomingHttpHeaders } from 'node:http';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 
-import { SecureFetcher, type FetchedResponse, type PinnedTransport } from './fetcher';
+import {
+  nodePinnedTransport,
+  SecureFetcher,
+  type FetchedResponse,
+  type PinnedTransport,
+} from './fetcher';
 import { defaultCrawlLimits } from './types';
 
 function response(
@@ -67,5 +73,31 @@ describe('secure redirect handling', () => {
       transport,
     });
     await expect(fetcher.fetch('https://example.com')).rejects.toThrow('redirected too many times');
+  });
+
+  it('enforces an absolute deadline even when a peer continuously sends data', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      const interval = setInterval(() => response.write('x'), 2);
+      response.once('close', () => clearInterval(interval));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as AddressInfo;
+
+    try {
+      await expect(
+        nodePinnedTransport.request(
+          // Call the transport directly: production URL policy rejects literals before this layer.
+          new URL(`http://127.0.0.1:${address.port}/`),
+          { address: '127.0.0.1', family: 4 },
+          30,
+          1_000_000,
+        ),
+      ).rejects.toMatchObject({ code: 'request_timeout' });
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 });

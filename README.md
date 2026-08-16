@@ -165,8 +165,14 @@ or publication. A retrieval test returns source chunks only; it does not generat
   The outbound connection is pinned through Node’s request `lookup` callback to a validated answer,
   preserving the original hostname for Host, TLS SNI, and certificate validation.
 - Redirects are handled manually (maximum five) and each target passes URL/DNS validation again.
-- Crawls stay within the final site’s registrable domain, respect `robots.txt` for `AvenlyoBot`, and
-  use no browser, JavaScript execution, or TLS-verification bypass.
+  After the root site is established, redirects outside its registrable domain are rejected before
+  their content is fetched.
+- Before every HTML request, Avenlyo loads and caches the target origin’s `robots.txt` policy for
+  `AvenlyoBot`. Policies are never shared between origins such as `clinic.example` and
+  `booking.clinic.example`.
+- Each request also has an absolute 8-second wall-clock deadline, so periodic response bytes cannot
+  keep a connection alive indefinitely. No browser, JavaScript execution, or TLS-verification
+  bypass is used.
 
 ### Import limits and embeddings
 
@@ -175,7 +181,10 @@ or publication. A retrieval test returns source chunks only; it does not generat
 - Each import is capped at 20 pages, depth 2, five redirects per request, 8 seconds per request,
   1 MB of HTML per page, and 5 MB total HTML.
 - The synchronous `KnowledgeImportRunner` is an MVP boundary designed to move to a queue/worker
-  later. A failed rescan never removes already published knowledge.
+  later. A failed rescan never removes already published knowledge. Publishing first reserves an
+  immutable review snapshot, performs embeddings outside a database transaction, then completes
+  atomically. Failed publication returns the import to review; owners/admins can recover a stalled
+  reservation after 15 minutes without deleting drafts.
 - Publishing uses the server-only OpenAI SDK by default with `text-embedding-3-small` at 1536
   dimensions. Missing OpenAI configuration still permits crawl/review, but publishing and test
   retrieval report a clear unavailable state. No fake production embeddings are generated.

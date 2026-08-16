@@ -127,7 +127,7 @@ select extensions.throws_ok(
   'normal member cannot edit knowledge drafts'
 );
 select extensions.throws_ok(
-  $$ select * from public.get_knowledge_import_publication_snapshot(current_setting('avenlyo.knowledge_import_a')::uuid) $$,
+  $$ select * from public.begin_knowledge_publish(current_setting('avenlyo.knowledge_import_a')::uuid) $$,
   '42501',
   'Knowledge import access is not permitted',
   'normal member cannot publish knowledge'

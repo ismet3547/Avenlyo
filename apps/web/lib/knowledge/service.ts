@@ -53,7 +53,7 @@ interface KnowledgeRpcCaller {
     },
   ): PromiseLike<{ data: null; error: RpcError | null }>;
   (
-    name: 'get_knowledge_import_publication_snapshot',
+    name: 'begin_knowledge_publish',
     args: { target_import_id: string },
   ): PromiseLike<{
     data:
@@ -68,9 +68,13 @@ interface KnowledgeRpcCaller {
     error: RpcError | null;
   }>;
   (
-    name: 'publish_knowledge_import',
+    name: 'complete_knowledge_publish',
     args: { document_versions: Json; generated_chunks: Json; target_import_id: string },
   ): PromiseLike<{ data: number | null; error: RpcError | null }>;
+  (
+    name: 'release_knowledge_publish',
+    args: { safe_error_code: string; safe_error_message: string; target_import_id: string },
+  ): PromiseLike<{ data: null; error: RpcError | null }>;
   (name: 'get_my_knowledge_overview'): PromiseLike<{
     data:
       | {
@@ -279,53 +283,69 @@ export async function publishKnowledgeImport(
   importId: string,
 ): Promise<number> {
   const documents = await requireRpc(
-    knowledgeRpc(client)('get_knowledge_import_publication_snapshot', {
+    knowledgeRpc(client)('begin_knowledge_publish', {
       target_import_id: importId,
     }),
   );
-  if (documents.length === 0) {
-    throw new KnowledgeServiceError('Include at least one knowledge page before publishing.');
-  }
-
-  let provider: OpenAIEmbeddingProvider;
   try {
-    provider = createEmbeddingProvider();
+    if (documents.length === 0) {
+      throw new KnowledgeServiceError('Include at least one knowledge page before publishing.');
+    }
+
+    let provider: OpenAIEmbeddingProvider;
+    try {
+      provider = createEmbeddingProvider();
+    } catch (error) {
+      if (error instanceof EmbeddingConfigurationError)
+        throw new KnowledgeServiceError(error.message);
+      throw error;
+    }
+
+    const draftedChunks = documents.flatMap((document) =>
+      chunkKnowledgeContent(document.content).map((chunk) => ({ ...chunk, document })),
+    );
+    if (draftedChunks.length === 0)
+      throw new KnowledgeServiceError('Included knowledge needs more text.');
+    const embeddings = await embedInBatches(
+      provider,
+      draftedChunks.map((chunk) => chunk.content),
+    );
+
+    const chunks: Json = draftedChunks.map((chunk, index) => ({
+      chunk_index: chunk.chunkIndex,
+      content: chunk.content,
+      content_hash: createHash('sha256').update(chunk.content).digest('hex'),
+      document_id: chunk.document.document_id,
+      embedding: vectorLiteral(embeddings[index]!),
+      embedding_model: provider.model,
+      embedding_provider: provider.id,
+    }));
+    const versions: Json = documents.map((document) => ({
+      content_hash: document.content_hash,
+      document_id: document.document_id,
+    }));
+    return await requireRpc(
+      knowledgeRpc(client)('complete_knowledge_publish', {
+        document_versions: versions,
+        generated_chunks: chunks,
+        target_import_id: importId,
+      }),
+    );
   } catch (error) {
-    if (error instanceof EmbeddingConfigurationError)
-      throw new KnowledgeServiceError(error.message);
+    // The reservation is recoverable: no database transaction is kept open during OpenAI I/O.
+    try {
+      await requireRpc(
+        knowledgeRpc(client)('release_knowledge_publish', {
+          safe_error_code: 'publication_failed',
+          safe_error_message: 'Knowledge could not be published right now. Please try again.',
+          target_import_id: importId,
+        }),
+      );
+    } catch {
+      // A completed/released reservation needs no further action; stale reservations have a safe RPC.
+    }
     throw error;
   }
-
-  const draftedChunks = documents.flatMap((document) =>
-    chunkKnowledgeContent(document.content).map((chunk) => ({ ...chunk, document })),
-  );
-  if (draftedChunks.length === 0)
-    throw new KnowledgeServiceError('Included knowledge needs more text.');
-  const embeddings = await embedInBatches(
-    provider,
-    draftedChunks.map((chunk) => chunk.content),
-  );
-
-  const chunks: Json = draftedChunks.map((chunk, index) => ({
-    chunk_index: chunk.chunkIndex,
-    content: chunk.content,
-    content_hash: createHash('sha256').update(chunk.content).digest('hex'),
-    document_id: chunk.document.document_id,
-    embedding: vectorLiteral(embeddings[index]!),
-    embedding_model: provider.model,
-    embedding_provider: provider.id,
-  }));
-  const versions: Json = documents.map((document) => ({
-    content_hash: document.content_hash,
-    document_id: document.document_id,
-  }));
-  return requireRpc(
-    knowledgeRpc(client)('publish_knowledge_import', {
-      document_versions: versions,
-      generated_chunks: chunks,
-      target_import_id: importId,
-    }),
-  );
 }
 
 export async function searchKnowledge(
