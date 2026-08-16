@@ -14,6 +14,7 @@ import type { TenantContext } from '@/lib/onboarding/types';
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
 
 import type { AgentTestTurn } from './types';
+import type { SubmissionDisposition } from './submission';
 
 interface RpcError {
   message: string;
@@ -118,7 +119,10 @@ async function requireRpc<Result>(
 }
 
 export class AgentTestServiceError extends Error {
-  public constructor(message = 'The Agent Test could not be completed. Please try again.') {
+  public constructor(
+    message = 'The Agent Test could not be completed. Please try again.',
+    public readonly submissionDisposition: SubmissionDisposition = 'reuse-key',
+  ) {
     super(message);
     this.name = 'AgentTestServiceError';
   }
@@ -256,6 +260,7 @@ export async function runAgentTestTurn(
     if (turn) return turn;
     throw new AgentTestServiceError(
       'That earlier test message failed. Send it again as a new submission.',
+      'replace-key',
     );
   }
   try {

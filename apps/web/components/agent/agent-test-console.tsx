@@ -8,6 +8,11 @@ import {
   sendAgentTestMessageAction,
 } from '@/app/dashboard/ai-front-office/test-agent/actions';
 import type { AgentTestTurn } from '@/lib/agent/types';
+import {
+  beginSubmission,
+  pendingSubmissionAfterFailure,
+  type PendingSubmission,
+} from '@/lib/agent/submission';
 
 interface TranscriptMessage {
   readonly body: string;
@@ -18,11 +23,6 @@ interface TranscriptMessage {
 interface AgentTestConsoleProps {
   readonly available: boolean;
   readonly hasPublishedKnowledge: boolean;
-}
-
-interface PendingSubmission {
-  readonly idempotencyKey: string;
-  readonly message: string;
 }
 
 export function AgentTestConsole({ available, hasPublishedKnowledge }: AgentTestConsoleProps) {
@@ -51,10 +51,7 @@ export function AgentTestConsole({ available, hasPublishedKnowledge }: AgentTest
   function sendMessage() {
     const message = draft.trim();
     if (!conversationId || !message) return;
-    const submission =
-      pendingSubmission?.message === message
-        ? pendingSubmission
-        : { idempotencyKey: crypto.randomUUID(), message };
+    const submission = beginSubmission(pendingSubmission, message, () => crypto.randomUUID());
     setPendingSubmission(submission);
     setNotice(null);
     startTransition(async () => {
@@ -67,6 +64,9 @@ export function AgentTestConsole({ available, hasPublishedKnowledge }: AgentTest
       const submittedMessage = state.submittedMessage;
       if (state.status !== 'success' || !turn || !submittedMessage) {
         setNotice(state.message ?? 'The Agent Test could not be completed.');
+        setPendingSubmission(
+          pendingSubmissionAfterFailure(submission, state.submissionDisposition ?? 'reuse-key'),
+        );
         return;
       }
       setMessages((current) => [

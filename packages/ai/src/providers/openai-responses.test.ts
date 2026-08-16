@@ -54,16 +54,15 @@ describe('OpenAI Responses request contract', () => {
       model: 'gpt-5.6',
       tools: activeToolsForIndustry(veterinaryPack),
     });
-    expect(request.input).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          encrypted_content: 'opaque-only',
-          id: 'rsn_1',
-          type: 'reasoning',
-        }),
-        expect.objectContaining({ call_id: 'call_1', type: 'function_call_output' }),
-      ]),
-    );
+    expect(request.input).toEqual([
+      expect.objectContaining({
+        encrypted_content: 'opaque-only',
+        id: 'rsn_1',
+        type: 'reasoning',
+      }),
+      expect.objectContaining({ call_id: 'call_1', type: 'function_call' }),
+      expect.objectContaining({ call_id: 'call_1', type: 'function_call_output' }),
+    ]);
     expect(request.store).toBe(false);
     expect(request.parallel_tool_calls).toBe(false);
     expect(request).not.toHaveProperty('previous_response_id');

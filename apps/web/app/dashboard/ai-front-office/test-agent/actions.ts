@@ -8,6 +8,7 @@ import {
   runAgentTestTurn,
 } from '@/lib/agent/service';
 import type { AgentTestTurn } from '@/lib/agent/types';
+import type { SubmissionDisposition } from '@/lib/agent/submission';
 import { knowledgeServerEnv } from '@/lib/knowledge/config';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -16,6 +17,7 @@ export interface AgentTestActionState {
   readonly conversationId: string | null;
   readonly message?: string;
   readonly status: 'error' | 'idle' | 'success';
+  readonly submissionDisposition?: SubmissionDisposition;
   readonly submittedMessage?: string;
   readonly turn?: AgentTestTurn;
 }
@@ -27,8 +29,12 @@ async function getAgentTestContext() {
   return auth ? { ...auth, workspace } : null;
 }
 
-function errorState(message: string, conversationId: string | null = null): AgentTestActionState {
-  return { conversationId, message, status: 'error' };
+function errorState(
+  message: string,
+  conversationId: string | null = null,
+  submissionDisposition: SubmissionDisposition = 'reuse-key',
+): AgentTestActionState {
+  return { conversationId, message, status: 'error', submissionDisposition };
 }
 
 export async function createAgentTestConversationAction(): Promise<AgentTestActionState> {
@@ -88,11 +94,9 @@ export async function sendAgentTestMessageAction(
       turn,
     };
   } catch (error) {
-    return errorState(
-      error instanceof AgentTestServiceError
-        ? error.message
-        : 'The Agent Test could not be completed.',
-      parsed.data.conversationId,
-    );
+    if (error instanceof AgentTestServiceError) {
+      return errorState(error.message, parsed.data.conversationId, error.submissionDisposition);
+    }
+    return errorState('The Agent Test could not be completed.', parsed.data.conversationId);
   }
 }

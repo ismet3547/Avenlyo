@@ -3,6 +3,7 @@ import type {
   FunctionTool,
   ResponseCreateParamsNonStreaming,
   ResponseInputItem,
+  ResponseReasoningItem,
 } from 'openai/resources/responses/responses';
 
 import { PROVIDER_TIMEOUT_MS } from '../agent/limits';
@@ -67,6 +68,12 @@ function toOpenAITool(tool: AgentProviderInput['tools'][number]): FunctionTool {
   };
 }
 
+function toEncryptedReasoningContinuation(
+  item: ResponseReasoningItem,
+): AgentProviderContinuation['encryptedReasoningItems'][number] | null {
+  return item.encrypted_content ? { encryptedContent: item.encrypted_content, id: item.id } : null;
+}
+
 /** Kept pure so the retention and tool-safety contract is unit tested without network calls. */
 export function buildResponsesRequest(input: AgentProviderInput): ResponseCreateParamsNonStreaming {
   return {
@@ -115,14 +122,16 @@ export class OpenAIResponsesProvider implements AgentProvider {
   public async runTurn(input: AgentProviderInput): Promise<AgentProviderResult> {
     try {
       const response = await this.client.responses.create(buildResponsesRequest(input));
-      const encryptedReasoningItems = response.output.flatMap((item) => {
-        if (item.type !== 'reasoning') return [];
-        // The installed SDK's output union omits this optional stateless continuation field.
-        const reasoning = item as unknown as { encrypted_content?: unknown; id?: unknown };
-        return typeof reasoning.encrypted_content === 'string' && typeof reasoning.id === 'string'
-          ? [{ encryptedContent: reasoning.encrypted_content, id: reasoning.id }]
-          : [];
-      });
+      const encryptedReasoningItems = response.output.flatMap((item) =>
+        item.type === 'reasoning'
+          ? [toEncryptedReasoningContinuation(item)].filter(
+              (
+                reasoning,
+              ): reasoning is AgentProviderContinuation['encryptedReasoningItems'][number] =>
+                reasoning !== null,
+            )
+          : [],
+      );
       const continuation: AgentProviderContinuation | undefined = encryptedReasoningItems.length
         ? { encryptedReasoningItems, provider: 'openai-responses' }
         : undefined;
