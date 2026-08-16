@@ -62,6 +62,9 @@ importers:
       '@avenlyo/industries':
         specifier: workspace:*
         version: link:../../packages/industries
+      '@avenlyo/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       '@avenlyo/knowledge':
         specifier: workspace:*
         version: link:../../packages/knowledge

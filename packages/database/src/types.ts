@@ -167,6 +167,129 @@ export interface VoiceKnowledgeMatchRow {
   similarity: number;
 }
 
+export interface EzyVetBackendAuthorizationRow {
+  organization_id: string;
+  location_id: string;
+  location_timezone: string;
+}
+
+export interface EzyVetExecutionCredentialsRow {
+  organization_id: string;
+  location_id: string;
+  environment: 'production' | 'trial';
+  site_uid: string;
+  site_timezone: string;
+  client_id: string;
+  client_secret: string;
+  credential_version: number;
+}
+
+export interface EzyVetIntegrationLocationRow {
+  integration_id: string;
+  status: string;
+  site_timezone: string | null;
+}
+
+export interface EzyVetIntegrationConfigurationRow {
+  integration_id: string | null;
+  status: string | null;
+  environment: string | null;
+  site_timezone: string | null;
+  last_catalog_synced_at: string | null;
+  last_verified_at: string | null;
+  timezone_attention: boolean | null;
+  appointment_type_id: string | null;
+  appointment_type_name: string | null;
+  appointment_type_duration_minutes: number | null;
+  appointment_type_active: boolean | null;
+  appointment_type_bookable: boolean | null;
+  resource_id: string | null;
+  resource_name: string | null;
+  resource_active: boolean | null;
+  resource_bookable: boolean | null;
+}
+
+export interface EzyVetBookableCatalogRow {
+  appointment_type_id: string;
+  appointment_type_uid: string;
+  appointment_type_name: string;
+  default_duration_minutes: number;
+  resource_id: string;
+  resource_uid: string;
+  resource_name: string;
+  site_timezone: string;
+}
+
+export interface VoiceSchedulingContextRow {
+  organization_id: string;
+  location_id: string;
+  conversation_id: string;
+  contact_id: string | null;
+  caller_e164: string | null;
+  integration_id: string;
+  site_timezone: string;
+}
+
+export interface BookingCandidateRow {
+  candidate_id: string;
+  appointment_type_name: string;
+  resource_name: string;
+  starts_at: string;
+  ends_at: string;
+  timezone: string;
+  expires_at: string;
+}
+
+export interface BookingIntentRow {
+  booking_intent_id: string;
+  appointment_type_name: string;
+  starts_at: string;
+  timezone: string;
+  status: string;
+}
+
+export interface BookingClaimRow {
+  state: string;
+  booking_intent_id: string;
+  confirmed_message_id: string | null;
+}
+
+export interface BookingExecutionContextRow {
+  booking_intent_id: string;
+  organization_id: string;
+  location_id: string;
+  conversation_id: string;
+  contact_id: string | null;
+  integration_id: string;
+  external_contact_uid: string;
+  external_subject_uid: string;
+  subject_name: string;
+  appointment_type_uid: string;
+  appointment_type_name: string;
+  default_duration_minutes: number;
+  resource_uid: string;
+  resource_name: string;
+  starts_at: string;
+  ends_at: string;
+  timezone: string;
+}
+
+export interface CompletedBookingRow {
+  appointment_id: string;
+  is_existing: boolean;
+}
+
+export interface SchedulingAppointmentRow {
+  appointment_id: string;
+  title: string;
+  status: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  provider: string | null;
+  provider_status: string | null;
+  created_at: string;
+}
+
 type EmptyRecord = Record<never, never>;
 
 export interface Database {
@@ -407,6 +530,110 @@ export interface Database {
           requested_match_count?: number;
         };
         Returns: VoiceKnowledgeMatchRow[];
+      };
+      get_ezyvet_backend_authorization: {
+        Args: { target_user_id: string; target_location_id: string };
+        Returns: EzyVetBackendAuthorizationRow[];
+      };
+      store_ezyvet_connection: {
+        Args: {
+          target_organization_id: string;
+          target_location_id: string;
+          target_client_id: string;
+          target_client_secret: string;
+          target_environment: 'production' | 'trial';
+          target_site_uid: string;
+          target_provider_site_id: string;
+          target_provider_timezone: string;
+        };
+        Returns: { integration_id: string }[];
+      };
+      get_ezyvet_execution_credentials: {
+        Args: { target_integration_id: string };
+        Returns: EzyVetExecutionCredentialsRow[];
+      };
+      get_ezyvet_integration_for_location: {
+        Args: { target_organization_id: string; target_location_id: string };
+        Returns: EzyVetIntegrationLocationRow[];
+      };
+      save_ezyvet_catalog: {
+        Args: {
+          target_integration_id: string;
+          appointment_types: Json;
+          resources: Json;
+          target_site_timezone: string;
+        };
+        Returns: undefined;
+      };
+      get_my_ezyvet_integration_configuration: {
+        Args: { target_location_id: string };
+        Returns: EzyVetIntegrationConfigurationRow[];
+      };
+      update_my_ezyvet_booking_policy: {
+        Args: {
+          target_location_id: string;
+          selected_appointment_type_ids: string[];
+          selected_resource_ids: string[];
+        };
+        Returns: undefined;
+      };
+      disable_ezyvet_integration: {
+        Args: { target_organization_id: string; target_location_id: string };
+        Returns: undefined;
+      };
+      get_voice_ezyvet_scheduling_context: {
+        Args: { target_call_id: string };
+        Returns: VoiceSchedulingContextRow[];
+      };
+      get_ezyvet_bookable_catalog: {
+        Args: { target_integration_id: string };
+        Returns: EzyVetBookableCatalogRow[];
+      };
+      create_voice_booking_candidates: {
+        Args: { target_call_id: string; available_slots: Json };
+        Returns: BookingCandidateRow[];
+      };
+      prepare_voice_booking_intent: {
+        Args: {
+          target_call_id: string;
+          target_candidate_id: string;
+          resolved_contact_uid: string;
+          resolved_subject_uid: string;
+          resolved_subject_name: string;
+        };
+        Returns: BookingIntentRow[];
+      };
+      claim_voice_booking_intent: {
+        Args: {
+          target_call_id: string;
+          target_booking_intent_id: string;
+          target_tool_call_id: string;
+        };
+        Returns: BookingClaimRow[];
+      };
+      get_voice_booking_execution_context: {
+        Args: { target_booking_intent_id: string };
+        Returns: BookingExecutionContextRow[];
+      };
+      complete_voice_booking_intent: {
+        Args: {
+          target_booking_intent_id: string;
+          target_external_appointment_id: string;
+          target_provider_status: 'confirmed' | 'unconfirmed';
+        };
+        Returns: CompletedBookingRow[];
+      };
+      fail_voice_booking_intent: {
+        Args: {
+          target_booking_intent_id: string;
+          target_status: string;
+          target_error_category: string;
+        };
+        Returns: undefined;
+      };
+      get_my_scheduling_appointments: {
+        Args: { target_location_id: string };
+        Returns: SchedulingAppointmentRow[];
       };
     };
     Enums: EmptyRecord;

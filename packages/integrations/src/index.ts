@@ -1,5 +1,10 @@
-/** Future integration contracts belong here; no third-party integrations are implemented in Phase 0. */
-export interface IntegrationProvider {
-  id: string;
-  displayName: string;
-}
+export * from './scheduling/connector';
+export * from './scheduling/errors';
+export * from './scheduling/limits';
+export * from './scheduling/types';
+export * from './ezyvet/auth';
+export * from './ezyvet/client';
+export * from './ezyvet/connector';
+export * from './ezyvet/types';
+export * from './testing/fake-booking-connector';
+export * from './testing/fake-ezyvet-transport';

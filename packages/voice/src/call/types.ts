@@ -52,7 +52,13 @@ export interface VoiceRealtimeSessionConfiguration {
 
 export interface VoiceFunctionTool {
   readonly description: string;
-  readonly name: 'request_human_help' | 'search_business_knowledge' | 'transfer_call';
+  readonly name:
+    | 'get_available_appointments'
+    | 'prepare_appointment_booking'
+    | 'request_human_help'
+    | 'search_business_knowledge'
+    | 'transfer_call'
+    | 'book_appointment';
   readonly parameters: Readonly<Record<string, unknown>>;
   readonly strict: true;
 }
@@ -77,7 +83,56 @@ export interface RealtimeCallControlProvider {
 export interface VoiceToolCall {
   readonly arguments: string;
   readonly callId: string;
+  /** Latest persisted inbound speech, supplied only by the trusted sideband runtime. */
+  readonly confirmationText?: string | null;
   readonly name: string;
+  /** Emergency escalation permanently disables scheduling for the current call. */
+  readonly schedulingBlocked?: boolean;
+}
+
+export interface VoiceBookingCandidate {
+  readonly candidateId: string;
+  readonly endsAt: string;
+  readonly expiresAt: string;
+  readonly resourceName: string;
+  readonly startsAt: string;
+  readonly timezone: string;
+  readonly typeName: string;
+}
+
+export interface VoiceBookingIntent {
+  readonly bookingIntentId: string;
+  readonly startsAt: string;
+  readonly status: string;
+  readonly timezone: string;
+  readonly typeName: string;
+}
+
+export interface VoiceSchedulingServices {
+  isEnabledForCall(context: VoiceCallContext): Promise<boolean>;
+  getAvailableAppointments(
+    input: {
+      readonly appointmentType: string;
+      readonly dates: readonly string[];
+      readonly toolCallId: string;
+    },
+    context: VoiceCallContext,
+  ): Promise<readonly VoiceBookingCandidate[]>;
+  prepareAppointmentBooking(
+    input: { readonly candidateId: string; readonly petName: string; readonly toolCallId: string },
+    context: VoiceCallContext,
+  ): Promise<{
+    readonly intent: VoiceBookingIntent | null;
+    readonly outcome: 'ambiguous' | 'not_found' | 'ready';
+  }>;
+  bookAppointment(
+    input: {
+      readonly bookingIntentId: string;
+      readonly confirmationText: string | null;
+      readonly toolCallId: string;
+    },
+    context: VoiceCallContext,
+  ): Promise<{ readonly outcome: 'booked' | 'confirmation_required' | 'unavailable' | 'unknown' }>;
 }
 
 export interface VoiceToolExecution {

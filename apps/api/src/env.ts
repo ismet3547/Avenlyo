@@ -8,6 +8,7 @@ export const env = parseEnvironment(
     API_CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(4000),
+    EZYVET_PARTNER_ID: z.string().min(1).optional(),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     OPENAI_API_KEY: z.string().min(1).optional(),
     OPENAI_PROJECT_ID: z.string().min(1).optional(),
@@ -26,4 +27,8 @@ export const isVoiceRuntimeConfigured = Boolean(
   env.OPENAI_WEBHOOK_SECRET &&
   env.SUPABASE_URL &&
   env.SUPABASE_SERVICE_ROLE_KEY,
+);
+
+export const isEzyVetRuntimeConfigured = Boolean(
+  env.EZYVET_PARTNER_ID && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY,
 );

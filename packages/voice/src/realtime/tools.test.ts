@@ -58,6 +58,61 @@ describe('voice tool boundary', () => {
     );
   });
 
+  it('exposes veterinary scheduling only when trusted runtime configuration enables it and blocks it after safety escalation', async () => {
+    const getAvailableAppointments = vi.fn().mockResolvedValue([
+      {
+        candidateId: '00000000-0000-4000-8000-000000000101',
+        endsAt: '2026-09-01T10:30:00.000Z',
+        expiresAt: '2026-09-01T09:10:00.000Z',
+        resourceName: 'Dr Ray',
+        startsAt: '2026-09-01T10:00:00.000Z',
+        timezone: 'UTC',
+        typeName: 'Wellness',
+      },
+    ]);
+    expect(
+      activeVoiceTools({
+        industry: veterinaryPack,
+        schedulingEnabled: true,
+        transferEnabled: false,
+      }).map(({ name }) => name),
+    ).toContain('book_appointment');
+    const executor = new VoiceToolExecutor(
+      context,
+      {
+        requestHumanHelp: vi.fn().mockResolvedValue({ created: true }),
+        scheduling: {
+          bookAppointment: vi.fn().mockResolvedValue({ outcome: 'booked' }),
+          getAvailableAppointments,
+          isEnabledForCall: vi.fn().mockResolvedValue(true),
+          prepareAppointmentBooking: vi
+            .fn()
+            .mockResolvedValue({ intent: null, outcome: 'not_found' }),
+        },
+        searchBusinessKnowledge: vi.fn().mockResolvedValue([]),
+        transferCall: vi.fn().mockResolvedValue({ transferred: false }),
+      },
+      false,
+      true,
+    );
+    await expect(
+      executor.execute({
+        arguments: '{"appointment_type":"Wellness","dates":["2026-09-01"]}',
+        callId: 'fc_slots',
+        name: 'get_available_appointments',
+      }),
+    ).resolves.toMatchObject({ status: 'succeeded' });
+    await expect(
+      executor.execute({
+        arguments: '{"appointment_type":"Wellness","dates":["2026-09-01"]}',
+        callId: 'fc_slots_blocked',
+        name: 'get_available_appointments',
+        schedulingBlocked: true,
+      }),
+    ).resolves.toMatchObject({ status: 'rejected' });
+    expect(getAvailableAppointments).toHaveBeenCalledOnce();
+  });
+
   it('rejects malformed and unknown model tool calls without side effects', async () => {
     const requestHumanHelp = vi.fn();
     const executor = new VoiceToolExecutor(

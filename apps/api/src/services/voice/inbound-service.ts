@@ -12,6 +12,7 @@ import {
   type VoiceCallContext,
   type VoiceConfiguration,
   type VoiceSessionManager,
+  type VoiceSchedulingServices,
 } from '@avenlyo/voice';
 
 import { VoiceSidebandRuntime } from './sideband-runtime.js';
@@ -22,6 +23,7 @@ export interface VoiceInboundCallServiceOptions {
   readonly embed?: (query: string) => Promise<readonly number[]>;
   readonly model: string;
   readonly sessions: VoiceSessionManager;
+  readonly scheduling?: VoiceSchedulingServices;
   readonly store: VoiceStore;
 }
 
@@ -117,6 +119,7 @@ export class VoiceInboundCallService {
       resolved.configuration.transferEnabled &&
       resolved.configuration.providerTransferEnabled &&
       resolved.configuration.transferTargetE164 !== null;
+    const schedulingEnabled = await this.schedulingEnabled(context);
     const greeting = initialVoiceGreeting(resolved.business.name);
     try {
       await this.options.control.acceptCall(event.data.call_id, {
@@ -124,7 +127,11 @@ export class VoiceInboundCallService {
         greeting,
         instructions: buildVoiceInstructions(context, resolved.business),
         model: this.options.model,
-        tools: activeVoiceTools({ industry: context.industry, transferEnabled: transferAvailable }),
+        tools: activeVoiceTools({
+          industry: context.industry,
+          schedulingEnabled,
+          transferEnabled: transferAvailable,
+        }),
         voice: resolved.configuration.voice,
       });
       const socket = await this.options.control.connectSideband(event.data.call_id);
@@ -138,6 +145,9 @@ export class VoiceInboundCallService {
         control: this.options.control,
         embed: this.embed,
         sessions: this.options.sessions,
+        ...(schedulingEnabled && this.options.scheduling
+          ? { scheduling: this.options.scheduling }
+          : {}),
         socket,
         store: this.options.store,
       });
@@ -169,6 +179,15 @@ export class VoiceInboundCallService {
       await this.options.control.rejectCall(callId, 404);
     } catch {
       // A caller must not be accepted just because the rejection control path was unavailable.
+    }
+  }
+
+  private async schedulingEnabled(context: VoiceCallContext): Promise<boolean> {
+    if (context.industry.id !== 'veterinary' || !this.options.scheduling) return false;
+    try {
+      return await this.options.scheduling.isEnabledForCall(context);
+    } catch {
+      return false;
     }
   }
 }
