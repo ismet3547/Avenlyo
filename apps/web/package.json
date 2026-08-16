@@ -12,6 +12,7 @@
   "dependencies": {
     "@avenlyo/database": "workspace:*",
     "@avenlyo/industries": "workspace:*",
+    "@avenlyo/knowledge": "workspace:*",
     "@avenlyo/shared": "workspace:*",
     "@avenlyo/ui": "workspace:*",
     "@radix-ui/react-slot": "^1.1.2",

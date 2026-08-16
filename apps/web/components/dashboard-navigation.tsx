@@ -18,7 +18,7 @@ const navigation: ReadonlyArray<{ href: string; icon: LucideIcon; label: string 
   { href: '/dashboard/customers', label: 'Customers', icon: Users },
   { href: '/dashboard/appointments', label: 'Appointments', icon: CalendarDays },
   { href: '/dashboard/needs-attention', label: 'Needs Attention', icon: CircleAlert },
-  { href: '/dashboard/ai-front-office', label: 'AI Front Office', icon: Bot },
+  { href: '/dashboard/ai-front-office/knowledge', label: 'AI Front Office', icon: Bot },
   { href: '/dashboard/integrations', label: 'Integrations', icon: Settings },
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];

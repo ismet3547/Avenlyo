@@ -3,7 +3,8 @@
 Avenlyo is an AI Front Office for service businesses. It will handle customer conversations,
 capture leads, book appointments, and hand off to people when appropriate.
 
-This repository contains the Phase 0 foundation and **Phase 1 authenticated onboarding**. It
+This repository contains the Phase 0 foundation, **Phase 1 authenticated onboarding**, and
+**Phase 2 reviewed website knowledge ingestion**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
 empty state. It does not include production integrations, billing, RAG ingestion, or AI workflows.
@@ -44,10 +45,12 @@ Copy-Item apps/api/.env.example apps/api/.env
 
 `apps/web/.env.local` accepts these optional values:
 
-| Variable                        | Purpose                                                      |
-| ------------------------------- | ------------------------------------------------------------ |
-| `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication. |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.   |
+| Variable                        | Purpose                                                                      |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication.                 |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.                   |
+| `OPENAI_API_KEY`                | Optional, server-only; required only to publish or test knowledge retrieval. |
+| `OPENAI_EMBEDDING_MODEL`        | Optional server-only embedding model. Defaults to `text-embedding-3-small`.  |
 
 `apps/api/.env` accepts these values:
 
@@ -107,7 +110,7 @@ packages/
   database/            Supabase client factory and database boundary
   industries/          Extensible industry-pack definitions and starter packs
   integrations/        Future integration contracts
-  knowledge/           Future knowledge-domain contracts
+  knowledge/           Secure crawler, chunking, embedding, import, and retrieval contracts
   messaging/           Future messaging-domain contracts
   shared/              Cross-runtime utilities, including environment validation
   ui/                  Shared UI utilities
@@ -140,6 +143,42 @@ supabase/migrations/   Versioned PostgreSQL schema and RLS policies
 - The web dashboard uses real Supabase Auth and reads organization/location context from a trusted
   RPC. Without public Supabase variables, only public pages boot; protected routes return users to
   sign-in.
+
+## Business Knowledge
+
+Phase 2 turns a public business website into reviewed, tenant-isolated knowledge. The lifecycle is:
+
+```text
+crawl → draft → human review → publish → chunks → embeddings → semantic retrieval
+```
+
+Website pages never become retrieval-ready merely because they were crawled. Owners and admins use
+the dashboard’s **AI Front Office → Business Knowledge** area to import, include/exclude, edit, and
+publish drafts. Members may read permitted tenant information but cannot configure imports, drafts,
+or publication. A retrieval test returns source chunks only; it does not generate AI answers.
+
+### Crawler security model
+
+- Only `http` and `https` DNS hostnames on standard ports 80/443 are accepted. Credentials,
+  localhost/local names, IP literals, private/special DNS answers, and arbitrary ports are rejected.
+- Every request resolves DNS on the server; every returned A/AAAA address must be globally routable.
+  The outbound connection is pinned through Node’s request `lookup` callback to a validated answer,
+  preserving the original hostname for Host, TLS SNI, and certificate validation.
+- Redirects are handled manually (maximum five) and each target passes URL/DNS validation again.
+- Crawls stay within the final site’s registrable domain, respect `robots.txt` for `AvenlyoBot`, and
+  use no browser, JavaScript execution, or TLS-verification bypass.
+
+### Import limits and embeddings
+
+- Static HTML/XHTML only; scripts, navigation noise, forms, iframes, and raw HTML rendering are
+  excluded. JavaScript-rendered sites and PDFs are intentionally unsupported.
+- Each import is capped at 20 pages, depth 2, five redirects per request, 8 seconds per request,
+  1 MB of HTML per page, and 5 MB total HTML.
+- The synchronous `KnowledgeImportRunner` is an MVP boundary designed to move to a queue/worker
+  later. A failed rescan never removes already published knowledge.
+- Publishing uses the server-only OpenAI SDK by default with `text-embedding-3-small` at 1536
+  dimensions. Missing OpenAI configuration still permits crawl/review, but publishing and test
+  retrieval report a clear unavailable state. No fake production embeddings are generated.
 
 ## Authenticated onboarding
 
