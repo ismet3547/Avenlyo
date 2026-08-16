@@ -84,18 +84,15 @@ select set_config(
   true
 );
 
-select extensions.results_eq(
+select extensions.throws_ok(
   $$
-    with changed as (
-      update public.organization_onboarding
-      set current_step = 'review'
-      where organization_id = current_setting('avenlyo.test_org_a')::uuid
-      returning 1
-    )
-    select count(*)::integer from changed
+    update public.organization_onboarding
+    set current_step = 'review'
+    where organization_id = current_setting('avenlyo.test_org_a')::uuid
   $$,
-  array[0],
-  'a second user cannot mutate the first organization onboarding row'
+  '42501',
+  'permission denied for table organization_onboarding',
+  'a second user cannot directly mutate the first organization onboarding row'
 );
 
 select extensions.is(

@@ -99,7 +99,7 @@ describe('onboarding migration definition', () => {
   it('executes the required onboarding security cases through pgTAP', () => {
     expect(onboardingSecurityTest).toContain('public.bootstrap_workspace()');
     expect(onboardingSecurityTest).toContain("public.save_onboarding_industry('dentistry')");
-    expect(onboardingSecurityTest).toContain('a second user cannot mutate');
+    expect(onboardingSecurityTest).toContain('a second user cannot directly mutate');
     expect(onboardingSecurityTest).toContain(
       'an organization owner cannot directly complete onboarding',
     );
