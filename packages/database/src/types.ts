@@ -108,6 +108,65 @@ export interface AgentTestTurnResultRow {
   handoff_requested: boolean;
 }
 
+export interface VoiceConfigurationRow {
+  configuration_id: string | null;
+  enabled: boolean;
+  voice: string;
+  transfer_enabled: boolean;
+  transfer_target_e164: string | null;
+  provider_transfer_enabled: boolean;
+  assigned_phone_number: string | null;
+  realtime_model_status: string;
+}
+
+export interface VoiceRecentCallRow {
+  call_id: string;
+  caller_phone: string | null;
+  status: string;
+  started_at: string | null;
+  answered_at: string | null;
+  ended_at: string | null;
+  end_reason: string | null;
+  handoff_requested: boolean;
+}
+
+export interface VoiceInboundBootstrapRow {
+  is_duplicate: boolean;
+  accepted: boolean;
+  call_record_id: string | null;
+  conversation_id: string | null;
+  contact_id: string | null;
+  organization_id: string | null;
+  location_id: string | null;
+  phone_number_id: string | null;
+  primary_industry_id: string | null;
+  organization_name: string | null;
+  business_phone: string | null;
+  website_url: string | null;
+  location_name: string | null;
+  location_timezone: string | null;
+  location_address: Json | null;
+  business_hours: Json | null;
+  voice: string | null;
+  transfer_enabled: boolean;
+  provider_transfer_enabled: boolean;
+  transfer_target_e164: string | null;
+}
+
+export interface VoiceHandoffRow {
+  handoff_id: string;
+  created: boolean;
+}
+
+export interface VoiceKnowledgeMatchRow {
+  chunk_id: string;
+  document_id: string;
+  title: string;
+  source_url: string;
+  content: string;
+  similarity: number;
+}
+
 type EmptyRecord = Record<never, never>;
 
 export interface Database {
@@ -258,6 +317,96 @@ export interface Database {
           tool_call_id: string;
         };
         Returns: AgentTestHandoffRow[];
+      };
+      assign_voice_phone_number: {
+        Args: {
+          target_organization_id: string;
+          target_location_id: string;
+          target_phone_number: string;
+          target_label?: string | null;
+        };
+        Returns: { phone_number_id: string; phone_number: string }[];
+      };
+      upsert_my_voice_configuration: {
+        Args: {
+          target_location_id: string;
+          target_enabled: boolean;
+          target_voice: string;
+          target_transfer_enabled: boolean;
+          target_transfer_target_e164: string;
+        };
+        Returns: Omit<VoiceConfigurationRow, 'assigned_phone_number' | 'realtime_model_status'>[];
+      };
+      set_voice_provider_transfer_capability: {
+        Args: {
+          target_enabled: boolean;
+          target_location_id: string;
+          target_organization_id: string;
+        };
+        Returns: undefined;
+      };
+      get_my_voice_configuration: {
+        Args: { target_location_id: string };
+        Returns: VoiceConfigurationRow[];
+      };
+      get_my_recent_voice_calls: {
+        Args: { target_location_id: string };
+        Returns: VoiceRecentCallRow[];
+      };
+      bootstrap_inbound_voice_call: {
+        Args: {
+          target_event_id: string;
+          target_event_type: string;
+          target_external_call_id: string;
+          target_sip_call_id: string;
+          target_dialed_e164: string | null;
+          target_caller_e164?: string | null;
+        };
+        Returns: VoiceInboundBootstrapRow[];
+      };
+      mark_inbound_voice_call_active: {
+        Args: { target_call_id: string };
+        Returns: undefined;
+      };
+      finalize_inbound_voice_call: {
+        Args: { target_call_id: string; target_status: string; target_end_reason: string };
+        Returns: undefined;
+      };
+      record_inbound_voice_transcript: {
+        Args: {
+          target_call_id: string;
+          target_external_item_id: string;
+          target_direction: string;
+          target_body: string;
+        };
+        Returns: boolean;
+      };
+      request_inbound_voice_handoff: {
+        Args: {
+          target_call_id: string;
+          target_tool_call_id: string;
+          target_reason: string;
+          target_urgency?: string;
+        };
+        Returns: VoiceHandoffRow[];
+      };
+      record_inbound_voice_tool_execution: {
+        Args: {
+          target_call_id: string;
+          target_tool_call_id: string;
+          target_tool_name: string;
+          target_status: string;
+        };
+        Returns: undefined;
+      };
+      match_inbound_voice_knowledge: {
+        Args: {
+          target_organization_id: string;
+          target_location_id: string;
+          query_embedding_text: string;
+          requested_match_count?: number;
+        };
+        Returns: VoiceKnowledgeMatchRow[];
       };
     };
     Enums: EmptyRecord;

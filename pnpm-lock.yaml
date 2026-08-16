@@ -53,12 +53,24 @@ importers:
 
   apps/api:
     dependencies:
+      '@avenlyo/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@avenlyo/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@avenlyo/industries':
+        specifier: workspace:*
+        version: link:../../packages/industries
+      '@avenlyo/knowledge':
+        specifier: workspace:*
+        version: link:../../packages/knowledge
       '@avenlyo/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@avenlyo/voice':
+        specifier: workspace:*
+        version: link:../../packages/voice
       '@fastify/cors':
         specifier: ^11.0.1
         version: 11.3.0
@@ -74,9 +86,15 @@ importers:
       fastify-plugin:
         specifier: ^5.0.1
         version: 5.1.0
+      openai:
+        specifier: ^6.49.0
+        version: 6.49.0(ws@8.21.1)(zod@3.25.76)
       tsx:
         specifier: ^4.19.3
         version: 4.23.12
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.1
       zod:
         specifier: ^3.24.2
         version: 3.25.76
@@ -152,7 +170,7 @@ importers:
         version: link:../industries
       openai:
         specifier: ^6.49.0
-        version: 6.49.0(zod@3.25.76)
+        version: 6.49.0(ws@8.21.1)(zod@3.25.76)
       zod:
         specifier: ^3.24.2
         version: 3.25.76
@@ -181,7 +199,7 @@ importers:
         version: 2.5.0
       openai:
         specifier: ^6.49.0
-        version: 6.49.0(zod@3.25.76)
+        version: 6.49.0(ws@8.21.1)(zod@3.25.76)
       robots-parser:
         specifier: 3.0.1
         version: 3.0.1
@@ -206,7 +224,17 @@ importers:
         specifier: ^3.0.2
         version: 3.6.0
 
-  packages/voice: {}
+  packages/voice:
+    dependencies:
+      '@avenlyo/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@avenlyo/industries':
+        specifier: workspace:*
+        version: link:../industries
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
 
 packages:
 
@@ -2877,6 +2905,18 @@ packages:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
     engines: {node: '>=0.10.0'}
 
+  ws@8.21.1:
+    resolution: {integrity: sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
@@ -4916,8 +4956,9 @@ snapshots:
 
   on-exit-leak-free@2.1.2: {}
 
-  openai@6.49.0(zod@3.25.76):
+  openai@6.49.0(ws@8.21.1)(zod@3.25.76):
     optionalDependencies:
+      ws: 8.21.1
       zod: 3.25.76
 
   optionator@0.9.4:
@@ -5731,6 +5772,8 @@ snapshots:
       stackback: 0.0.2
 
   word-wrap@1.2.5: {}
+
+  ws@8.21.1: {}
 
   yocto-queue@0.1.0: {}
 

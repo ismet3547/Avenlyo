@@ -4,7 +4,8 @@ Avenlyo is an AI Front Office for service businesses. It will handle customer co
 capture leads, book appointments, and hand off to people when appropriate.
 
 This repository contains the Phase 0 foundation, **Phase 1 authenticated onboarding**, **Phase 2
-reviewed website knowledge ingestion**, and **Phase 3 controlled AI agent testing**. It
+reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, and **Phase 4
+inbound voice control**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
 empty state. It does not include production integrations, billing, live customer AI, or AI workflows.
@@ -55,13 +56,18 @@ Copy-Item apps/api/.env.example apps/api/.env
 
 `apps/api/.env` accepts these values:
 
-| Variable            | Required                          | Purpose                                                                   |
-| ------------------- | --------------------------------- | ------------------------------------------------------------------------- |
-| `API_PORT`          | No                                | API listen port. Defaults to `4000`.                                      |
-| `API_HOST`          | No                                | API listen host. Defaults to `0.0.0.0`.                                   |
-| `API_CORS_ORIGIN`   | No                                | Browser origin permitted by the API. Defaults to `http://localhost:3000`. |
-| `SUPABASE_URL`      | Only for authenticated API routes | Supabase project URL.                                                     |
-| `SUPABASE_ANON_KEY` | Only for authenticated API routes | Supabase anonymous/publishable key.                                       |
+| Variable                    | Required                             | Purpose                                                                   |
+| --------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| `API_PORT`                  | No                                   | API listen port. Defaults to `4000`.                                      |
+| `API_HOST`                  | No                                   | API listen host. Defaults to `0.0.0.0`.                                   |
+| `API_CORS_ORIGIN`           | No                                   | Browser origin permitted by the API. Defaults to `http://localhost:3000`. |
+| `SUPABASE_URL`              | Authenticated routes / voice runtime | Supabase project URL.                                                     |
+| `SUPABASE_ANON_KEY`         | Only for authenticated API routes    | Supabase anonymous/publishable key.                                       |
+| `SUPABASE_SERVICE_ROLE_KEY` | Trusted inbound voice runtime only   | Backend-only service role; never use it in Next.js or a browser.          |
+| `OPENAI_API_KEY`            | Trusted inbound voice runtime only   | Backend-only API key for Realtime call control and embeddings.            |
+| `OPENAI_WEBHOOK_SECRET`     | Trusted inbound voice runtime only   | OpenAI webhook secret (`whsec_...`) used for raw-body signature checks.   |
+| `OPENAI_REALTIME_MODEL`     | No                                   | Server-only Realtime model. Defaults to `gpt-realtime-2.1`.               |
+| `OPENAI_PROJECT_ID`         | No                                   | Optional server-only OpenAI project ID (`proj_...`).                      |
 
 Never commit actual `.env` or `.env.local` files. The API validates its environment once at
 startup; the web app validates its public configuration once when loaded.
@@ -115,7 +121,7 @@ packages/
   messaging/           Future messaging-domain contracts
   shared/              Cross-runtime utilities, including environment validation
   ui/                  Shared UI utilities
-  voice/               Future voice-domain contracts
+  voice/               Provider-neutral live-call domain contracts and tests
 supabase/migrations/   Versioned PostgreSQL schema and RLS policies
 ```
 
@@ -254,3 +260,66 @@ organization switcher is outside Phase 1.
 
 GitHub Actions runs the full application validation on pull requests to `main`. A separate database
 security job starts Supabase, resets all migrations from scratch, and executes the pgTAP suites.
+
+## Inbound Voice (Phase 4)
+
+Phase 4 is inbound-only. The call media path is deliberately direct and Avenlyo never proxies RTP
+or stores raw audio:
+
+```text
+PSTN -> Twilio Elastic SIP Trunk -> OpenAI Realtime SIP
+                                      <-> Avenlyo Fastify sideband control
+                                          -> approved tools / tenant database
+```
+
+The Fastify endpoint `POST /webhooks/openai/realtime` preserves the raw JSON body, verifies the
+official OpenAI webhook signature before parsing it, then handles only `realtime.call.incoming`.
+Twilio Elastic SIP routing uses the original called DID in the SIP `Diversion` header; it never
+trusts `To`, `From`, arbitrary headers, browser input, or model input to select a tenant. The
+number must be a globally unique canonical E.164 Twilio assignment.
+
+The sideband session uses the server-only `OPENAI_REALTIME_MODEL=gpt-realtime-2.1` setting with
+OpenAI Server VAD (`interrupt_response: true`), final input/audio transcript events, and a 30-minute
+server-enforced maximum call duration. It persists only final caller and assistant transcripts as
+tenant conversation messages. It does not persist audio, partial transcript deltas, or provider
+secrets. The active tool allowlist is `search_business_knowledge`, `request_human_help`, and,
+only when trusted configuration and trunk capability permit it, `transfer_call`. The model never
+sees a transfer number; it can provide only a reason and the backend resolves the configured E.164
+destination before using SIP REFER.
+
+### Operational setup (manual in this phase)
+
+This repository does not provision Twilio resources or purchase phone numbers. Configure the alpha
+path manually:
+
+1. In OpenAI, create/configure a project, set its incoming Realtime-call webhook to the public
+   Fastify URL, and store its `whsec_...` value only in `apps/api/.env`.
+2. In Twilio, create an Elastic SIP Trunk and configure its secure TLS origination URI for the
+   OpenAI project. Attach the selected Twilio phone number. If human transfer is required, enable
+   the relevant SIP REFER/PSTN transfer behavior on that trunk.
+3. Apply the Avenlyo migrations, then assign the DID from an operations shell, never from a browser:
+
+   ```bash
+   pnpm --filter @avenlyo/api voice:assign-number --organization <organization-uuid> --location <location-uuid> --number +14155550123 --label "Main line"
+   ```
+
+4. As an owner/admin, open **AI Front Office -> Inbound Voice**, choose a built-in voice, enable
+   the channel, and optionally save a trusted human transfer number. The dashboard cannot claim or
+   reassign a provider number. Operations must separately attest the trunk's transfer capability;
+   until then the transfer tool is not exposed to the model. After validating the trunk, use the
+   separate trusted operations command:
+
+   ```bash
+   pnpm --filter @avenlyo/api voice:set-transfer-capability --organization <organization-uuid> --location <location-uuid> --enabled true
+   ```
+
+For a real-phone smoke test, call the assigned number, confirm the short Avenlyo AI greeting, ask a
+published knowledge question, interrupt it while speaking, ask for human help, and review the call
+and final transcript records. Try an unsupported booking request: the agent must not invent
+availability and should offer a human handoff. For a veterinary safety check such as “My dog ate
+chocolate and is shaking,” it must not diagnose or give dosage advice; it should create an urgent
+human handoff, and only perform a transfer if one is explicitly configured and operational.
+
+The Phase 4 session manager is intentionally in-process. A Fastify process restart ends active
+sideband orchestration; the database retains durable call, transcript, handoff, and audit records.
+No automated test makes a real OpenAI, Twilio, or phone call.
