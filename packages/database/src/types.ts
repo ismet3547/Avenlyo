@@ -29,6 +29,50 @@ export interface TenantContextRow {
   onboarding_completed_at: string | null;
 }
 
+export interface KnowledgeImportRow {
+  import_id: string;
+  status: string;
+}
+
+export interface KnowledgeOverviewRow {
+  import_id: string;
+  root_url: string;
+  status: string;
+  pages_discovered: number;
+  pages_imported: number;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  draft_documents: number;
+  ready_documents: number;
+}
+
+export interface KnowledgeReviewRow {
+  document_id: string;
+  title: string;
+  canonical_url: string;
+  content: string;
+  included: boolean;
+  status: string;
+}
+
+export interface KnowledgePublicationSnapshotRow {
+  document_id: string;
+  title: string;
+  content: string;
+  content_hash: string;
+  source_url: string;
+}
+
+export interface KnowledgeMatchRow {
+  chunk_id: string;
+  document_id: string;
+  title: string;
+  source_url: string;
+  content: string;
+  similarity: number;
+}
+
 type EmptyRecord = Record<never, never>;
 
 export interface Database {
@@ -72,6 +116,63 @@ export interface Database {
           location_timezone: string;
         };
         Returns: OnboardingStep;
+      };
+      create_knowledge_import: {
+        Args: { root_url_input: string; requested_location_id?: string | null };
+        Returns: KnowledgeImportRow[];
+      };
+      start_knowledge_import: { Args: { target_import_id: string }; Returns: undefined };
+      save_knowledge_import_pages: {
+        Args: {
+          crawled_pages: Json;
+          discovered_count: number;
+          final_root_url: string;
+          skipped_count: number;
+          target_import_id: string;
+        };
+        Returns: number;
+      };
+      fail_knowledge_import: {
+        Args: { safe_error_code: string; safe_error_message: string; target_import_id: string };
+        Returns: undefined;
+      };
+      update_knowledge_document_draft: {
+        Args: {
+          draft_content: string;
+          draft_title: string;
+          is_included: boolean;
+          target_document_id: string;
+        };
+        Returns: undefined;
+      };
+      begin_knowledge_publish: {
+        Args: { target_import_id: string };
+        Returns: KnowledgePublicationSnapshotRow[];
+      };
+      complete_knowledge_publish: {
+        Args: { document_versions: Json; generated_chunks: Json; target_import_id: string };
+        Returns: number;
+      };
+      release_knowledge_publish: {
+        Args: { safe_error_code: string; safe_error_message: string; target_import_id: string };
+        Returns: undefined;
+      };
+      recover_stale_knowledge_publish: {
+        Args: { target_import_id: string };
+        Returns: undefined;
+      };
+      get_my_knowledge_overview: { Args: EmptyRecord; Returns: KnowledgeOverviewRow[] };
+      get_knowledge_import_review: {
+        Args: { target_import_id: string };
+        Returns: KnowledgeReviewRow[];
+      };
+      match_my_knowledge: {
+        Args: {
+          query_embedding_text: string;
+          requested_location_id?: string | null;
+          requested_match_count?: number;
+        };
+        Returns: KnowledgeMatchRow[];
       };
     };
     Enums: EmptyRecord;

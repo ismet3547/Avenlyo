@@ -17,6 +17,24 @@ const onboardingSecurityTest = readFileSync(
   'utf8',
 );
 
+const knowledgeMigration = readFileSync(
+  new URL('../../../supabase/migrations/20260816020000_phase_2_knowledge.sql', import.meta.url),
+  'utf8',
+);
+
+const knowledgeHardeningMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816030000_phase_2_knowledge_hardening.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+
+const knowledgeSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/knowledge_security.test.sql', import.meta.url),
+  'utf8',
+);
+
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
     expect(migration).not.toMatch(/create policy[\s\S]*?for all/i);
@@ -108,6 +126,61 @@ describe('onboarding migration definition', () => {
     );
     expect(onboardingSecurityTest).toContain(
       'Phase 0 location-scoped RLS still hides unrelated locations',
+    );
+  });
+});
+
+describe('knowledge migration definition', () => {
+  it('keeps internal import state and generated chunks off direct authenticated mutation paths', () => {
+    expect(knowledgeMigration).toContain('create table public.knowledge_imports');
+    expect(knowledgeMigration).toContain(
+      'revoke all on public.knowledge_chunks from authenticated',
+    );
+    expect(knowledgeMigration).toContain(
+      'revoke insert, update, delete on public.knowledge_documents from authenticated',
+    );
+    expect(knowledgeMigration).not.toContain('grant all');
+  });
+
+  it('defines tenant-derived publication and retrieval RPCs', () => {
+    expect(knowledgeMigration).toContain('create function public.publish_knowledge_import');
+    expect(knowledgeMigration).toContain('create function public.match_my_knowledge');
+    expect(knowledgeMigration).toContain('public.is_organization_admin');
+    expect(knowledgeMigration).toContain("knowledge_document.status = 'ready'");
+    expect(knowledgeMigration).toContain('extensions.vector_dims');
+  });
+
+  it('reserves publication, scopes replacement archives, and preserves location isolation', () => {
+    expect(knowledgeHardeningMigration).toContain('create function public.begin_knowledge_publish');
+    expect(knowledgeHardeningMigration).toContain(
+      'create function public.complete_knowledge_publish',
+    );
+    expect(knowledgeHardeningMigration).toContain(
+      'create function public.release_knowledge_publish',
+    );
+    expect(knowledgeHardeningMigration).toContain("status = 'publishing'");
+    expect(knowledgeHardeningMigration).toContain(
+      'location_id is not distinct from target_location_id',
+    );
+    expect(knowledgeHardeningMigration).toContain(
+      "chunk.content_hash <> encode(extensions.digest(chunk.content, 'sha256'), 'hex')",
+    );
+    expect(knowledgeHardeningMigration).toContain(
+      'public.has_location_access(knowledge_import.organization_id, knowledge_import.location_id)',
+    );
+  });
+
+  it('executes tenant and state-machine guarantees through pgTAP', () => {
+    expect(knowledgeSecurityTest).toContain('owner cannot forge internal import state directly');
+    expect(knowledgeSecurityTest).toContain('normal member cannot start knowledge imports');
+    expect(knowledgeSecurityTest).toContain(
+      'organization B cannot read organization A import data',
+    );
+    expect(knowledgeSecurityTest).toContain(
+      'retrieval returns ready local chunks but excludes drafts',
+    );
+    expect(knowledgeSecurityTest).toContain(
+      'failed new import does not remove previously published knowledge',
     );
   });
 });
