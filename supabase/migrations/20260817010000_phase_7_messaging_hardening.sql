@@ -343,7 +343,7 @@ begin
   return query with claimed as (
     select id from public.message_processing_jobs where status = 'queued' and available_at <= now() order by created_at asc for update skip locked limit target_limit
   ), updated as (
-    update public.message_processing_jobs job set status = 'processing', attempts = attempts + 1, claimed_at = now(), claimed_by = btrim(target_worker_id), updated_at = now()
+    update public.message_processing_jobs job set status = 'processing', attempts = job.attempts + 1, claimed_at = now(), claimed_by = btrim(target_worker_id), updated_at = now()
     from claimed where job.id = claimed.id returning job.*
   ) select updated.id, updated.job_kind, updated.message_id, updated.conversation_id, updated.organization_id, updated.location_id, updated.attempts from updated;
 end;
