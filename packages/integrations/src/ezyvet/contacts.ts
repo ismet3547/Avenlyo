@@ -22,9 +22,7 @@ export async function resolveExactPhoneCustomer(
 ): Promise<CustomerResolution> {
   const digits = normalizedDigits(trustedCallerE164);
   if (digits.length < 8 || digits.length > 15) return { kind: 'unresolved' };
-  const payload = await client.get('/v2/contactdetail', {
-    'filter[value_cleaned][eq]': digits,
-  });
+  const payload = await client.getCore('/v2/contactdetail', { value_cleaned: digits });
   const candidates = new Map<string, ExternalCustomer>();
   for (const item of items(payload)) {
     const contact = contactFromDetail(item, digits);

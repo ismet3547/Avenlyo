@@ -77,6 +77,13 @@ const schedulingSecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/scheduling_security.test.sql', import.meta.url),
   'utf8',
 );
+const schedulingHardeningMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816071000_phase_5_booking_hardening.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -350,5 +357,19 @@ describe('veterinary scheduling migration definition', () => {
     expect(schedulingSecurityTest).toContain(
       'owner can set the explicit ezyVet booking policy through its audited RPC',
     );
+  });
+
+  it('separates provider success from local persistence and rotates Vault secrets in place', () => {
+    expect(schedulingHardeningMigration).toContain('provider_success_pending_persistence');
+    expect(schedulingHardeningMigration).toContain('record_voice_booking_provider_success');
+    expect(schedulingHardeningMigration).toContain('vault.update_secret');
+    expect(schedulingHardeningMigration).toContain('credential_version = previous_version + 1');
+    expect(schedulingHardeningMigration).toContain(
+      "intent.status = 'provider_success_pending_persistence'",
+    );
+    expect(schedulingSecurityTest).toContain(
+      'provider success has a recoverable, non-repostable persistence state',
+    );
+    expect(schedulingSecurityTest).toContain('authenticated users cannot reopen a completed');
   });
 });

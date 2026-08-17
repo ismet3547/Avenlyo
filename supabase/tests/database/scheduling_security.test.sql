@@ -4,7 +4,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(11);
+select extensions.plan(16);
 
 insert into auth.users (id, email)
 values
@@ -121,6 +121,56 @@ select extensions.is(
   (select bookable from public.scheduling_appointment_types where id = '71700000-0000-0000-0000-000000000001'),
   true,
   'owner policy retained the selected appointment type'
+);
+
+insert into public.booking_candidates (
+  id, organization_id, location_id, conversation_id, integration_id, appointment_type_id, resource_id,
+  starts_at, ends_at, timezone, expires_at
+) values (
+  '71900000-0000-0000-0000-000000000001', '71000000-0000-0000-0000-000000000001',
+  '71100000-0000-0000-0000-000000000001', '71500000-0000-0000-0000-000000000001',
+  '71600000-0000-0000-0000-000000000001', '71700000-0000-0000-0000-000000000001',
+  '71800000-0000-0000-0000-000000000001', now() + interval '1 hour', now() + interval '90 minutes',
+  'UTC', now() + interval '10 minutes'
+);
+insert into public.booking_intents (
+  id, organization_id, location_id, conversation_id, integration_id, candidate_id,
+  external_contact_uid, external_subject_uid, subject_name, status
+) values (
+  '71900000-0000-0000-0000-000000000002', '71000000-0000-0000-0000-000000000001',
+  '71100000-0000-0000-0000-000000000001', '71500000-0000-0000-0000-000000000001',
+  '71600000-0000-0000-0000-000000000001', '71900000-0000-0000-0000-000000000001',
+  'contact_1', 'animal_1', 'Max', 'booking'
+);
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.lives_ok(
+  $$ select public.record_voice_booking_provider_success('71900000-0000-0000-0000-000000000002', 'appointment_1', 'unconfirmed') $$,
+  'trusted backend records provider success before local appointment persistence'
+);
+select extensions.is(
+  (select status from public.booking_intents where id = '71900000-0000-0000-0000-000000000002'),
+  'provider_success_pending_persistence',
+  'provider success has a recoverable, non-repostable persistence state'
+);
+select extensions.lives_ok(
+  $$ select * from public.complete_voice_booking_intent('71900000-0000-0000-0000-000000000002', 'appointment_1', 'unconfirmed') $$,
+  'trusted backend persists a previously recorded provider success idempotently'
+);
+select extensions.is(
+  (select status from public.booking_intents where id = '71900000-0000-0000-0000-000000000002'),
+  'completed',
+  'local persistence completes without another provider POST'
+);
+
+set local role authenticated;
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select extensions.throws_ok(
+  $$ update public.booking_intents set status = 'booking' where id = '71900000-0000-0000-0000-000000000002' $$,
+  '42501',
+  'permission denied for table booking_intents',
+  'authenticated users cannot reopen a completed or provider-success booking state'
 );
 
 select * from extensions.finish();

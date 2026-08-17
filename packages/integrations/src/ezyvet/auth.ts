@@ -4,10 +4,11 @@ import { BookingProviderError, providerErrorForStatus } from '../scheduling/erro
 import type { EzyVetCredentials, EzyVetTransport } from './types';
 
 export const EZYVET_MINIMUM_SCOPES = [
+  'read-systemsetting',
   'read-appointment',
   'read-appointmenttype',
   'read-resource',
-  'read-contact',
+  'read-contactdetail',
   'read-animal',
   'create-booking',
 ] as const;
@@ -102,7 +103,8 @@ export class EzyVetTokenCache {
     } catch {
       throw new BookingProviderError('network');
     }
-    if (response.status < 200 || response.status >= 300) throw providerErrorForStatus(response.status);
+    if (response.status < 200 || response.status >= 300)
+      throw providerErrorForStatus(response.status);
     const token = parseToken(response.body);
     this.values.set(integrationId, {
       expiresAt: now + token.expires_in * 1_000,

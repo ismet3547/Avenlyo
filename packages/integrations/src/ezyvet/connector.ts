@@ -20,22 +20,46 @@ import { loadAppointmentTypes, loadCalendarResources } from './catalog';
 import type { EzyVetClient } from './client';
 import { resolveExactPhoneCustomer } from './contacts';
 import { reconcileEzyVetBooking } from './reconciliation';
-import { record, string } from './schemas';
+import { array, record, string } from './schemas';
 import type { EzyVetCatalogConnector, EzyVetSite } from './types';
 
 function siteFromPayload(value: unknown): EzyVetSite {
-  const root = record(value);
-  const source = record(root.siteInformation ?? root.site ?? root.data ?? root);
-  const id = string(source.uid ?? source.id);
-  const timezone = string(source.timezone ?? source.time_zone);
-  if (!id || !timezone) throw new Error('ezyVet site information was incomplete.');
-  return { id, timezone };
+  try {
+    const root = record(value);
+    const data = record(root.data);
+    const id = string(data.id);
+    const timezoneReference = record(record(data.relationships).timezone).data;
+    const timezoneId = string(record(timezoneReference).id);
+    const timezone = array(root.included)
+      .map(record)
+      .find((entry) => string(entry.type) === 'timezone' && string(entry.id) === timezoneId);
+    const timezoneName = timezone ? string(record(timezone.attributes).name) : null;
+    if (!id || !timezoneId || !timezoneName || !validTimeZone(timezoneName)) {
+      throw new Error('invalid site information');
+    }
+    return { id, timezone: timezoneName };
+  } catch {
+    throw new Error('ezyVet site information was incomplete or invalid.');
+  }
+}
+
+function validTimeZone(value: string): boolean {
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector {
   public readonly provider = 'ezyvet' as const;
 
   public constructor(private readonly client: EzyVetClient) {}
+
+  public supportsBooking(): boolean {
+    return this.client.supportsEzyCab();
+  }
 
   public async createBooking(input: CreateBookingRequest): Promise<CreateBookingResult> {
     return createEzyVetBooking(this.client, input);
@@ -61,7 +85,7 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
   }
 
   public async getSite(): Promise<EzyVetSite> {
-    return siteFromPayload(await this.client.get('/v3/siteInformation'));
+    return siteFromPayload(await this.client.getCore('/v3/siteInformation'));
   }
 
   public async resolveCustomer(input: CustomerResolutionRequest): Promise<CustomerResolution> {

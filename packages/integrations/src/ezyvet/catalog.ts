@@ -18,21 +18,31 @@ function positiveDuration(value: unknown): number | null {
     : null;
 }
 
-export async function loadAppointmentTypes(client: EzyVetClient): Promise<readonly BookingAppointmentType[]> {
-  const payload = await client.get('/v2/appointmenttype', { 'filter[active][eq]': 'true' });
+export async function loadAppointmentTypes(
+  client: EzyVetClient,
+): Promise<readonly BookingAppointmentType[]> {
+  const payload = await client.getCore('/v2/appointmenttype', { active: 'true' });
   return items(payload).flatMap((item) => {
-    const appointmentType = providerObject(item, ['appointmenttype', 'appointmentType', 'attributes']);
+    const appointmentType = providerObject(item, [
+      'appointmenttype',
+      'appointmentType',
+      'attributes',
+    ]);
     const key = string(appointmentType.uid ?? appointmentType.id);
     const name = string(appointmentType.name);
     const duration = positiveDuration(
-      appointmentType.default_duration ?? appointmentType.defaultDuration ?? appointmentType.duration,
+      appointmentType.default_duration ??
+        appointmentType.defaultDuration ??
+        appointmentType.duration,
     );
     return key && name && duration ? [{ defaultDurationMinutes: duration, key, name }] : [];
   });
 }
 
-export async function loadCalendarResources(client: EzyVetClient): Promise<readonly BookingResource[]> {
-  const payload = await client.get('/v2/resource', { 'filter[active][eq]': 'true' });
+export async function loadCalendarResources(
+  client: EzyVetClient,
+): Promise<readonly BookingResource[]> {
+  const payload = await client.getCore('/v2/resource', { access: 'On Calendar', active: 'true' });
   return items(payload).flatMap((item) => {
     const resource = providerObject(item, ['resource', 'attributes']);
     const key = string(resource.uid ?? resource.id);
@@ -42,7 +52,13 @@ export async function loadCalendarResources(client: EzyVetClient): Promise<reado
     const separation = string(resource.ownership_id ?? resource.ownershipId);
     // ezyVet requires calendar-enabled resources; ownership is retained by the database sync
     // metadata but never exposed to the model.
-    if (!key || !name || active === false || access?.toLowerCase() !== 'on calendar' || !separation) {
+    if (
+      !key ||
+      !name ||
+      active === false ||
+      access?.toLowerCase() !== 'on calendar' ||
+      !separation
+    ) {
       return [];
     }
     return [{ key, name, schedulingScopeKey: separation }];

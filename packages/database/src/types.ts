@@ -272,6 +272,8 @@ export interface BookingExecutionContextRow {
   starts_at: string;
   ends_at: string;
   timezone: string;
+  provider_appointment_id: string | null;
+  intent_status: string;
 }
 
 export interface CompletedBookingRow {
@@ -622,6 +624,14 @@ export interface Database {
           target_provider_status: 'confirmed' | 'unconfirmed';
         };
         Returns: CompletedBookingRow[];
+      };
+      record_voice_booking_provider_success: {
+        Args: {
+          target_booking_intent_id: string;
+          target_external_appointment_id: string;
+          target_provider_status: 'confirmed' | 'unconfirmed';
+        };
+        Returns: undefined;
       };
       fail_voice_booking_intent: {
         Args: {

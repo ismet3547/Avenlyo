@@ -22,7 +22,7 @@ function safeFailure(
   error: unknown,
 ): 'failed' | 'provider_state_unknown' | 'awaiting_confirmation' {
   if (error instanceof BookingProviderError) {
-    return error.category === 'provider_state_unknown' || error.category === 'timeout'
+    return ['provider_state_unknown', 'timeout', 'network'].includes(error.category)
       ? 'provider_state_unknown'
       : error.category === 'slot_unavailable'
         ? 'awaiting_confirmation'
@@ -46,7 +46,10 @@ export class VoiceBookingService implements VoiceSchedulingServices {
   public async isEnabledForCall(context: { readonly callId: string }): Promise<boolean> {
     const scheduling = await this.context(context.callId);
     if (!scheduling) return false;
-    return (await this.catalog(scheduling.integration_id)).length > 0;
+    const connector = await this.input.ezyVet.connectorForIntegration(scheduling.integration_id);
+    return (
+      connector.supportsBooking() && (await this.catalog(scheduling.integration_id)).length > 0
+    );
   }
 
   public async getAvailableAppointments(
@@ -189,9 +192,15 @@ export class VoiceBookingService implements VoiceSchedulingServices {
     if (error || !claim || claim.state === 'confirmation_required')
       return { outcome: 'confirmation_required' };
     if (claim.state === 'completed') return { outcome: 'booked' };
-    if (claim.state !== 'claimed') return { outcome: 'unknown' };
+    if (claim.state === 'provider_state_unknown') return { outcome: 'unknown' };
     try {
       const execution = await this.execution(input.bookingIntentId);
+      if (claim.state === 'provider_success_pending_persistence') {
+        return this.persistProviderSuccess(
+          input.bookingIntentId,
+          execution.provider_appointment_id,
+        );
+      }
       const connector = await this.input.ezyVet.connectorForIntegration(execution.integration_id);
       const appointmentType: BookingAppointmentType = {
         defaultDurationMinutes: execution.default_duration_minutes,
@@ -203,7 +212,23 @@ export class VoiceBookingService implements VoiceSchedulingServices {
         name: execution.resource_name,
         schedulingScopeKey: 'catalog-validated',
       };
-      // Recheck only the exact saved candidate, immediately before an unsafe provider POST.
+      const requestBase = {
+        appointmentType,
+        customer: { displayName: null, key: execution.external_contact_uid },
+        description: 'Booked through Avenlyo inbound voice after caller confirmation.',
+        resource,
+        subject: { displayName: execution.subject_name, key: execution.external_subject_uid },
+      } as const;
+      if (claim.state === 'booking_recovery') {
+        return this.reconcileWithoutPosting(
+          input.bookingIntentId,
+          connector,
+          requestBase,
+          execution,
+        );
+      }
+      if (claim.state !== 'claimed') return { outcome: 'unknown' };
+      // Recheck only the exact saved candidate, immediately before the one allowed provider POST.
       const slots = await connector.getAvailability({
         appointmentType,
         dates: [execution.starts_at.slice(0, 10)],
@@ -221,18 +246,17 @@ export class VoiceBookingService implements VoiceSchedulingServices {
         return { outcome: 'unavailable' };
       }
       const request = {
-        appointmentType,
-        customer: { displayName: null, key: execution.external_contact_uid },
-        description: 'Booked through Avenlyo inbound voice after caller confirmation.',
-        resource,
+        ...requestBase,
         slot,
-        subject: { displayName: execution.subject_name, key: execution.external_subject_uid },
       } as const;
       let created: CreateBookingResult;
       try {
         created = await connector.createBooking(request);
       } catch (error) {
-        if (error instanceof BookingProviderError && error.category === 'provider_state_unknown') {
+        if (
+          error instanceof BookingProviderError &&
+          ['provider_state_unknown', 'timeout', 'network'].includes(error.category)
+        ) {
           const reconciliation = await connector.reconcileBooking({
             appointmentType: request.appointmentType,
             customer: request.customer,
@@ -243,14 +267,23 @@ export class VoiceBookingService implements VoiceSchedulingServices {
           if (reconciliation.kind === 'found') {
             created = reconciliation.appointment;
           } else {
-            throw error;
+            await this.fail(input.bookingIntentId, 'provider_state_unknown', error.category);
+            return { outcome: 'unknown' };
           }
         } else {
-          throw error;
+          const status = safeFailure(error);
+          await this.fail(
+            input.bookingIntentId,
+            status,
+            error instanceof BookingProviderError ? error.category : 'internal',
+          );
+          return status === 'awaiting_confirmation'
+            ? { outcome: 'unavailable' }
+            : { outcome: 'unknown' };
         }
       }
-      const { error: completedError } = await this.input.supabase.rpc(
-        'complete_voice_booking_intent',
+      const { error: recordedError } = await this.input.supabase.rpc(
+        'record_voice_booking_provider_success',
         {
           target_booking_intent_id: input.bookingIntentId,
           target_external_appointment_id: created.appointmentKey,
@@ -258,10 +291,13 @@ export class VoiceBookingService implements VoiceSchedulingServices {
             created.providerStatus === 'confirmed' ? 'confirmed' : 'unconfirmed',
         },
       );
-      if (completedError) throw new Error('Provider booking could not be recorded.');
-      return { outcome: 'booked' };
+      // If this write fails after a provider success, the next call reconciles instead of posting again.
+      if (recordedError) return { outcome: 'unknown' };
+      return this.persistProviderSuccess(input.bookingIntentId, created.appointmentKey);
     } catch (error) {
+      // This catch only covers pre-POST work or reconciliation. It never changes a recorded success.
       const status = safeFailure(error);
+      if (claim.state === 'provider_success_pending_persistence') return { outcome: 'unknown' };
       await this.fail(
         input.bookingIntentId,
         status,
@@ -271,6 +307,55 @@ export class VoiceBookingService implements VoiceSchedulingServices {
         ? { outcome: 'unavailable' }
         : { outcome: 'unknown' };
     }
+  }
+
+  private async reconcileWithoutPosting(
+    intentId: string,
+    connector: Awaited<ReturnType<EzyVetIntegrationService['connectorForIntegration']>>,
+    request: {
+      readonly appointmentType: BookingAppointmentType;
+      readonly customer: { readonly displayName: null; readonly key: string };
+      readonly resource: BookingResource;
+      readonly subject: { readonly displayName: string; readonly key: string };
+    },
+    execution: Awaited<ReturnType<VoiceBookingService['execution']>>,
+  ): Promise<{ readonly outcome: 'booked' | 'unknown' }> {
+    const reconciliation = await connector.reconcileBooking({
+      ...request,
+      slot: {
+        appointmentTypeKey: request.appointmentType.key,
+        endAt: execution.ends_at,
+        providerDisplayName: request.resource.name,
+        resourceKey: request.resource.key,
+        startAt: execution.starts_at,
+        timezone: execution.timezone,
+      },
+    });
+    if (reconciliation.kind !== 'found') {
+      await this.fail(intentId, 'provider_state_unknown', 'reconciliation_not_found');
+      return { outcome: 'unknown' };
+    }
+    const { error } = await this.input.supabase.rpc('record_voice_booking_provider_success', {
+      target_booking_intent_id: intentId,
+      target_external_appointment_id: reconciliation.appointment.appointmentKey,
+      target_provider_status:
+        reconciliation.appointment.providerStatus === 'confirmed' ? 'confirmed' : 'unconfirmed',
+    });
+    if (error) return { outcome: 'unknown' };
+    return this.persistProviderSuccess(intentId, reconciliation.appointment.appointmentKey);
+  }
+
+  private async persistProviderSuccess(
+    intentId: string,
+    providerAppointmentId: string | null,
+  ): Promise<{ readonly outcome: 'booked' | 'unknown' }> {
+    if (!providerAppointmentId) return { outcome: 'unknown' };
+    const { error } = await this.input.supabase.rpc('complete_voice_booking_intent', {
+      target_booking_intent_id: intentId,
+      target_external_appointment_id: providerAppointmentId,
+      target_provider_status: 'unconfirmed',
+    });
+    return error ? { outcome: 'unknown' } : { outcome: 'booked' };
   }
 
   private async context(callId: string) {

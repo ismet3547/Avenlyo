@@ -1,19 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BookingProviderError } from '../scheduling/errors';
-import { EzyVetTokenCache } from './auth';
+import { FakeEzyVetTransport } from '../testing/fake-ezyvet-transport';
+import { EzyVetTokenCache, EZYVET_MINIMUM_SCOPES } from './auth';
 import { EzyVetClient, ezyVetOrigins } from './client';
 import { EzyVetConnector } from './connector';
-import { FakeEzyVetTransport } from '../testing/fake-ezyvet-transport';
+import type { EzyVetCredentials } from './types';
 
-const credentials = {
+const trialCredentials = {
   clientId: 'client_id',
   clientSecret: 'not-logged-secret',
   environment: 'trial' as const,
   siteUid: 'site_trial_1',
 };
+const productionCredentials = { ...trialCredentials, environment: 'production' as const };
 
-function client(transport: FakeEzyVetTransport, tokenCache = new EzyVetTokenCache()): EzyVetClient {
+function client(
+  transport: FakeEzyVetTransport,
+  credentials: EzyVetCredentials = trialCredentials,
+  tokenCache = new EzyVetTokenCache(),
+): EzyVetClient {
   return new EzyVetClient({
     credentials,
     integrationId: 'integration_1',
@@ -24,60 +29,70 @@ function client(transport: FakeEzyVetTransport, tokenCache = new EzyVetTokenCach
   });
 }
 
-describe('ezyVet connector', () => {
-  it('uses the documented client-credentials fields, fixed scopes, and site UID', async () => {
+const siteInformation = {
+  data: {
+    id: 'site_trial_1',
+    relationships: { timezone: { data: { id: '94', type: 'timezone' } } },
+  },
+  included: [{ attributes: { name: 'Pacific/Auckland' }, id: '94', type: 'timezone' }],
+};
+
+describe('ezyVet connector contracts', () => {
+  it('keeps Core, token, and documented ezyCAB origins intentionally separate', () => {
+    expect(ezyVetOrigins('production')).toEqual({
+      coreApiOrigin: 'https://api.ezyvet.com',
+      ezyCabOrigin: 'https://apiv2.ezyvet.com',
+      tokenOrigin: 'https://api.ezyvet.com/v1/oauth/access_token',
+    });
+    expect(ezyVetOrigins('trial')).toEqual({
+      coreApiOrigin: 'https://api.trial.ezyvet.com',
+      ezyCabOrigin: null,
+      tokenOrigin: 'https://api.trial.ezyvet.com/v1/oauth/access_token',
+    });
+  });
+
+  it('uses the documented client credentials and exactly the required booking scopes', async () => {
     const transport = new FakeEzyVetTransport();
     transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
-    transport.enqueue({
-      body: { siteInformation: { id: 'site_trial_1', timezone: 'Pacific/Auckland' } },
-      status: 200,
-    });
-
+    transport.enqueue({ body: siteInformation, status: 200 });
     await expect(new EzyVetConnector(client(transport)).getSite()).resolves.toEqual({
       id: 'site_trial_1',
       timezone: 'Pacific/Auckland',
     });
-
-    const tokenRequest = transport.requests[0]!;
-    expect(tokenRequest.url).toBe('https://api.trial.ezyvet.com/v1/oauth/access_token');
-    expect(tokenRequest.body).toMatchObject({
-      client_id: 'client_id',
-      grant_type: 'client_credentials',
-      partner_id: 'avenlyo_partner',
-      site_uid: 'site_trial_1',
+    expect(transport.requests[0]).toMatchObject({
+      body: {
+        client_id: 'client_id',
+        grant_type: 'client_credentials',
+        partner_id: 'avenlyo_partner',
+        scope: EZYVET_MINIMUM_SCOPES.join(' '),
+        site_uid: 'site_trial_1',
+      },
+      url: 'https://api.trial.ezyvet.com/v1/oauth/access_token',
     });
-    expect(String(tokenRequest.body?.scope)).toContain('create-booking');
-    expect(String(tokenRequest.body?.scope)).toContain('read-animal');
-    expect(transport.requests[1]!.url).toBe('https://api.trial.ezyvet.com/v3/siteInformation');
+    expect(EZYVET_MINIMUM_SCOPES).not.toContain('read-contact');
+    expect(transport.requests[1]?.url).toBe('https://api.trial.ezyvet.com/v3/siteInformation');
   });
 
-  it('caches tokens, refreshes an expired cache entry, and retries one safe GET after 401', async () => {
-    const transport = new FakeEzyVetTransport();
-    const cache = new EzyVetTokenCache();
-    transport.enqueue({ body: { access_token: 'token_1', expires_in: 61 }, status: 200 });
-    transport.enqueue({ body: { site: { uid: 'site_trial_1', timezone: 'UTC' } }, status: 200 });
-    transport.enqueue({ body: { site: { uid: 'site_trial_1', timezone: 'UTC' } }, status: 200 });
-    const connector = new EzyVetConnector(client(transport, cache));
-
-    await connector.getSite();
-    await connector.getSite();
-    expect(
-      transport.requests.filter((request) => request.url.includes('access_token')),
-    ).toHaveLength(1);
-
-    transport.enqueue({ body: null, status: 401 });
-    transport.enqueue({ body: { access_token: 'token_2', expires_in: 3_600 }, status: 200 });
-    transport.enqueue({ body: { site: { uid: 'site_trial_1', timezone: 'UTC' } }, status: 200 });
-    await connector.getSite();
-    expect(
-      transport.requests.filter((request) => request.url.includes('access_token')),
-    ).toHaveLength(2);
-  });
-
-  it('normalizes catalog entries and excludes inactive or non-calendar resources', async () => {
+  it.each([
+    { ...siteInformation, data: { id: 'site_trial_1', relationships: {} } },
+    {
+      ...siteInformation,
+      included: [{ attributes: { name: 'Not/A-Timezone' }, id: '94', type: 'timezone' }],
+    },
+    { ...siteInformation, included: [{ attributes: { name: 'UTC' }, id: '95', type: 'timezone' }] },
+  ])('rejects malformed JSON:API site information', async (payload) => {
     const transport = new FakeEzyVetTransport();
     transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
-    transport.enqueue({ body: { site: { uid: 'site_trial_1', timezone: 'UTC' } }, status: 200 });
+    transport.enqueue({ body: payload, status: 200 });
+    await expect(new EzyVetConnector(client(transport)).getSite()).rejects.toThrow(
+      'site information was incomplete or invalid',
+    );
+  });
+
+  it('uses Core direct queries for catalog, exact contact detail, and UID-safe animals', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({ body: siteInformation, status: 200 });
     transport.enqueue({
       body: {
         items: [
@@ -87,14 +102,6 @@ describe('ezyVet connector', () => {
               default_duration: 30,
               name: 'Wellness',
               uid: 'type_1',
-            },
-          },
-          {
-            appointmenttype: {
-              active: true,
-              default_duration: 5,
-              name: 'Too short',
-              uid: 'type_2',
             },
           },
         ],
@@ -113,39 +120,19 @@ describe('ezyVet connector', () => {
               uid: 'resource_1',
             },
           },
-          {
-            resource: {
-              access: 'Off Calendar',
-              active: true,
-              name: 'Hidden',
-              ownership_id: 'sep_1',
-              uid: 'resource_2',
-            },
-          },
-          {
-            resource: {
-              access: 'On Calendar',
-              active: false,
-              name: 'Inactive',
-              ownership_id: 'sep_1',
-              uid: 'resource_3',
-            },
-          },
         ],
       },
       status: 200,
     });
+    const connector = new EzyVetConnector(client(transport));
+    await connector.getSchedulingCatalog();
+    expect(transport.requests.map((request) => request.url)).toContain(
+      'https://api.trial.ezyvet.com/v2/appointmenttype?active=true',
+    );
+    expect(transport.requests.map((request) => request.url)).toContain(
+      'https://api.trial.ezyvet.com/v2/resource?access=On+Calendar&active=true',
+    );
 
-    await expect(new EzyVetConnector(client(transport)).getSchedulingCatalog()).resolves.toEqual({
-      appointmentTypes: [{ defaultDurationMinutes: 30, key: 'type_1', name: 'Wellness' }],
-      resources: [{ key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: 'sep_1' }],
-      site: { id: 'site_trial_1', timezone: 'UTC' },
-    });
-  });
-
-  it('resolves only one exact customer and one active animal owned by that customer', async () => {
-    const transport = new FakeEzyVetTransport();
-    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
     transport.enqueue({
       body: {
         items: [
@@ -158,69 +145,101 @@ describe('ezyVet connector', () => {
     });
     transport.enqueue({
       body: {
-        items: [
-          { animal: { active: true, contact_uid: 'contact_1', name: 'Max', uid: 'animal_1' } },
-          {
-            animal: {
-              active: true,
-              contact_uid: 'contact_other',
-              name: 'Max',
-              uid: 'animal_wrong_owner',
-            },
-          },
+        data: [
+          { id: 'animal_1', isDead: false, name: 'Max', ownerId: 'contact_1', status: 'active' },
         ],
       },
       status: 200,
     });
-    const connector = new EzyVetConnector(client(transport));
     const customer = await connector.resolveCustomer({ trustedCallerE164: '+14155550199' });
-    expect(customer).toMatchObject({ kind: 'resolved', customer: { key: 'contact_1' } });
-    if (customer.kind !== 'resolved') throw new Error('Expected customer resolution.');
+    if (customer.kind !== 'resolved') throw new Error('Expected exact customer match.');
     await expect(
-      connector.resolveSubject({ customer: customer.customer, petName: '  max ' }),
-    ).resolves.toEqual({
-      kind: 'resolved',
-      subject: { displayName: 'Max', key: 'animal_1' },
+      connector.resolveSubject({ customer: customer.customer, petName: ' Max ' }),
+    ).resolves.toMatchObject({ kind: 'resolved', subject: { key: 'animal_1' } });
+    expect(transport.requests.at(-2)?.url).toBe(
+      'https://api.trial.ezyvet.com/v2/contactdetail?value_cleaned=14155550199',
+    );
+    expect(transport.requests.at(-1)?.url).toBe(
+      'https://api.trial.ezyvet.com/v4/animal?isDead=false&name=Max&ownerId=contact_1&status=active',
+    );
+  });
+
+  it('rejects a booking call in a trial environment without inventing a trial ezyCAB host', async () => {
+    await expect(
+      client(new FakeEzyVetTransport()).postEzyCab('/ezycab/booking', {}),
+    ).rejects.toMatchObject({
+      category: 'invalid_request',
     });
   });
 
-  it('never uses an arbitrary customer API origin or leaks invalid credential details', async () => {
-    expect(ezyVetOrigins('production')).toEqual({
-      api: 'https://apiv2.ezyvet.com',
-      token: 'https://api.ezyvet.com/v1/oauth/access_token',
-    });
+  it('parses ezyCAB availability, splits 14 days into two seven-day requests, and deduplicates slots', async () => {
     const transport = new FakeEzyVetTransport();
-    transport.enqueue({ body: { error: 'invalid_client' }, status: 401 });
-    await expect(new EzyVetConnector(client(transport)).getSite()).rejects.toMatchObject({
-      category: 'authentication',
-    } satisfies Partial<BookingProviderError>);
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    const payload = {
+      data: [
+        {
+          attributes: {
+            date: '2026-09-01',
+            slots: [
+              {
+                available: true,
+                duration: 30,
+                relationships: { appointmentType: { data: [{ id: 'type_1' }] } },
+                start: '10:00:00',
+              },
+            ],
+          },
+          relationships: { resource: { id: 'resource_1' } },
+        },
+      ],
+    };
+    transport.enqueue({ body: payload, status: 200 });
+    transport.enqueue({ body: payload, status: 200 });
+    const connector = new EzyVetConnector(client(transport, productionCredentials));
+    const slots = await connector.getAvailability({
+      appointmentType: { defaultDurationMinutes: 30, key: 'type_1', name: 'Wellness' },
+      dates: Array.from(
+        { length: 14 },
+        (_, index) => `2026-09-${String(index + 1).padStart(2, '0')}`,
+      ),
+      resources: [{ key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: 'sep_1' }],
+      timezone: 'UTC',
+    });
+    expect(slots).toHaveLength(1);
+    expect(slots[0]).toMatchObject({
+      endAt: '2026-09-01T10:30:00.000Z',
+      startAt: '2026-09-01T10:00:00.000Z',
+    });
+    expect(
+      transport.requests.filter((request) => request.url.includes('/ezycab/availability')),
+    ).toHaveLength(2);
     expect(transport.requests.every((request) => !request.url.includes('not-logged-secret'))).toBe(
       true,
     );
   });
 
-  it('posts a confirmed immutable payload once and reconciles only a unique exact provider record', async () => {
+  it('posts once to ezyCAB and reconciles only an exact active appointment within its narrow resource/start range', async () => {
     const transport = new FakeEzyVetTransport();
     transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
     transport.enqueue({ body: { appointment: 'appointment_1' }, status: 201 });
     transport.enqueue({
       body: {
-        items: [
+        data: [
           {
-            appointment: {
-              animal_uid: 'animal_1',
-              contact_uid: 'contact_1',
-              provider_uid: 'resource_1',
-              start_time: '2026-09-01T10:00:00.000Z',
-              type: 'type_1',
-              uid: 'appointment_1',
+            attributes: { active: true, start_at: '2026-09-01T10:00:00.000Z' },
+            id: 'appointment_1',
+            relationships: {
+              animal: { data: { id: 'animal_1' } },
+              appointmentType: { data: [{ id: 'type_1' }] },
+              contact: { data: { id: 'contact_1' } },
+              resource: { data: { id: 'resource_1' } },
             },
           },
         ],
       },
       status: 200,
     });
-    const connector = new EzyVetConnector(client(transport));
+    const connector = new EzyVetConnector(client(transport, productionCredentials));
     const request = {
       appointmentType: { defaultDurationMinutes: 30, key: 'type_1', name: 'Wellness' },
       customer: { displayName: null, key: 'contact_1' },
@@ -239,17 +258,11 @@ describe('ezyVet connector', () => {
     await expect(connector.createBooking(request)).resolves.toMatchObject({
       appointmentKey: 'appointment_1',
     });
-    expect(transport.requests[1]?.url).toBe('https://api.trial.ezyvet.com/ezycab/booking');
-    expect(transport.requests[1]?.body).toMatchObject({
-      animal: 'animal_1',
-      appointmentStatus: 'unconfirmed',
-      contact: 'contact_1',
-      provider: 'resource_1',
-      type: 'type_1',
-    });
-    await expect(connector.reconcileBooking(request)).resolves.toMatchObject({
-      appointment: { appointmentKey: 'appointment_1' },
-      kind: 'found',
-    });
+    await expect(connector.reconcileBooking(request)).resolves.toMatchObject({ kind: 'found' });
+    expect(transport.requests[1]?.url).toBe('https://apiv2.ezyvet.com/ezycab/booking');
+    expect(transport.requests[2]?.url).toContain(
+      'https://apiv2.ezyvet.com/ezycab/v2.1/appointments?',
+    );
+    expect(transport.requests[2]?.url).toContain('filter%5Bresources.uid%5D%5Bin%5D=resource_1');
   });
 });

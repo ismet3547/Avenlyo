@@ -9,14 +9,23 @@ import type {
   EzyVetTransportResponse,
 } from './types';
 
-const ORIGINS: Record<EzyVetEnvironment, { readonly api: string; readonly token: string }> = {
+export interface EzyVetEndpointOrigins {
+  readonly tokenOrigin: string;
+  readonly coreApiOrigin: string;
+  /** Null means ezyVet has not documented ezyCAB support for this environment. */
+  readonly ezyCabOrigin: string | null;
+}
+
+const ORIGINS: Record<EzyVetEnvironment, EzyVetEndpointOrigins> = {
   production: {
-    api: 'https://apiv2.ezyvet.com',
-    token: 'https://api.ezyvet.com/v1/oauth/access_token',
+    coreApiOrigin: 'https://api.ezyvet.com',
+    ezyCabOrigin: 'https://apiv2.ezyvet.com',
+    tokenOrigin: 'https://api.ezyvet.com/v1/oauth/access_token',
   },
   trial: {
-    api: 'https://api.trial.ezyvet.com',
-    token: 'https://api.trial.ezyvet.com/v1/oauth/access_token',
+    coreApiOrigin: 'https://api.trial.ezyvet.com',
+    ezyCabOrigin: null,
+    tokenOrigin: 'https://api.trial.ezyvet.com/v1/oauth/access_token',
   },
 };
 
@@ -78,22 +87,44 @@ export class EzyVetClient {
     this.input.tokenCache.clear(this.input.integrationId);
   }
 
-  public async get(path: string, params: Readonly<Record<string, string | readonly string[]>> = {}) {
-    return this.request('GET', path, undefined, params, true);
+  public supportsEzyCab(): boolean {
+    return ezyVetOrigins(this.input.credentials.environment).ezyCabOrigin !== null;
   }
 
-  public async post(path: string, body: Readonly<Record<string, unknown>>) {
-    return this.request('POST', path, body, {}, false);
+  public async getCore(
+    path: string,
+    params: Readonly<Record<string, string | readonly string[]>> = {},
+  ) {
+    return this.request(
+      'GET',
+      ezyVetOrigins(this.input.credentials.environment).coreApiOrigin,
+      path,
+      undefined,
+      params,
+      true,
+    );
+  }
+
+  public async getEzyCab(
+    path: string,
+    params: Readonly<Record<string, string | readonly string[]>> = {},
+  ) {
+    return this.request('GET', this.ezyCabOrigin(), path, undefined, params, true);
+  }
+
+  public async postEzyCab(path: string, body: Readonly<Record<string, unknown>>) {
+    return this.request('POST', this.ezyCabOrigin(), path, body, {}, false);
   }
 
   private async request(
     method: 'GET' | 'POST',
+    origin: string,
     path: string,
     body: Readonly<Record<string, unknown>> | undefined,
     params: Readonly<Record<string, string | readonly string[]>>,
     canRetry: boolean,
   ): Promise<unknown> {
-    const endpoint = new URL(path, ORIGINS[this.input.credentials.environment].api);
+    const endpoint = new URL(path, origin);
     for (const [name, value] of Object.entries(params)) {
       for (const item of typeof value === 'string' ? [value] : value) {
         endpoint.searchParams.append(name, item);
@@ -107,20 +138,24 @@ export class EzyVetClient {
         this.input.integrationId,
         this.input.credentials,
         this.input.partnerId,
-        ORIGINS[this.input.credentials.environment].token,
+        ezyVetOrigins(this.input.credentials.environment).tokenOrigin,
         this.input.transport,
       );
       let response: EzyVetTransportResponse;
       try {
         response = await this.input.transport.request({
           ...(body ? { body } : {}),
-          headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(body ? { 'Content-Type': 'application/json' } : {}),
+          },
           method,
           timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
           url: endpoint.toString(),
         });
       } catch (error) {
-        const providerError = error instanceof BookingProviderError ? error : new BookingProviderError('network');
+        const providerError =
+          error instanceof BookingProviderError ? error : new BookingProviderError('network');
         if (canRetry && providerError.retryable && attempt + 1 < attempts) {
           await this.backoff(attempt);
           continue;
@@ -141,6 +176,17 @@ export class EzyVetClient {
       throw error;
     }
     throw new BookingProviderError('provider_error');
+  }
+
+  private ezyCabOrigin(): string {
+    const origin = ezyVetOrigins(this.input.credentials.environment).ezyCabOrigin;
+    if (!origin) {
+      throw new BookingProviderError(
+        'invalid_request',
+        'ezyCAB is not documented for the configured ezyVet environment.',
+      );
+    }
+    return origin;
   }
 
   private async backoff(attempt: number): Promise<void> {

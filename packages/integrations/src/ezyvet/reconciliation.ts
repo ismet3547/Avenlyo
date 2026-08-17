@@ -3,26 +3,30 @@ import type {
   BookingReconciliationResult,
 } from '../scheduling/types';
 
-import { items, record, string } from './schemas';
+import { array, items, record, string } from './schemas';
 import type { EzyVetClient } from './client';
 
 function exactAppointmentId(value: unknown, input: BookingReconciliationRequest): string | null {
-  const appointment = record(record(value).appointment ?? value);
-  const id = string(appointment.uid ?? appointment.id);
-  const start = string(appointment.start_time ?? appointment.startTime ?? appointment.starts_at);
-  const contact = string(appointment.contact_uid ?? appointment.contact ?? appointment.contactId);
-  const animal = string(appointment.animal_uid ?? appointment.animal ?? appointment.animalId);
-  const provider = string(
-    appointment.provider_uid ?? appointment.provider ?? appointment.resource_uid,
-  );
-  const type = string(appointment.appointment_type_uid ?? appointment.type ?? appointment.type_uid);
+  const entry = record(value);
+  const appointment = record(entry.attributes);
+  const relationships = record(entry.relationships);
+  const relationshipId = (name: string) => string(record(record(relationships[name]).data).id);
+  const id = string(entry.id);
+  const start = string(appointment.start_at ?? appointment.startAt);
+  const contact = relationshipId('contact');
+  const animal = relationshipId('animal');
+  const provider = relationshipId('resource');
+  const types = array(record(relationships.appointmentType).data)
+    .map(record)
+    .map((entry) => string(entry.id));
   if (
     !id ||
     start !== input.slot.startAt ||
     contact !== input.customer.key ||
     animal !== input.subject.key ||
     provider !== input.resource.key ||
-    type !== input.appointmentType.key
+    appointment.active !== true ||
+    !types.includes(input.appointmentType.key)
   )
     return null;
   return id;
@@ -36,10 +40,12 @@ export async function reconcileEzyVetBooking(
   client: EzyVetClient,
   input: BookingReconciliationRequest,
 ): Promise<BookingReconciliationResult> {
-  const payload = await client.get('/v2/appointment', {
-    'filter[animal.id][eq]': input.subject.key,
-    'filter[contact.id][eq]': input.customer.key,
-    'filter[start_time][eq]': input.slot.startAt,
+  const startsAt = new Date(input.slot.startAt).getTime();
+  const payload = await client.getEzyCab('/ezycab/v2.1/appointments', {
+    'filter[active][eq]': 'true',
+    'filter[resources.uid][in]': input.resource.key,
+    'filter[start_at][gte]': new Date(startsAt - 60_000).toISOString(),
+    'filter[start_at][lte]': new Date(startsAt + 60_000).toISOString(),
   });
   const appointmentIds = items(payload)
     .map((item) => exactAppointmentId(item, input))

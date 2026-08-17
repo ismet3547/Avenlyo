@@ -8,7 +8,7 @@ export async function createEzyVetBooking(
   client: EzyVetClient,
   input: CreateBookingRequest,
 ): Promise<CreateBookingResult> {
-  const payload = await client.post('/ezycab/booking', {
+  const payload = await client.postEzyCab('/ezycab/booking', {
     animal: input.subject.key,
     appointmentStatus: 'unconfirmed',
     contact: input.customer.key,
