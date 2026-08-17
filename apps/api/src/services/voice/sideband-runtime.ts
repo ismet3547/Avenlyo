@@ -5,6 +5,7 @@ import {
   type RealtimeCallControlProvider,
   type VoiceCallContext,
   type VoiceConfiguration,
+  type VoiceSchedulingServices,
   type VoiceRealtimeSocket,
   type VoiceSessionManager,
 } from '@avenlyo/voice';
@@ -18,6 +19,7 @@ export interface VoiceSidebandRuntimeOptions {
   readonly embed: (query: string) => Promise<readonly number[]>;
   readonly sessions: VoiceSessionManager;
   readonly socket: VoiceRealtimeSocket;
+  readonly scheduling?: VoiceSchedulingServices;
   readonly store: VoiceStore;
 }
 
@@ -30,6 +32,8 @@ export class VoiceSidebandRuntime {
   private executionQueue: Promise<void> = Promise.resolve();
   private readonly auditedToolCallIds = new Set<string>();
   private readonly completedToolCallIds = new Set<string>();
+  private latestCallerTranscript: string | null = null;
+  private schedulingBlocked = false;
 
   public constructor(private readonly options: VoiceSidebandRuntimeOptions) {
     const transferAllowed =
@@ -48,9 +52,11 @@ export class VoiceSidebandRuntime {
           }),
         }),
         searchBusinessKnowledge: async (input) => this.searchKnowledge(input.query),
+        ...(options.scheduling ? { scheduling: options.scheduling } : {}),
         transferCall: async (input) => this.transfer(input.reason, input.toolCallId),
       },
       transferAllowed,
+      options.scheduling !== undefined && options.context.industry.id === 'veterinary',
     );
   }
 
@@ -103,9 +109,11 @@ export class VoiceSidebandRuntime {
       externalItemId: event.item_id,
     });
     if (!stored) return;
+    this.latestCallerTranscript = event.transcript;
     this.options.sessions.recordActivity(this.options.context.callId);
     const safety = detectSafetyEscalation(this.options.context.industry, event.transcript);
     if (safety) {
+      this.schedulingBlocked = true;
       await this.options.store.requestHandoff({
         externalCallId: this.options.context.callId,
         reason: safety.reason,
@@ -139,7 +147,9 @@ export class VoiceSidebandRuntime {
     const result = await this.executor.execute({
       arguments: event.arguments,
       callId: event.call_id,
+      confirmationText: this.latestCallerTranscript,
       name: event.name,
+      schedulingBlocked: this.schedulingBlocked,
     });
     if (!this.auditedToolCallIds.has(event.call_id)) {
       this.auditedToolCallIds.add(event.call_id);

@@ -6,6 +6,8 @@ import { createVoiceServiceSupabaseClient } from '../../lib/supabase.js';
 import { VoiceInboundCallService } from './inbound-service.js';
 import { OpenAIRealtimeCallControlProvider } from './openai-realtime-control.js';
 import { SupabaseVoiceStore } from './store.js';
+import { EzyVetIntegrationService } from '../scheduling/ezyvet-service.js';
+import { VoiceBookingService } from '../scheduling/voice-booking-service.js';
 
 export interface VoiceIncomingHandler {
   handleIncoming(
@@ -35,6 +37,12 @@ export function createVoiceRuntime(): VoiceRuntime | null {
   };
   const sessions = new VoiceSessionManager({ control, finalizer });
   const embeddings = new OpenAIEmbeddingProvider({ apiKey: env.OPENAI_API_KEY });
+  const scheduling = env.EZYVET_PARTNER_ID
+    ? new VoiceBookingService({
+        ezyVet: new EzyVetIntegrationService({ partnerId: env.EZYVET_PARTNER_ID, supabase }),
+        supabase,
+      })
+    : undefined;
   return {
     inbound: new VoiceInboundCallService({
       control,
@@ -45,6 +53,7 @@ export function createVoiceRuntime(): VoiceRuntime | null {
       },
       model: env.OPENAI_REALTIME_MODEL,
       sessions,
+      ...(scheduling ? { scheduling } : {}),
       store,
     }),
     shutdown: () => sessions.shutdown(),

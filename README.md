@@ -4,8 +4,8 @@ Avenlyo is an AI Front Office for service businesses. It will handle customer co
 capture leads, book appointments, and hand off to people when appropriate.
 
 This repository contains the Phase 0 foundation, **Phase 1 authenticated onboarding**, **Phase 2
-reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, and **Phase 4
-inbound voice control**. It
+reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, **Phase 4 inbound
+voice control**, and **Phase 5 veterinary ezyVet scheduling**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
 empty state. It does not include production integrations, billing, live customer AI, or AI workflows.
@@ -50,6 +50,7 @@ Copy-Item apps/api/.env.example apps/api/.env
 | ------------------------------- | --------------------------------------------------------------------------- |
 | `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication.                |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.                  |
+| `AVENLYO_API_URL`               | Server-only Fastify URL used by the ezyVet management actions.               |
 | `OPENAI_API_KEY`                | Optional, server-only; required to publish knowledge or run Agent Test.     |
 | `OPENAI_EMBEDDING_MODEL`        | Optional server-only embedding model. Defaults to `text-embedding-3-small`. |
 | `OPENAI_AGENT_MODEL`            | Optional server-only Responses model. Defaults to `gpt-5.6`.                |
@@ -68,6 +69,7 @@ Copy-Item apps/api/.env.example apps/api/.env
 | `OPENAI_WEBHOOK_SECRET`     | Trusted inbound voice runtime only   | OpenAI webhook secret (`whsec_...`) used for raw-body signature checks.   |
 | `OPENAI_REALTIME_MODEL`     | No                                   | Server-only Realtime model. Defaults to `gpt-realtime-2.1`.               |
 | `OPENAI_PROJECT_ID`         | No                                   | Optional server-only OpenAI project ID (`proj_...`).                      |
+| `EZYVET_PARTNER_ID`         | ezyVet scheduling                    | Server-only ezyVet partner identifier; enables the trusted connector.    |
 
 Never commit actual `.env` or `.env.local` files. The API validates its environment once at
 startup; the web app validates its public configuration once when loaded.
@@ -323,3 +325,39 @@ human handoff, and only perform a transfer if one is explicitly configured and o
 The Phase 4 session manager is intentionally in-process. A Fastify process restart ends active
 sideband orchestration; the database retains durable call, transcript, handoff, and audit records.
 No automated test makes a real OpenAI, Twilio, or phone call.
+
+## Veterinary scheduling (Phase 5)
+
+Phase 5 adds a provider-neutral `BookingConnector` contract and an ezyVet implementation for the
+veterinary pack only. It supports catalog sync, vetted appointment type/resource policy, live
+availability, exact existing-contact/pet resolution, explicit caller confirmation, and creating a
+local appointment record after the provider booking succeeds. It intentionally does not create
+contacts or pets, reschedule/cancel appointments, send outbound reminders, or implement another
+calendar provider.
+
+Owners and admins configure ezyVet from **Integrations** for one location. The browser submits the
+client secret once to the Fastify endpoint; the endpoint verifies the official site information and
+stores the credential only with Supabase Vault. Application tables retain a Vault secret ID and
+non-sensitive metadata, never OAuth access tokens, client secrets, request bodies, or raw provider
+errors. The backend uses fixed official production/trial origins, source-controlled least-privilege
+scopes, an in-memory expiry-aware OAuth cache, and an eight-second request deadline. The integration
+is disabled unless `EZYVET_PARTNER_ID`, Supabase service-role access, and a connected location are
+present.
+
+Inbound veterinary voice adds the constrained tools `get_available_appointments`,
+`prepare_appointment_booking`, and `book_appointment` only when this backend integration is
+available. Candidate slots expire after 10 minutes. The booking tool requires a final inbound
+caller utterance containing explicit confirmation, claims the intent atomically, rechecks the exact
+slot immediately before the non-retried provider POST, and then idempotently stores the returned
+provider appointment ID locally. Any safety escalation blocks scheduling for the rest of that call.
+Timeout or ambiguous provider-write outcomes are retained as `provider_state_unknown` for human
+follow-up; the system never falsely tells the caller that a booking succeeded.
+
+To run a manual **trial** verification, apply the migrations, set `EZYVET_PARTNER_ID` only in
+`apps/api/.env`, start the API and web applications, then connect a disposable ezyVet trial site as
+an owner/admin. Sync the catalog, select one active appointment type and calendar resource, assign
+an inbound voice number through the existing Phase 4 operations workflow, and place a call from a
+phone number that exactly matches an existing trial contact with a uniquely named pet. Confirm an
+offered slot explicitly. Verify the returned appointment in ezyVet and the local Appointments page.
+This requires real ezyVet credentials and is therefore not run by CI or this repository's automated
+tests.

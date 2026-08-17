@@ -18,6 +18,9 @@ export type {
   VoiceRealtimeSocket,
   VoiceToolCall,
   VoiceToolExecution,
+  VoiceBookingCandidate,
+  VoiceBookingIntent,
+  VoiceSchedulingServices,
 } from './call/types';
 export {
   incomingRealtimeCallEventSchema,
@@ -37,6 +40,7 @@ export {
   VoiceToolExecutor,
 } from './realtime/tools';
 export type { VoiceToolServices } from './realtime/tools';
+export { hasExplicitBookingConfirmation } from './scheduling/confirmation';
 export { isE164, normalizeE164 } from './routing/phone-number';
 export { extractCallerE164, extractTwilioDiversionDid } from './routing/sip';
 export type { SipHeader } from './routing/sip';

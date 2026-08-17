@@ -15,6 +15,7 @@
     "@avenlyo/ai": "workspace:*",
     "@avenlyo/database": "workspace:*",
     "@avenlyo/industries": "workspace:*",
+    "@avenlyo/integrations": "workspace:*",
     "@avenlyo/knowledge": "workspace:*",
     "@avenlyo/shared": "workspace:*",
     "@avenlyo/voice": "workspace:*",

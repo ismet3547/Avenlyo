@@ -66,6 +66,24 @@ const voiceSecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/voice_security.test.sql', import.meta.url),
   'utf8',
 );
+const schedulingMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816070000_phase_5_ezyvet_booking.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const schedulingSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/scheduling_security.test.sql', import.meta.url),
+  'utf8',
+);
+const schedulingHardeningMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816071000_phase_5_booking_hardening.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -302,5 +320,56 @@ describe('inbound voice migration definition', () => {
     expect(voiceReliabilityMigration).toContain('on conflict do nothing');
     expect(voiceReliabilityMigration).toContain("'voice-handoff:' || target_call.id::text");
     expect(voiceReliabilityMigration).toContain("and mode = 'customer'");
+  });
+});
+
+describe('veterinary scheduling migration definition', () => {
+  it('keeps ezyVet credentials in Vault and removes direct client mutation paths', () => {
+    expect(schedulingMigration).toContain('create extension if not exists supabase_vault');
+    expect(schedulingMigration).toContain('create table public.integration_credentials');
+    expect(schedulingMigration).toContain('vault_secret_id uuid not null');
+    expect(schedulingMigration).toContain('integrations_ezyvet_secretless_configuration_check');
+    expect(schedulingMigration).toContain('drop policy if exists integrations_update_admin');
+    expect(schedulingMigration).toContain('drop policy if exists appointments_insert_member');
+  });
+
+  it('uses service-role-only catalog and booking transitions with tenant composite keys', () => {
+    expect(schedulingMigration).toContain('create function public.require_ezyvet_service_role()');
+    expect(schedulingMigration).toContain('scheduling_appointment_types_integration_scope_fk');
+    expect(schedulingMigration).toContain('booking_candidates_resource_scope_fk');
+    expect(schedulingMigration).toContain('booking_intents_candidate_scope_fk');
+    expect(schedulingMigration).toContain('pg_advisory_xact_lock');
+    expect(schedulingMigration).toContain('appointments_provider_external_identity_key');
+    expect(schedulingMigration).toContain('candidate.expires_at <= now()');
+  });
+
+  it('includes executable pgTAP assertions for catalog isolation and backend-only writes', () => {
+    expect(schedulingSecurityTest).toContain(
+      'inserted candidate cannot reference an ezyVet resource owned by another organization',
+    );
+    expect(schedulingSecurityTest).toContain(
+      'location-scoped member reads catalog only for their assigned location',
+    );
+    expect(schedulingSecurityTest).toContain('member cannot directly change catalog bookability');
+    expect(schedulingSecurityTest).toContain(
+      'authenticated member cannot execute trusted credential RPC',
+    );
+    expect(schedulingSecurityTest).toContain(
+      'owner can set the explicit ezyVet booking policy through its audited RPC',
+    );
+  });
+
+  it('separates provider success from local persistence and rotates Vault secrets in place', () => {
+    expect(schedulingHardeningMigration).toContain('provider_success_pending_persistence');
+    expect(schedulingHardeningMigration).toContain('record_voice_booking_provider_success');
+    expect(schedulingHardeningMigration).toContain('vault.update_secret');
+    expect(schedulingHardeningMigration).toContain('credential_version = previous_version + 1');
+    expect(schedulingHardeningMigration).toContain(
+      "intent.status = 'provider_success_pending_persistence'",
+    );
+    expect(schedulingSecurityTest).toContain(
+      'provider success has a recoverable, non-repostable persistence state',
+    );
+    expect(schedulingSecurityTest).toContain('authenticated users cannot reopen a completed');
   });
 });

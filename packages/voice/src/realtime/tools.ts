@@ -13,11 +13,28 @@ import { MAX_VOICE_TOOL_CALLS } from '../call/limits';
 import type {
   VoiceCallContext,
   VoiceFunctionTool,
+  VoiceSchedulingServices,
   VoiceToolCall,
   VoiceToolExecution,
 } from '../call/types';
 
 export const transferCallSchema = z.object({ reason: z.string().trim().min(3).max(500) }).strict();
+export const availableAppointmentsSchema = z
+  .object({
+    appointment_type: z.string().trim().min(1).max(160),
+    dates: z
+      .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+      .min(1)
+      .max(14),
+  })
+  .strict();
+export const prepareAppointmentBookingSchema = z
+  .object({
+    candidate_id: z.string().uuid(),
+    pet_name: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export const bookAppointmentSchema = z.object({ booking_intent_id: z.string().uuid() }).strict();
 
 export const transferCallFunction: VoiceFunctionTool = {
   description:
@@ -34,6 +51,51 @@ export const transferCallFunction: VoiceFunctionTool = {
   strict: true,
 };
 
+const getAvailableAppointmentsFunction: VoiceFunctionTool = {
+  description:
+    'Find currently bookable veterinary appointment options. Never infer availability; ask the caller for their preferred date first.',
+  name: 'get_available_appointments',
+  parameters: {
+    additionalProperties: false,
+    properties: {
+      appointment_type: { type: 'string' },
+      dates: { items: { type: 'string' }, type: 'array' },
+    },
+    required: ['appointment_type', 'dates'],
+    type: 'object',
+  },
+  strict: true,
+};
+
+const prepareAppointmentBookingFunction: VoiceFunctionTool = {
+  description:
+    'Resolve the caller and pet for one previously offered appointment option. This only prepares a booking; it does not book.',
+  name: 'prepare_appointment_booking',
+  parameters: {
+    additionalProperties: false,
+    properties: {
+      candidate_id: { type: 'string' },
+      pet_name: { type: 'string' },
+    },
+    required: ['candidate_id', 'pet_name'],
+    type: 'object',
+  },
+  strict: true,
+};
+
+const bookAppointmentFunction: VoiceFunctionTool = {
+  description:
+    'Book a prepared appointment only immediately after the caller has explicitly confirmed the exact offered time, appointment type, and pet.',
+  name: 'book_appointment',
+  parameters: {
+    additionalProperties: false,
+    properties: { booking_intent_id: { type: 'string' } },
+    required: ['booking_intent_id'],
+    type: 'object',
+  },
+  strict: true,
+};
+
 function baseTool(
   tool: typeof searchBusinessKnowledgeFunction | typeof requestHumanHelpFunction,
 ): VoiceFunctionTool {
@@ -42,6 +104,7 @@ function baseTool(
 
 export function activeVoiceTools(input: {
   readonly industry: IndustryPack;
+  readonly schedulingEnabled?: boolean;
   readonly transferEnabled: boolean;
 }): readonly VoiceFunctionTool[] {
   const tools: VoiceFunctionTool[] = [
@@ -50,6 +113,13 @@ export function activeVoiceTools(input: {
   ];
   if (input.transferEnabled && input.industry.allowedActions.includes('handoff_to_human')) {
     tools.push(transferCallFunction);
+  }
+  if (input.schedulingEnabled && input.industry.id === 'veterinary') {
+    tools.push(
+      getAvailableAppointmentsFunction,
+      prepareAppointmentBookingFunction,
+      bookAppointmentFunction,
+    );
   }
   return tools;
 }
@@ -71,6 +141,7 @@ export interface VoiceToolServices {
     input: { readonly reason: string; readonly toolCallId: string },
     context: VoiceCallContext,
   ): Promise<{ readonly transferred: boolean }>;
+  readonly scheduling?: VoiceSchedulingServices;
 }
 
 function output(value: Readonly<Record<string, unknown>>): string {
@@ -111,6 +182,7 @@ export class VoiceToolExecutor {
     private readonly context: VoiceCallContext,
     private readonly services: VoiceToolServices,
     private readonly transferEnabled: boolean,
+    private readonly schedulingEnabled = false,
   ) {}
 
   public async execute(call: VoiceToolCall): Promise<VoiceToolExecution> {
@@ -208,6 +280,85 @@ export class VoiceToolExecutor {
                 transferred: false,
               },
         );
+      }
+      if (
+        call.name === 'get_available_appointments' &&
+        this.schedulingEnabled &&
+        this.services.scheduling
+      ) {
+        if (call.schedulingBlocked)
+          return this.store(call.callId, rejected('Scheduling is blocked for this call.'));
+        const parsed = availableAppointmentsSchema.safeParse(rawArguments);
+        if (!parsed.success)
+          return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const candidates = await this.services.scheduling.getAvailableAppointments(
+          {
+            appointmentType: parsed.data.appointment_type,
+            dates: parsed.data.dates,
+            toolCallId: call.callId,
+          },
+          this.context,
+        );
+        return this.store(call.callId, {
+          handoffRequested: false,
+          modelOutput: output({ candidates }),
+          status: 'succeeded',
+          summary: candidates.length
+            ? `${candidates.length} appointment options found.`
+            : 'No appointment options found.',
+          transferred: false,
+        });
+      }
+      if (
+        call.name === 'prepare_appointment_booking' &&
+        this.schedulingEnabled &&
+        this.services.scheduling
+      ) {
+        if (call.schedulingBlocked)
+          return this.store(call.callId, rejected('Scheduling is blocked for this call.'));
+        const parsed = prepareAppointmentBookingSchema.safeParse(rawArguments);
+        if (!parsed.success)
+          return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const prepared = await this.services.scheduling.prepareAppointmentBooking(
+          {
+            candidateId: parsed.data.candidate_id,
+            petName: parsed.data.pet_name,
+            toolCallId: call.callId,
+          },
+          this.context,
+        );
+        return this.store(call.callId, {
+          handoffRequested: false,
+          modelOutput: output(prepared),
+          status: 'succeeded',
+          summary:
+            prepared.outcome === 'ready'
+              ? 'Booking is ready for explicit confirmation.'
+              : 'Booking could not be prepared.',
+          transferred: false,
+        });
+      }
+      if (call.name === 'book_appointment' && this.schedulingEnabled && this.services.scheduling) {
+        if (call.schedulingBlocked)
+          return this.store(call.callId, rejected('Scheduling is blocked for this call.'));
+        const parsed = bookAppointmentSchema.safeParse(rawArguments);
+        if (!parsed.success)
+          return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const booked = await this.services.scheduling.bookAppointment(
+          {
+            bookingIntentId: parsed.data.booking_intent_id,
+            confirmationText: call.confirmationText ?? null,
+            toolCallId: call.callId,
+          },
+          this.context,
+        );
+        return this.store(call.callId, {
+          handoffRequested: booked.outcome === 'unknown',
+          modelOutput: output(booked),
+          status: booked.outcome === 'booked' ? 'succeeded' : 'failed',
+          summary: `Booking outcome: ${booked.outcome}.`,
+          transferred: false,
+        });
       }
       return this.store(call.callId, rejected('Unavailable tool requested.'));
     } catch {

@@ -1,0 +1,98 @@
+import type {
+  AvailabilityRequest,
+  AvailabilitySlot,
+  BookingConnector,
+  BookingReconciliationRequest,
+  BookingReconciliationResult,
+  CreateBookingRequest,
+  CreateBookingResult,
+  CustomerResolution,
+  CustomerResolutionRequest,
+  SchedulingCatalog,
+  SubjectResolution,
+  SubjectResolutionRequest,
+} from '../scheduling/types';
+
+import { loadAvailability } from './availability';
+import { resolveOwnedAnimal } from './animals';
+import { createEzyVetBooking } from './booking';
+import { loadAppointmentTypes, loadCalendarResources } from './catalog';
+import type { EzyVetClient } from './client';
+import { resolveExactPhoneCustomer } from './contacts';
+import { reconcileEzyVetBooking } from './reconciliation';
+import { array, record, string } from './schemas';
+import type { EzyVetCatalogConnector, EzyVetSite } from './types';
+
+function siteFromPayload(value: unknown): EzyVetSite {
+  try {
+    const root = record(value);
+    const data = record(root.data);
+    const id = string(data.id);
+    const timezoneReference = record(record(data.relationships).timezone).data;
+    const timezoneId = string(record(timezoneReference).id);
+    const timezone = array(root.included)
+      .map(record)
+      .find((entry) => string(entry.type) === 'timezone' && string(entry.id) === timezoneId);
+    const timezoneName = timezone ? string(record(timezone.attributes).name) : null;
+    if (!id || !timezoneId || !timezoneName || !validTimeZone(timezoneName)) {
+      throw new Error('invalid site information');
+    }
+    return { id, timezone: timezoneName };
+  } catch {
+    throw new Error('ezyVet site information was incomplete or invalid.');
+  }
+}
+
+function validTimeZone(value: string): boolean {
+  try {
+    Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector {
+  public readonly provider = 'ezyvet' as const;
+
+  public constructor(private readonly client: EzyVetClient) {}
+
+  public supportsBooking(): boolean {
+    return this.client.supportsEzyCab();
+  }
+
+  public async createBooking(input: CreateBookingRequest): Promise<CreateBookingResult> {
+    return createEzyVetBooking(this.client, input);
+  }
+
+  public async reconcileBooking(
+    input: BookingReconciliationRequest,
+  ): Promise<BookingReconciliationResult> {
+    return reconcileEzyVetBooking(this.client, input);
+  }
+
+  public async getAvailability(input: AvailabilityRequest): Promise<readonly AvailabilitySlot[]> {
+    return loadAvailability(this.client, input);
+  }
+
+  public async getSchedulingCatalog(): Promise<SchedulingCatalog> {
+    const [site, appointmentTypes, resources] = await Promise.all([
+      this.getSite(),
+      loadAppointmentTypes(this.client),
+      loadCalendarResources(this.client),
+    ]);
+    return { appointmentTypes, resources, site };
+  }
+
+  public async getSite(): Promise<EzyVetSite> {
+    return siteFromPayload(await this.client.getCore('/v3/siteInformation'));
+  }
+
+  public async resolveCustomer(input: CustomerResolutionRequest): Promise<CustomerResolution> {
+    return resolveExactPhoneCustomer(this.client, input.trustedCallerE164);
+  }
+
+  public async resolveSubject(input: SubjectResolutionRequest): Promise<SubjectResolution> {
+    return resolveOwnedAnimal(this.client, input.customer, input.petName);
+  }
+}
