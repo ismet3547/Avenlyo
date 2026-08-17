@@ -394,7 +394,8 @@ language plpgsql security definer set search_path = '' as $$
 declare delivery public.message_deliveries%rowtype; message public.messages%rowtype; conversation public.conversations%rowtype; phone public.phone_numbers%rowtype;
 begin
   perform public.require_messaging_service_role();
-  select * into delivery from public.message_deliveries where message_id = target_message_id and provider = 'twilio' for update;
+  select * into delivery from public.message_deliveries as message_delivery
+    where message_delivery.message_id = target_message_id and message_delivery.provider = 'twilio' for update;
   if delivery.id is null or delivery.status <> 'queued' then return; end if;
   select * into message from public.messages where id = delivery.message_id;
   select * into conversation from public.conversations where organization_id = message.organization_id and id = message.conversation_id;
@@ -404,11 +405,13 @@ begin
       where preference.organization_id = message.organization_id and preference.location_id = conversation.location_id
         and preference.contact_id = conversation.contact_id and preference.channel_type = 'sms'
         and preference.sender_phone_number_id = phone.id and preference.status = 'opted_out') then
-    update public.message_deliveries set status = 'suppressed', error_code = 'delivery_suppressed', updated_at = now() where id = delivery.id;
+    update public.message_deliveries as message_delivery set status = 'suppressed', error_code = 'delivery_suppressed', updated_at = now()
+      where message_delivery.id = delivery.id;
     return;
   end if;
   if message.body is null or conversation.contact_id is null then
-    update public.message_deliveries set status = 'failed', error_code = 'delivery_identity_unavailable', updated_at = now() where id = delivery.id;
+    update public.message_deliveries as message_delivery set status = 'failed', error_code = 'delivery_identity_unavailable', updated_at = now()
+      where message_delivery.id = delivery.id;
     return;
   end if;
   -- Replies travel only to the immutable triggering transport identity, never a later contact edit.
@@ -418,10 +421,12 @@ begin
     and inbound.id = message.in_reply_to_message_id and inbound.direction = 'inbound'
     and inbound.source_channel = 'sms' and inbound.author_type = 'customer';
   if to_e164 is null then
-    update public.message_deliveries set status = 'failed', error_code = 'delivery_identity_unavailable', updated_at = now() where id = delivery.id;
+    update public.message_deliveries as message_delivery set status = 'failed', error_code = 'delivery_identity_unavailable', updated_at = now()
+      where message_delivery.id = delivery.id;
     return;
   end if;
-  update public.message_deliveries set status = 'submitting', attempted_at = now(), updated_at = now() where id = delivery.id;
+  update public.message_deliveries as message_delivery set status = 'submitting', attempted_at = now(), updated_at = now()
+    where message_delivery.id = delivery.id;
   return query select message.id, delivery.id, to_e164, phone.phone_number, message.body, 'submitting'::text;
 end;
 $$;
