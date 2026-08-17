@@ -253,7 +253,7 @@ $$;
 create function public.create_appointment_reminder_message(target_reminder_id uuid)
 returns table (message_id uuid) language plpgsql security definer set search_path = '' as $$
 declare reminder public.appointment_reminders%rowtype; appointment public.appointments%rowtype; settings public.appointment_reminder_settings%rowtype;
-  location public.locations%rowtype; phone public.phone_numbers%rowtype; channel public.channels%rowtype; contact public.contacts%rowtype; conversation public.conversations%rowtype; saved_message_id uuid;
+  location public.locations%rowtype; sender_phone public.phone_numbers%rowtype; channel public.channels%rowtype; contact public.contacts%rowtype; conversation public.conversations%rowtype; saved_message_id uuid;
   lower_window timestamptz; upper_window timestamptz;
 begin
   perform public.require_messaging_service_role();
@@ -271,20 +271,20 @@ begin
   if now() > upper_window then update public.appointment_reminders set status = 'skipped', last_error_code = 'outside_send_window', claimed_at = null, claimed_by = null, updated_at = now() where id = reminder.id; return; end if;
   if reminder.trusted_sms_recipient_e164 is null then update public.appointment_reminders set status = 'skipped', last_error_code = 'no_trusted_recipient', claimed_at = null, claimed_by = null, updated_at = now() where id = reminder.id; return; end if;
   select * into location from public.locations where organization_id = reminder.organization_id and id = reminder.location_id;
-  select * into phone from public.phone_numbers where organization_id = reminder.organization_id and location_id = reminder.location_id and status = 'active' and sms_enabled order by created_at asc limit 1;
-  if phone.id is null then update public.appointment_reminders set status = 'skipped', last_error_code = 'no_sms_sender', claimed_at = null, claimed_by = null, updated_at = now() where id = reminder.id; return; end if;
-  select * into contact from public.contacts where organization_id = reminder.organization_id and location_id = reminder.location_id and phone = reminder.trusted_sms_recipient_e164 limit 1;
+  select * into sender_phone from public.phone_numbers where organization_id = reminder.organization_id and location_id = reminder.location_id and status = 'active' and sms_enabled order by created_at asc limit 1;
+  if sender_phone.id is null then update public.appointment_reminders set status = 'skipped', last_error_code = 'no_sms_sender', claimed_at = null, claimed_by = null, updated_at = now() where id = reminder.id; return; end if;
+  select * into contact from public.contacts existing_contact where existing_contact.organization_id = reminder.organization_id and existing_contact.location_id = reminder.location_id and existing_contact.phone = reminder.trusted_sms_recipient_e164 limit 1;
   if contact.id is null then insert into public.contacts (organization_id, location_id, phone, metadata) values (reminder.organization_id, reminder.location_id, reminder.trusted_sms_recipient_e164, jsonb_build_object('source', 'appointment_reminder')) returning * into contact; end if;
-  if exists(select 1 from public.messaging_contact_preferences pref where pref.organization_id = reminder.organization_id and pref.location_id = reminder.location_id and pref.contact_id = contact.id and pref.channel_type = 'sms' and pref.sender_phone_number_id = phone.id and pref.status = 'opted_out') then
+  if exists(select 1 from public.messaging_contact_preferences pref where pref.organization_id = reminder.organization_id and pref.location_id = reminder.location_id and pref.contact_id = contact.id and pref.channel_type = 'sms' and pref.sender_phone_number_id = sender_phone.id and pref.status = 'opted_out') then
     update public.appointment_reminders set status = 'skipped', last_error_code = 'opted_out', claimed_at = null, claimed_by = null, updated_at = now() where id = reminder.id; return;
   end if;
   select * into channel from public.channels where organization_id = reminder.organization_id and location_id = reminder.location_id and channel_type = 'sms' and status = 'active' limit 1;
-  if channel.id is null then insert into public.channels (organization_id, location_id, channel_type, display_name, status, configuration) values (reminder.organization_id, reminder.location_id, 'sms', 'SMS', 'active', jsonb_build_object('phone_number_id', phone.id)) returning * into channel; end if;
+  if channel.id is null then insert into public.channels (organization_id, location_id, channel_type, display_name, status, configuration) values (reminder.organization_id, reminder.location_id, 'sms', 'SMS', 'active', jsonb_build_object('phone_number_id', sender_phone.id)) returning * into channel; end if;
   select c.* into conversation from public.conversations c join public.messages inbound on inbound.organization_id = c.organization_id and inbound.conversation_id = c.id
-    where c.organization_id = reminder.organization_id and c.location_id = reminder.location_id and c.transport_phone_number_id = phone.id and c.status = 'open'
+    where c.organization_id = reminder.organization_id and c.location_id = reminder.location_id and c.transport_phone_number_id = sender_phone.id and c.status = 'open'
       and inbound.direction = 'inbound' and inbound.source_channel = 'sms' and inbound.author_type = 'customer' and inbound.transport_sender_e164 = reminder.trusted_sms_recipient_e164
     order by c.updated_at desc limit 1;
-  if conversation.id is null then insert into public.conversations (organization_id, location_id, contact_id, channel_id, transport_phone_number_id, mode, status, metadata) values (reminder.organization_id, reminder.location_id, contact.id, channel.id, phone.id, 'customer', 'open', jsonb_build_object('transport', 'sms', 'source', 'appointment_reminder')) returning * into conversation; end if;
+  if conversation.id is null then insert into public.conversations (organization_id, location_id, contact_id, channel_id, transport_phone_number_id, mode, status, metadata) values (reminder.organization_id, reminder.location_id, contact.id, channel.id, sender_phone.id, 'customer', 'open', jsonb_build_object('transport', 'sms', 'source', 'appointment_reminder')) returning * into conversation; end if;
   insert into public.messages (organization_id, location_id, conversation_id, contact_id, direction, message_type, body, metadata, source_channel, author_type, appointment_reminder_id, sent_at)
   values (reminder.organization_id, reminder.location_id, conversation.id, contact.id, 'outbound', 'text',
     'Reminder from ' || location.name || ': you have an appointment ' || to_char(appointment.starts_at at time zone location.timezone, 'FMDay, FMMonth FMDD at FMHH12:MI AM') || '. Reply here if you need help.',
