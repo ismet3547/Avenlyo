@@ -149,15 +149,20 @@ select extensions.lives_ok(
   $$ select public.record_voice_booking_provider_success('71900000-0000-0000-0000-000000000002', 'appointment_1', 'unconfirmed') $$,
   'trusted backend records provider success before local appointment persistence'
 );
+reset role;
 select extensions.is(
   (select status from public.booking_intents where id = '71900000-0000-0000-0000-000000000002'),
   'provider_success_pending_persistence',
   'provider success has a recoverable, non-repostable persistence state'
 );
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
   $$ select * from public.complete_voice_booking_intent('71900000-0000-0000-0000-000000000002', 'appointment_1', 'unconfirmed') $$,
   'trusted backend persists a previously recorded provider success idempotently'
 );
+reset role;
 select extensions.is(
   (select status from public.booking_intents where id = '71900000-0000-0000-0000-000000000002'),
   'completed',
