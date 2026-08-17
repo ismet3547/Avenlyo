@@ -63,16 +63,20 @@ select extensions.is(
   true,
   'STOP is durably received through the trusted webhook path'
 );
+reset role;
 select extensions.is(
   (select status from public.messaging_contact_preferences preference join public.contacts contact on contact.id = preference.contact_id where contact.phone = '+14155550103'),
   'opted_out',
   'STOP persists an SMS opt-out preference'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select accepted from public.bootstrap_inbound_sms('SM00000000000000000000000000000004', '+14155550103', '+14155550903', 'START', '[]', '{}')),
   true,
   'START is accepted through the trusted webhook path'
 );
+reset role;
 select extensions.is(
   (select status from public.messaging_contact_preferences preference join public.contacts contact on contact.id = preference.contact_id where contact.phone = '+14155550103'),
   'active',
@@ -83,27 +87,36 @@ select extensions.is(
   1,
   'exactly one durable inbound AI job is created for a MessageSid'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
   $$ select * from public.bootstrap_inbound_sms('SM00000000000000000000000000000005', '+14155550104', '+14155550901', 'Photo attached', '[{"content_type":"image/jpeg","url":"https://api.twilio.test/private-media"}]', '{}') $$,
   'text plus media is persisted without fetching provider media'
 );
+reset role;
 select extensions.ok(
   (select metadata::text not like '%private-media%' from public.messages where external_id = 'SM00000000000000000000000000000005'),
   'Twilio MediaUrl values are never persisted in message metadata'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
   $$ select * from public.bootstrap_inbound_sms('SM00000000000000000000000000000006', '+14155550105', '+14155550901', '', '[{"content_type":"image/jpeg"}]', '{}') $$,
   'media-only inbound event is persisted through the deterministic safe path'
 );
+reset role;
 select extensions.is(
   (select count(*)::integer from public.message_processing_jobs job join public.messages message on message.id = job.message_id where message.message_type = 'media' and job.job_kind = 'inbound_ai'),
   0,
   'media-only inbound SMS never enqueues the OpenAI text agent'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
   $$ select * from public.bootstrap_inbound_sms('SM00000000000000000000000000000007', '+14155550106', '+14155550901', 'hello', '[]', '{"opt_out_type":"stop"}') $$,
   'trusted provider STOP metadata is handled before the agent path'
 );
+reset role;
 select extensions.is(
   (select count(*)::integer from public.message_processing_jobs job join public.messages message on message.id = job.message_id where message.external_id = 'SM00000000000000000000000000000007' and job.job_kind = 'inbound_ai'),
   0,
@@ -138,12 +151,16 @@ select extensions.is(
   1,
   'only queued to submitting atomically authorizes a Twilio provider post'
 );
+reset role;
 select extensions.is(
   (select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000002'),
   'submitting',
   'a crash-window delivery is durably marked submitting before the provider request'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select public.claim_message_processing_jobs('recovery-worker', 1);
+reset role;
 select extensions.is(
   (select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000002'),
   'unknown',
@@ -280,6 +297,7 @@ select extensions.is(
   1,
   'trusted backend preserves client-message idempotency for a session token hash'
 );
+reset role;
 select extensions.is(
   (select count(*)::integer from public.web_chat_sessions where token_hash = repeat('c', 64) and origin = 'https://clinic.example'),
   1,
