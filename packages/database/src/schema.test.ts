@@ -95,6 +95,17 @@ const googleCalendarSecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/google_calendar_security.test.sql', import.meta.url),
   'utf8',
 );
+const schedulingReliabilityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816081000_phase_6_scheduling_reliability.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const schedulingReliabilitySecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/scheduling_reliability.test.sql', import.meta.url),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -415,5 +426,16 @@ describe('Google Calendar scheduling migration definition', () => {
     expect(googleCalendarSecurityTest).toContain('member cannot read OAuth state');
     expect(googleCalendarSecurityTest).toContain('consumed OAuth state cannot be reused');
     expect(googleCalendarSecurityTest).toContain('overlapping leases for the same resource are rejected');
+  });
+
+  it('separates mutable new-write policy from durable provider recovery', () => {
+    expect(schedulingReliabilityMigration).toContain('provider_booking_status');
+    expect(schedulingReliabilityMigration).toContain("intent.status = 'provider_success_pending_persistence'");
+    expect(schedulingReliabilityMigration).toContain("settings.active_integration_id = intent.integration_id");
+    expect(schedulingReliabilityMigration).toContain("intent.status = 'booking' and integration.status = 'connected'");
+    expect(schedulingReliabilityMigration).toContain('drop function public.complete_voice_booking_intent(uuid, text, text)');
+    expect(schedulingReliabilitySecurityTest).toContain('provider success persists after Google is disconnected');
+    expect(schedulingReliabilitySecurityTest).toContain('removed Google type-resource mapping blocks a first provider write');
+    expect(schedulingReliabilitySecurityTest).toContain('disabled ezyVet resource blocks a first provider write');
   });
 });

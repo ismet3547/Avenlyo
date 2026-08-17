@@ -11,12 +11,14 @@ export function googleEventId(bookingIntentId: string): string {
   return id;
 }
 
-function exactEvent(event: { readonly end: string; readonly id: string; readonly privateProperties: Readonly<Record<string, string>>; readonly start: string }, input: BookingReconciliationRequest): boolean {
-  if (!input.bookingIntentId) return false;
+function exactEvent(event: { readonly end: string; readonly id: string; readonly privateProperties: Readonly<Record<string, string>>; readonly start: string; readonly status: string }, input: BookingReconciliationRequest): boolean {
+  if (!input.bookingIntentId || !input.integrationId) return false;
   return event.id === googleEventId(input.bookingIntentId)
+    && event.status === 'confirmed'
     && Date.parse(event.start) === Date.parse(input.slot.startAt)
     && Date.parse(event.end) === Date.parse(input.slot.endAt)
-    && event.privateProperties.avenlyo_booking_intent_id === input.bookingIntentId;
+    && event.privateProperties.avenlyo_booking_intent_id === input.bookingIntentId
+    && event.privateProperties.avenlyo_integration_id === input.integrationId;
 }
 function localDayBoundary(dateText: string, timezone: string, endOfDay: boolean): string {
   const date = Temporal.PlainDate.from(dateText);
@@ -59,7 +61,8 @@ export class GoogleCalendarConnector implements BookingConnector {
       start: { dateTime: input.slot.startAt, timeZone: input.slot.timezone }, end: { dateTime: input.slot.endAt, timeZone: input.slot.timezone },
       extendedProperties: { private: { avenlyo_booking_intent_id: input.bookingIntentId, avenlyo_integration_id: input.integrationId } },
     });
-    return { appointmentKey: event.id, providerStatus: event.status === 'confirmed' ? 'confirmed' : 'unconfirmed' };
+    if (event.status !== 'confirmed') throw new BookingProviderError('provider_state_unknown');
+    return { appointmentKey: event.id, providerStatus: 'confirmed' };
   }
 
   public async reconcileBooking(input: BookingReconciliationRequest): Promise<BookingReconciliationResult> {
@@ -67,7 +70,7 @@ export class GoogleCalendarConnector implements BookingConnector {
     try {
       const event = await this.client.getEvent(input.resource.key, googleEventId(input.bookingIntentId));
       if (!exactEvent(event, input)) throw new BookingProviderError('provider_conflict');
-      return { kind: 'found', appointment: { appointmentKey: event.id, providerStatus: event.status === 'confirmed' ? 'confirmed' : 'unconfirmed' } };
+      return { kind: 'found', appointment: { appointmentKey: event.id, providerStatus: 'confirmed' } };
     } catch (error) {
       if (error instanceof BookingProviderError && error.category === 'not_found') return { kind: 'not_found' };
       throw error;

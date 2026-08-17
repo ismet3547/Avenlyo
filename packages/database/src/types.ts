@@ -359,7 +359,9 @@ export interface GenericBookingExecutionContextRow {
   business_hours: Json;
   minimum_lead_minutes: number;
   provider_appointment_id: string | null;
+  provider_booking_status: 'confirmed' | 'unconfirmed' | null;
   intent_status: string;
+  current_write_eligible: boolean;
 }
 
 export interface CompletedBookingRow {
@@ -776,11 +778,7 @@ export interface Database {
         Returns: GenericBookingExecutionContextRow[];
       };
       complete_voice_booking_intent: {
-        Args: {
-          target_booking_intent_id: string;
-          target_external_appointment_id: string;
-          target_provider_status: 'confirmed' | 'unconfirmed';
-        };
+        Args: { target_booking_intent_id: string };
         Returns: CompletedBookingRow[];
       };
       record_voice_booking_provider_success: {

@@ -20,14 +20,20 @@ describe('Google Calendar availability', () => {
     const slots = createGoogleAvailabilitySlots({
       appointmentType: type,
       businessHours: hours,
-      busyByResource: new Map([[resource.key, [
-        { start: '2026-09-07T08:30:00Z', end: '2026-09-07T08:45:00Z' },
-        { start: '2026-09-07T08:45:00Z', end: '2026-09-07T09:00:00Z' },
-      ]]]),
+      busyByResource: new Map([
+        [
+          resource.key,
+          [
+            { start: '2026-09-07T08:30:00Z', end: '2026-09-07T08:45:00Z' },
+            { start: '2026-09-07T08:45:00Z', end: '2026-09-07T09:00:00Z' },
+          ],
+        ],
+      ]),
       dates: ['2026-09-07'],
       minimumLeadMinutes: 60,
       now: Temporal.Instant.from('2026-09-07T07:20:00Z'),
-      resources: [resource], timezone: 'Europe/London',
+      resources: [resource],
+      timezone: 'Europe/London',
     });
     expect(SLOT_GRID_MINUTES).toBe(15);
     expect(slots).toHaveLength(5);
@@ -36,18 +42,43 @@ describe('Google Calendar availability', () => {
     expect(slots.some((slot) => slot.startAt === '2026-09-07T08:15:00Z')).toBe(false);
   });
 
-  it('uses IANA-zone DST transitions instead of fixed UTC offsets', () => {
+  it('skips nonexistent spring-forward wall times without duplicate absolute slots', () => {
     const spring = createGoogleAvailabilitySlots({
-      appointmentType: { ...type, defaultDurationMinutes: 30 }, businessHours: hours,
-      busyByResource: new Map(), dates: ['2026-03-29'], minimumLeadMinutes: 0,
-      now: Temporal.Instant.from('2026-03-28T00:00:00Z'), resources: [resource], timezone: 'Europe/London',
-    });
-    const fall = createGoogleAvailabilitySlots({
-      appointmentType: { ...type, defaultDurationMinutes: 30 }, businessHours: hours,
-      busyByResource: new Map(), dates: ['2026-10-25'], minimumLeadMinutes: 0,
-      now: Temporal.Instant.from('2026-10-24T00:00:00Z'), resources: [resource], timezone: 'Europe/London',
+      appointmentType: { ...type, defaultDurationMinutes: 30 },
+      businessHours: hours,
+      busyByResource: new Map(),
+      dates: ['2026-03-29'],
+      minimumLeadMinutes: 0,
+      now: Temporal.Instant.from('2026-03-28T00:00:00Z'),
+      resources: [resource],
+      timezone: 'Europe/London',
     });
     expect(spring[0]?.startAt).toBe('2026-03-29T01:00:00Z');
+    expect(new Set(spring.map((slot) => `${slot.startAt}:${slot.endAt}`)).size).toBe(spring.length);
+    expect(spring.some((slot) => slot.startAt === '2026-03-29T00:00:00Z')).toBe(false);
+  });
+
+  it('chooses the earlier fall-back occurrence and keeps model-facing slots unique', () => {
+    const fall = createGoogleAvailabilitySlots({
+      appointmentType: { ...type, defaultDurationMinutes: 30 },
+      businessHours: hours,
+      busyByResource: new Map(),
+      dates: ['2026-10-25'],
+      minimumLeadMinutes: 0,
+      now: Temporal.Instant.from('2026-10-24T00:00:00Z'),
+      resources: [resource],
+      timezone: 'Europe/London',
+    });
     expect(fall[0]?.startAt).toBe('2026-10-25T00:00:00Z');
+    expect(
+      new Set(
+        fall.map(
+          (slot) => `${slot.resourceKey}:${slot.startAt}:${slot.endAt}:${slot.appointmentTypeKey}`,
+        ),
+      ).size,
+    ).toBe(fall.length);
+    expect(
+      fall.every((slot) => Date.parse(slot.endAt) - Date.parse(slot.startAt) === 30 * 60_000),
+    ).toBe(true);
   });
 });

@@ -78,13 +78,21 @@ export class GoogleCalendarClient {
     const result = new Map<string, readonly GoogleBusyPeriod[]>();
     for (const id of input.calendarIds) {
       const entry = calendars[id];
-      if (!entry) { result.set(id, []); continue; }
-      const busyValue = record(entry).busy;
-      const busy: readonly unknown[] = Array.isArray(busyValue) ? busyValue : [];
-      result.set(id, busy.flatMap((range: unknown) => {
+      if (!entry) throw new BookingProviderError('provider_error');
+      const calendar = record(entry);
+      if (calendar.errors !== undefined && (!Array.isArray(calendar.errors) || calendar.errors.length > 0)) {
+        throw new BookingProviderError('provider_error');
+      }
+      if (!Array.isArray(calendar.busy)) throw new BookingProviderError('provider_error');
+      const busy: GoogleBusyPeriod[] = [];
+      for (const range of calendar.busy) {
         const raw = record(range); const start = text(raw.start); const end = text(raw.end);
-        return start && end && Date.parse(end) > Date.parse(start) ? [{ start, end }] : [];
-      }));
+        if (!start || !end || !Number.isFinite(Date.parse(start)) || !Number.isFinite(Date.parse(end)) || Date.parse(end) <= Date.parse(start)) {
+          throw new BookingProviderError('provider_error');
+        }
+        busy.push({ start, end });
+      }
+      result.set(id, busy);
     }
     return result;
   }

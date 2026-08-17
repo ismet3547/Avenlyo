@@ -108,9 +108,16 @@ export class VoiceBookingService implements VoiceSchedulingServices {
     if (error || !claim || claim.state === 'confirmation_required') return { outcome: 'confirmation_required' as const };
     if (claim.state === 'completed') return { outcome: 'booked' as const };
     if (claim.state === 'provider_state_unknown') return { outcome: 'unknown' as const };
+    if (claim.state === 'configuration_changed') return { outcome: 'unavailable' as const };
     try {
+      if (claim.state === 'provider_success_pending_persistence') {
+        return this.persistProviderSuccess(input.bookingIntentId);
+      }
       const execution = await this.execution(input.bookingIntentId);
-      if (claim.state === 'provider_success_pending_persistence') return this.persistProviderSuccess(input.bookingIntentId, execution.provider_appointment_id);
+      if (claim.state === 'claimed' && !execution.current_write_eligible) {
+        await this.fail(input.bookingIntentId, 'awaiting_confirmation', 'configuration_changed');
+        return { outcome: 'unavailable' as const };
+      }
       const connector = await this.connector(execution.provider, execution.integration_id);
       const appointmentType: BookingAppointmentType = { defaultDurationMinutes: execution.default_duration_minutes, key: execution.appointment_type_uid, name: execution.appointment_type_name };
       const resource: BookingResource = { key: execution.resource_uid, name: execution.resource_name, schedulingScopeKey: null };
@@ -146,7 +153,7 @@ export class VoiceBookingService implements VoiceSchedulingServices {
       }
       const { error: recordError } = await this.input.supabase.rpc('record_voice_booking_provider_success', { target_booking_intent_id: input.bookingIntentId, target_external_appointment_id: created.appointmentKey, target_provider_status: providerStatus(created) });
       if (recordError) return { outcome: 'unknown' as const };
-      return this.persistProviderSuccess(input.bookingIntentId, created.appointmentKey);
+      return this.persistProviderSuccess(input.bookingIntentId);
     } catch (error) {
       const status = outcomeForFailure(error);
       await this.fail(input.bookingIntentId, status, error instanceof BookingProviderError ? error.category : 'internal');
@@ -159,11 +166,10 @@ export class VoiceBookingService implements VoiceSchedulingServices {
     const reconciliation = await connector.reconcileBooking(request);
     if (reconciliation.kind !== 'found') { await this.fail(intentId, 'provider_state_unknown', 'reconciliation_not_found'); return { outcome: 'unknown' as const }; }
     const { error } = await this.input.supabase.rpc('record_voice_booking_provider_success', { target_booking_intent_id: intentId, target_external_appointment_id: reconciliation.appointment.appointmentKey, target_provider_status: providerStatus(reconciliation.appointment) });
-    return error ? { outcome: 'unknown' as const } : this.persistProviderSuccess(intentId, reconciliation.appointment.appointmentKey);
+    return error ? { outcome: 'unknown' as const } : this.persistProviderSuccess(intentId);
   }
-  private async persistProviderSuccess(intentId: string, appointmentId: string | null) {
-    if (!appointmentId) return { outcome: 'unknown' as const };
-    const { error } = await this.input.supabase.rpc('complete_voice_booking_intent', { target_booking_intent_id: intentId, target_external_appointment_id: appointmentId, target_provider_status: 'unconfirmed' });
+  private async persistProviderSuccess(intentId: string) {
+    const { error } = await this.input.supabase.rpc('complete_voice_booking_intent', { target_booking_intent_id: intentId });
     return error ? { outcome: 'unknown' as const } : { outcome: 'booked' as const };
   }
   private async context(callId: string) { const { data, error } = await this.input.supabase.rpc('get_voice_scheduling_context', { target_call_id: callId }); if (error) throw new Error('Could not read scheduling context.'); return data[0] ?? null; }

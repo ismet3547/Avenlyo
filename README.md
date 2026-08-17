@@ -415,10 +415,17 @@ For Google, availability is a trusted intersection of location business hours, I
 minimum lead, and Google FreeBusy ranges. It uses a 14-day horizon, 15-minute local grid, at most
 five resources and five model-facing candidates. Busy ranges are merged as `[start, end)` and a
 full appointment duration must fit. Candidates still expire after ten minutes.
+Every selected calendar must be present in the FreeBusy response with no calendar-level error;
+missing, malformed, or partial Google responses fail closed and produce no candidates. Nonexistent
+spring-forward wall times are skipped. For fall-back ambiguity Avenlyo uses the earlier occurrence,
+then defensively removes duplicate provider/resource/type intervals before limiting results.
 
 Before the one permitted Google event write, Avenlyo claims a short PostgreSQL exclusion lease for
 the resource/interval and rechecks FreeBusy. This prevents two Avenlyo callers from writing the
 same calendar interval without holding a database transaction open over Google network calls.
+The active integration, connected status, type/resource bookability, and Google type-to-resource
+mapping are checked again before a first provider write. A later configuration change therefore
+requires fresh availability and cannot post a stale candidate.
 
 ### Booking and recovery
 
@@ -433,6 +440,10 @@ derived from the booking-intent UUID. Private extended properties contain only t
 and integration IDs. `events.insert` is never blindly retried: a timeout, network error, 5xx, or
 409 triggers one bounded `events.get` reconciliation of that exact ID, calendar, interval, and
 private marker. A mismatch is treated as a safe conflict for human follow-up, never overwritten.
+Cancelled events and marker mismatches are never reconciled as successful bookings. Once provider
+success is durably recorded, its normalized provider status is retained for local persistence and
+recovery remains tied to the historical intent/integration even if an administrator later switches
+providers, disables the integration, or disables its catalog rows.
 
 ### Manual Google validation
 

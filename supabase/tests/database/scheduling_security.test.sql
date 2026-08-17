@@ -4,7 +4,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(16);
+select extensions.plan(17);
 
 insert into auth.users (id, email)
 values
@@ -155,11 +155,16 @@ select extensions.is(
   'provider_success_pending_persistence',
   'provider success has a recoverable, non-repostable persistence state'
 );
+select extensions.is(
+  (select provider_booking_status from public.booking_intents where id = '71900000-0000-0000-0000-000000000002'),
+  'unconfirmed',
+  'ezyVet provider success durably retains its normalized unconfirmed status'
+);
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
-  $$ select * from public.complete_voice_booking_intent('71900000-0000-0000-0000-000000000002', 'appointment_1', 'unconfirmed') $$,
+  $$ select * from public.complete_voice_booking_intent('71900000-0000-0000-0000-000000000002') $$,
   'trusted backend persists a previously recorded provider success idempotently'
 );
 reset role;

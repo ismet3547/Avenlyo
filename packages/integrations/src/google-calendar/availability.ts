@@ -18,11 +18,18 @@ function minutes(value: string): number | null {
 function dayName(date: Temporal.PlainDate): string {
   return ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'][date.dayOfWeek - 1] ?? 'monday';
 }
-function localInstant(date: Temporal.PlainDate, minute: number, timezone: string): Temporal.Instant {
-  return Temporal.ZonedDateTime.from({
+function localInstant(date: Temporal.PlainDate, minute: number, timezone: string): Temporal.Instant | null {
+  const fields = {
     timeZone: timezone, year: date.year, month: date.month, day: date.day,
     hour: Math.floor(minute / 60), minute: minute % 60,
-  }, { disambiguation: 'compatible' }).toInstant();
+  };
+  const expected = Temporal.PlainDateTime.from(fields);
+  const earlier = Temporal.ZonedDateTime.from(fields, { disambiguation: 'earlier' });
+  const later = Temporal.ZonedDateTime.from(fields, { disambiguation: 'later' });
+  // A spring-forward wall time does not exist. Never coerce it into a later offer.
+  if (!earlier.toPlainDateTime().equals(expected) || !later.toPlainDateTime().equals(expected)) return null;
+  // For a fall-back ambiguity we deliberately choose the earlier occurrence.
+  return earlier.toInstant();
 }
 function mergeBusy(ranges: readonly GoogleBusyPeriod[]): readonly { readonly end: number; readonly start: number }[] {
   const ordered = ranges.map((range) => ({ start: Date.parse(range.start), end: Date.parse(range.end) }))
@@ -54,6 +61,7 @@ export function createGoogleAvailabilitySlots(input: {
   const now = input.now ?? Temporal.Now.instant();
   const earliest = now.add({ minutes: input.minimumLeadMinutes }).epochMilliseconds;
   const result: AvailabilitySlot[] = [];
+  const seen = new Set<string>();
   for (const dateText of input.dates) {
     const date = Temporal.PlainDate.from(dateText);
     const hours = input.businessHours[dayName(date)];
@@ -65,14 +73,16 @@ export function createGoogleAvailabilitySlots(input: {
       for (let minute = opening; minute + input.appointmentType.defaultDurationMinutes <= closing; minute += SLOT_GRID_MINUTES) {
         const start = localInstant(date, minute, input.timezone);
         const end = localInstant(date, minute + input.appointmentType.defaultDurationMinutes, input.timezone);
-        if (start.epochMilliseconds < earliest || end.epochMilliseconds <= start.epochMilliseconds) continue;
+        if (!start || !end || start.epochMilliseconds < earliest
+          || end.epochMilliseconds - start.epochMilliseconds !== input.appointmentType.defaultDurationMinutes * 60_000) continue;
         if (!wholeSlotFree(start.epochMilliseconds, end.epochMilliseconds, busy)) continue;
-        result.push({ appointmentTypeKey: input.appointmentType.key, endAt: end.toString(), providerDisplayName: resource.name, resourceKey: resource.key, startAt: start.toString(), timezone: input.timezone });
-        if (result.length >= MAX_SLOTS) return result;
+        const slot = { appointmentTypeKey: input.appointmentType.key, endAt: end.toString(), providerDisplayName: resource.name, resourceKey: resource.key, startAt: start.toString(), timezone: input.timezone };
+        const key = `${slot.resourceKey}:${slot.startAt}:${slot.endAt}:${slot.appointmentTypeKey}`;
+        if (!seen.has(key)) { seen.add(key); result.push(slot); }
       }
     }
   }
-  return result;
+  return result.slice(0, MAX_SLOTS);
 }
 
 export { MAX_SLOTS as MAX_GOOGLE_MODEL_SLOTS, SLOT_GRID_MINUTES };

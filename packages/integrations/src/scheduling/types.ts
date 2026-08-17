@@ -86,6 +86,8 @@ export interface CreateBookingResult {
 export interface BookingReconciliationRequest {
   readonly appointmentType: BookingAppointmentType;
   readonly bookingIntentId?: string;
+  /** Trusted integration identity used to verify provider-side reconciliation metadata. */
+  readonly integrationId?: string;
   readonly customer: BookingCustomer;
   readonly resource: BookingResource;
   readonly slot: AvailabilitySlot;
