@@ -85,6 +85,8 @@ export interface VoiceToolCall {
   readonly callId: string;
   /** Latest persisted inbound speech, supplied only by the trusted sideband runtime. */
   readonly confirmationText?: string | null;
+  /** Exact durable customer transcript that caused this tool call; never model supplied. */
+  readonly triggeringInboundMessageId?: string | null;
   readonly name: string;
   /** Emergency escalation permanently disables scheduling for the current call. */
   readonly schedulingBlocked?: boolean;
@@ -119,7 +121,11 @@ export interface VoiceSchedulingServices {
     context: VoiceCallContext,
   ): Promise<readonly VoiceBookingCandidate[]>;
   prepareAppointmentBooking(
-    input: { readonly candidateId: string; readonly subjectName: string | null; readonly toolCallId: string },
+    input: {
+      readonly candidateId: string;
+      readonly subjectName: string | null;
+      readonly toolCallId: string;
+    },
     context: VoiceCallContext,
   ): Promise<{
     readonly intent: VoiceBookingIntent | null;
@@ -129,6 +135,7 @@ export interface VoiceSchedulingServices {
     input: {
       readonly bookingIntentId: string;
       readonly confirmationText: string | null;
+      readonly triggeringInboundMessageId: string | null;
       readonly toolCallId: string;
     },
     context: VoiceCallContext,

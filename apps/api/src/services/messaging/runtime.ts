@@ -1,5 +1,15 @@
-import { env, isTwilioMessagingConfigured } from '../../env.js';
+import {
+  env,
+  isEzyVetRuntimeConfigured,
+  isGoogleCalendarRuntimeConfigured,
+  isTwilioMessagingConfigured,
+} from '../../env.js';
 import { createServiceSupabaseClient } from '../../lib/supabase.js';
+
+import { ApiSchedulingConnectorRegistry } from '../scheduling/connector-registry.js';
+import { EzyVetIntegrationService } from '../scheduling/ezyvet-service.js';
+import { GoogleCalendarIntegrationService } from '../scheduling/google-calendar-service.js';
+import { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
 
 import { ConversationAgentService } from './conversation-agent.js';
 import { TwilioSdkOutboundClient } from './twilio.js';
@@ -14,10 +24,37 @@ export interface MessagingRuntime {
 export function createMessagingRuntime(): MessagingRuntime | null {
   const supabase = createServiceSupabaseClient();
   if (!supabase) return null;
+  const ezyVet =
+    isEzyVetRuntimeConfigured && env.EZYVET_PARTNER_ID
+      ? new EzyVetIntegrationService({ partnerId: env.EZYVET_PARTNER_ID, supabase })
+      : undefined;
+  const googleCalendar =
+    isGoogleCalendarRuntimeConfigured &&
+    env.GOOGLE_CLIENT_ID &&
+    env.GOOGLE_CLIENT_SECRET &&
+    env.GOOGLE_OAUTH_REDIRECT_URI
+      ? new GoogleCalendarIntegrationService({
+          clientId: env.GOOGLE_CLIENT_ID,
+          clientSecret: env.GOOGLE_CLIENT_SECRET,
+          oauthRedirectUri: env.GOOGLE_OAUTH_REDIRECT_URI,
+          supabase,
+        })
+      : undefined;
+  const scheduling =
+    ezyVet || googleCalendar
+      ? new SchedulingBookingService({
+          connectors: new ApiSchedulingConnectorRegistry({
+            ...(ezyVet ? { ezyVet } : {}),
+            ...(googleCalendar ? { googleCalendar } : {}),
+          }),
+          supabase,
+        })
+      : undefined;
   const agent = env.OPENAI_API_KEY
     ? new ConversationAgentService({
         apiKey: env.OPENAI_API_KEY,
         model: env.OPENAI_AGENT_MODEL,
+        ...(scheduling ? { scheduling } : {}),
         supabase,
       })
     : undefined;

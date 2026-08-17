@@ -41,6 +41,7 @@ export interface TwilioOutboundMessage {
 
 export interface TwilioOutboundClient {
   send(input: TwilioOutboundMessage): Promise<{ readonly messageSid: string }>;
+  verifySmsCapability(phoneNumber: string): Promise<boolean>;
 }
 
 /** The only code path permitted to make an outbound SMS request. Destination data is DB-derived. */
@@ -63,5 +64,18 @@ export class TwilioSdkOutboundClient implements TwilioOutboundClient {
     });
     if (!isTwilioMessageSid(result.sid)) throw new Error('Twilio returned an invalid message SID.');
     return { messageSid: result.sid };
+  }
+
+  public async verifySmsCapability(phoneNumber: string): Promise<boolean> {
+    const numbers = await this.client.incomingPhoneNumbers.list({ limit: 1, phoneNumber });
+    const number = numbers[0] as unknown;
+    if (!number || typeof number !== 'object' || Array.isArray(number)) return false;
+    const capabilities = (number as { readonly capabilities?: unknown }).capabilities;
+    return Boolean(
+      capabilities &&
+      typeof capabilities === 'object' &&
+      !Array.isArray(capabilities) &&
+      (capabilities as { readonly sms?: unknown }).sms === true,
+    );
   }
 }

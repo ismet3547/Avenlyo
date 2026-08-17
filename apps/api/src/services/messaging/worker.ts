@@ -130,12 +130,11 @@ export class MessageProcessingWorker {
 
   private async deliverSms(messageId: string): Promise<void> {
     if (!this.input.twilio) throw new Error('Twilio outbound delivery is not configured.');
-    const { data, error } = await this.input.supabase.rpc('get_sms_delivery_execution_context', {
+    const { data, error } = await this.input.supabase.rpc('claim_sms_delivery_submission', {
       target_message_id: messageId,
     });
     const execution = data?.[0];
     if (error || !execution) return;
-    await this.input.supabase.rpc('mark_sms_delivery_sending', { target_message_id: messageId });
     try {
       const submission = await this.input.twilio.send({
         body: execution.body,

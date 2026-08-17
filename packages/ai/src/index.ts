@@ -41,6 +41,12 @@ export {
 } from './tools/executor';
 export { activeToolDefinitions, activeToolsForIndustry } from './tools/registry';
 export {
+  availableAppointmentsSchema,
+  bookAppointmentFunction,
+  bookAppointmentSchema,
+  getAvailableAppointmentsFunction,
+  prepareAppointmentBookingFunction,
+  prepareAppointmentBookingSchema,
   requestHumanHelpFunction,
   requestHumanHelpSchema,
   searchBusinessKnowledgeFunction,

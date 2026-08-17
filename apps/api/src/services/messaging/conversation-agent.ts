@@ -10,6 +10,8 @@ import { resolveIndustryPack } from '@avenlyo/industries';
 import { OpenAIEmbeddingProvider } from '@avenlyo/knowledge';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import type { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
+
 interface HistoryValue {
   readonly author_type?: unknown;
   readonly body?: unknown;
@@ -43,6 +45,7 @@ export class ConversationAgentService {
     private readonly input: {
       readonly apiKey: string;
       readonly model: string;
+      readonly scheduling?: SchedulingBookingService;
       readonly supabase: SupabaseClient<Database>;
     },
   ) {
@@ -100,6 +103,36 @@ export class ConversationAgentService {
           title: match.title,
         }));
       },
+      ...(this.input.scheduling
+        ? {
+            scheduling: {
+              getAvailableAppointments: (tool, executionContext) =>
+                executionContext.locationId
+                  ? this.input.scheduling!.getAvailableAppointments(tool, {
+                      conversationId: executionContext.conversationId,
+                      triggeringInboundMessageId:
+                        executionContext.triggeringInboundMessageId ?? null,
+                    })
+                  : Promise.resolve([]),
+              prepareAppointmentBooking: (tool, executionContext) =>
+                executionContext.locationId
+                  ? this.input.scheduling!.prepareAppointmentBooking(tool, {
+                      conversationId: executionContext.conversationId,
+                      triggeringInboundMessageId:
+                        executionContext.triggeringInboundMessageId ?? null,
+                    })
+                  : Promise.resolve({ intent: null, outcome: 'not_found' as const }),
+              bookAppointment: (tool, executionContext) =>
+                executionContext.locationId
+                  ? this.input.scheduling!.bookAppointment(tool, {
+                      conversationId: executionContext.conversationId,
+                      triggeringInboundMessageId:
+                        executionContext.triggeringInboundMessageId ?? null,
+                    })
+                  : Promise.resolve({ outcome: 'unavailable' as const }),
+            },
+          }
+        : {}),
     });
     const runtime = new AgentRuntime(this.provider, executor, this.input.model);
     const locationAddress = toRecord(context.location_address);
@@ -115,15 +148,29 @@ export class ConversationAgentService {
       },
       context: {
         conversationId: context.conversation_id,
+        channel: context.channel_type === 'sms' ? 'sms' : 'web',
         industryId: industry.id,
         locationId: context.location_id,
         mode: 'customer',
         organizationId: context.organization_id,
+        triggeringInboundMessageId: inboundMessageId,
       },
       history: history.slice(0, -1),
       industry,
       userMessage,
     });
+    if (context.channel_type === 'sms' && result.text.length > 800 && !result.handoffRequested) {
+      await this.input.supabase.rpc('request_message_handoff', {
+        target_inbound_message_id: inboundMessageId,
+        target_reason: 'The requested SMS response exceeded the safe single-message limit.',
+        target_tool_call_id: `sms-length-${inboundMessageId}`,
+        target_urgency: 'normal',
+      });
+      return {
+        handoffRequested: true,
+        text: 'Thanks for your message. Iâ€™m asking the team to follow up with the details.',
+      };
+    }
     return { handoffRequested: result.handoffRequested, text: result.text };
   }
 }

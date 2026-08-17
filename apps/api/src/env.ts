@@ -27,8 +27,21 @@ export const env = parseEnvironment(
       .optional(),
     TWILIO_AUTH_TOKEN: z.string().min(16).optional(),
     TWILIO_MESSAGING_WEBHOOK_BASE_URL: z.string().url().optional(),
+    WEB_CHAT_IFRAME_ORIGIN: z.string().url().default('http://localhost:3000'),
   }),
 );
+
+if (
+  env.NODE_ENV === 'production' &&
+  env.TWILIO_MESSAGING_WEBHOOK_BASE_URL &&
+  !env.TWILIO_MESSAGING_WEBHOOK_BASE_URL.startsWith('https://')
+) {
+  throw new Error('TWILIO_MESSAGING_WEBHOOK_BASE_URL must use HTTPS in production.');
+}
+
+if (env.NODE_ENV === 'production' && !env.WEB_CHAT_IFRAME_ORIGIN.startsWith('https://')) {
+  throw new Error('WEB_CHAT_IFRAME_ORIGIN must use HTTPS in production.');
+}
 
 export const isSupabaseConfigured = Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
 

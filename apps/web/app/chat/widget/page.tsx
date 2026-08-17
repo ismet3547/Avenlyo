@@ -23,16 +23,37 @@ export default function HostedChatWidget() {
 function HostedChatWidgetContents() {
   const search = useSearchParams();
   const api = useMemo(() => search.get('api') ?? '', [search]);
-  const parentOrigin = useMemo(() => search.get('origin') ?? '', [search]);
-  const token = useMemo(() => search.get('token'), [search]);
+  const parentOrigin = useMemo(() => search.get('parentOrigin') ?? '', [search]);
+  const [token, setToken] = useState<string | null>(null);
+  const [welcome, setWelcome] = useState('');
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
   const [body, setBody] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const welcome = search.get('welcome');
-    if (!token || !parentOrigin) setError('Chat is unavailable right now.');
-    else if (welcome)
+    const expectedOrigin = parentOrigin;
+    const receive = (event: MessageEvent<unknown>) => {
+      if (event.origin !== expectedOrigin || event.source !== window.parent) return;
+      const value = event.data;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+      const payload = value as { type?: unknown; token?: unknown; welcomeMessage?: unknown };
+      if (
+        payload.type !== 'avenlyo.chat.initialize' ||
+        typeof payload.token !== 'string' ||
+        !/^[A-Za-z0-9_-]{43}$/.test(payload.token)
+      ) {
+        return;
+      }
+      setToken(payload.token);
+      setWelcome(typeof payload.welcomeMessage === 'string' ? payload.welcomeMessage : '');
+    };
+    window.addEventListener('message', receive);
+    return () => window.removeEventListener('message', receive);
+  }, [parentOrigin]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (welcome)
       setMessages([
         {
           id: 'welcome',
@@ -42,15 +63,15 @@ function HostedChatWidgetContents() {
           createdAt: new Date().toISOString(),
         },
       ]);
-  }, [parentOrigin, search, token]);
+  }, [token, welcome]);
 
   useEffect(() => {
-    if (!token || !api || !parentOrigin) return;
+    if (!token || !api) return;
     const poll = () =>
-      void fetch(
-        `${api}/v1/chat/messages?token=${encodeURIComponent(token)}&parentOrigin=${encodeURIComponent(parentOrigin)}`,
-        { method: 'GET' },
-      )
+      void fetch(`${api}/v1/chat/messages`, {
+        headers: { 'X-Avenlyo-Chat-Token': token },
+        method: 'GET',
+      })
         .then((response) =>
           response.ok
             ? (response.json() as Promise<{ messages: ChatMessage[] }>)
@@ -61,7 +82,7 @@ function HostedChatWidgetContents() {
     poll();
     const timer = window.setInterval(poll, 3000);
     return () => window.clearInterval(timer);
-  }, [api, parentOrigin, token]);
+  }, [api, token]);
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -72,10 +93,8 @@ function HostedChatWidgetContents() {
       body: JSON.stringify({
         body: content,
         clientMessageId: crypto.randomUUID(),
-        parentOrigin,
-        token,
       }),
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain', 'X-Avenlyo-Chat-Token': token },
       method: 'POST',
     });
     if (!response.ok) setError('Your message could not be sent.');

@@ -364,6 +364,21 @@ export interface GenericBookingExecutionContextRow {
   current_write_eligible: boolean;
 }
 
+export interface ConversationSchedulingContextRow {
+  organization_id: string;
+  location_id: string;
+  conversation_id: string;
+  contact_id: string | null;
+  trusted_transport_phone_e164: string | null;
+  contact_display_name: string | null;
+  integration_id: string;
+  provider: 'ezyvet' | 'google_calendar';
+  timezone: string;
+  business_hours: Json;
+  minimum_lead_minutes: number;
+  channel_type: 'sms' | 'web' | 'phone';
+}
+
 export interface CompletedBookingRow {
   appointment_id: string;
   is_existing: boolean;
@@ -483,6 +498,7 @@ export interface MessageAgentContextRow {
   business_hours: Json;
   business_phone: string | null;
   website_url: string | null;
+  channel_type: 'sms' | 'web' | 'phone';
   history: Json;
 }
 
@@ -708,6 +724,10 @@ export interface Database {
         };
         Returns: boolean;
       };
+      get_voice_transcript_message_id: {
+        Args: { target_call_id: string; target_external_item_id: string };
+        Returns: string | null;
+      };
       request_inbound_voice_handoff: {
         Args: {
           target_call_id: string;
@@ -892,6 +912,7 @@ export interface Database {
           target_call_id: string;
           target_booking_intent_id: string;
           target_tool_call_id: string;
+          target_inbound_message_id?: string | null;
         };
         Returns: BookingClaimRow[];
       };
@@ -962,7 +983,6 @@ export interface Database {
       append_web_chat_message: {
         Args: {
           target_token_hash: string;
-          target_origin: string;
           target_client_message_id: string;
           target_body: string;
           target_rate_scope: string;
@@ -970,7 +990,7 @@ export interface Database {
         Returns: WebChatMessageRow[];
       };
       get_web_chat_messages: {
-        Args: { target_token_hash: string; target_origin: string; target_after?: string | null };
+        Args: { target_token_hash: string; target_after?: string | null };
         Returns: PublicWebChatMessageRow[];
       };
       get_my_inbox_conversations: {
@@ -1042,6 +1062,18 @@ export interface Database {
         Args: { target_message_id: string };
         Returns: SmsDeliveryExecutionRow[];
       };
+      claim_sms_delivery_submission: {
+        Args: { target_message_id: string };
+        Returns: SmsDeliveryExecutionRow[];
+      };
+      set_sms_phone_number_enabled_for_user: {
+        Args: { target_user_id: string; target_phone_number_id: string; target_enabled: boolean };
+        Returns: undefined;
+      };
+      get_sms_phone_number_for_user: {
+        Args: { target_user_id: string; target_phone_number_id: string };
+        Returns: string;
+      };
       mark_sms_delivery_sending: { Args: { target_message_id: string }; Returns: undefined };
       record_sms_delivery_submission: {
         Args: { target_message_id: string; target_provider_message_id: string };
@@ -1067,6 +1099,49 @@ export interface Database {
           target_tool_call_id: string;
         };
         Returns: BookingClaimRow[];
+      };
+      get_conversation_scheduling_context: {
+        Args: { target_conversation_id: string };
+        Returns: ConversationSchedulingContextRow[];
+      };
+      create_conversation_booking_candidates: {
+        Args: { target_conversation_id: string; available_slots: Json };
+        Returns: BookingCandidateRow[];
+      };
+      prepare_conversation_scheduling_booking_intent: {
+        Args: {
+          target_conversation_id: string;
+          target_candidate_id: string;
+          resolved_contact_uid: string | null;
+          resolved_subject_uid: string | null;
+          resolved_subject_name: string | null;
+          trusted_contact_id: string | null;
+        };
+        Returns: BookingIntentRow[];
+      };
+      get_scheduling_booking_execution_context: {
+        Args: { target_booking_intent_id: string };
+        Returns: GenericBookingExecutionContextRow[];
+      };
+      record_scheduling_booking_provider_success: {
+        Args: {
+          target_booking_intent_id: string;
+          target_external_appointment_id: string;
+          target_provider_status: 'confirmed' | 'unconfirmed';
+        };
+        Returns: undefined;
+      };
+      complete_scheduling_booking_intent: {
+        Args: { target_booking_intent_id: string };
+        Returns: CompletedBookingRow[];
+      };
+      fail_scheduling_booking_intent: {
+        Args: {
+          target_booking_intent_id: string;
+          target_status: string;
+          target_error_category: string;
+        };
+        Returns: undefined;
       };
     };
     Enums: EmptyRecord;

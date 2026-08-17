@@ -22,19 +22,23 @@ function formFields(request: FastifyRequest): TwilioFormFields | null {
   return fields;
 }
 
-function mediaMetadata(form: TwilioFormFields): readonly Record<string, string>[] {
+export function mediaMetadata(form: TwilioFormFields): readonly Record<string, string>[] {
   const count = Math.min(10, Number.parseInt(form.NumMedia ?? '0', 10) || 0);
   return Array.from({ length: count }, (_, index) => ({
     content_type: form[`MediaContentType${index}`] ?? '',
-    url: form[`MediaUrl${index}`] ?? '',
-  })).filter((media) => media.url.length > 0);
+  }));
 }
 
-function formMetadata(form: TwilioFormFields): Record<string, string> {
+export function formMetadata(form: TwilioFormFields): Record<string, string> {
   const permitted = ['AccountSid', 'MessagingServiceSid', 'ProfileName', 'SmsStatus', 'WaId'];
-  return Object.fromEntries(
+  const metadata = Object.fromEntries(
     permitted.flatMap((key) => (form[key] ? [[key, form[key]] as const] : [])),
   );
+  const optOutType = form.OptOutType?.trim().toUpperCase();
+  if (optOutType === 'STOP' || optOutType === 'START' || optOutType === 'HELP') {
+    metadata.opt_out_type = optOutType.toLowerCase();
+  }
+  return metadata;
 }
 
 const statusPayload = z.object({

@@ -44,8 +44,8 @@ export default async function InboxPage() {
         Customer conversations
       </h1>
       <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
-        One operational inbox for SMS and web chat. Taking over pauses automation immediately;
-        resuming AI waits for the customer&apos;s next message.
+        One operational inbox for phone, SMS, and web chat. Taking over pauses automation
+        immediately; resuming AI waits for the customer&apos;s next message.
       </p>
       <div className="mt-8 grid overflow-hidden rounded-2xl border border-border bg-white shadow-sm lg:grid-cols-[20rem_1fr]">
         <aside className="border-b border-border lg:border-r lg:border-b-0">
@@ -143,26 +143,33 @@ export default async function InboxPage() {
                   </li>
                 ))}
               </ol>
-              <form action={sendHumanReplyAction} className="mt-6 border-t border-border pt-5">
-                <input name="conversationId" type="hidden" value={selected.conversation_id} />
-                <label className="sr-only" htmlFor="inbox-reply">
-                  Reply
-                </label>
-                <textarea
-                  className="min-h-24 w-full rounded-lg border border-border bg-white p-3 text-sm text-ink outline-none ring-primary transition focus:ring-2"
-                  id="inbox-reply"
-                  maxLength={2000}
-                  name="body"
-                  placeholder="Write a human reply…"
-                  required
-                />
-                <button
-                  className="mt-3 inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-ink/90"
-                  type="submit"
-                >
-                  <MessageCircleMore aria-hidden="true" className="size-4" /> Send reply
-                </button>
-              </form>
+              {selected.channel_type === 'sms' || selected.channel_type === 'web' ? (
+                <form action={sendHumanReplyAction} className="mt-6 border-t border-border pt-5">
+                  <input name="conversationId" type="hidden" value={selected.conversation_id} />
+                  <label className="sr-only" htmlFor="inbox-reply">
+                    Reply
+                  </label>
+                  <textarea
+                    className="min-h-24 w-full rounded-lg border border-border bg-white p-3 text-sm text-ink outline-none ring-primary transition focus:ring-2"
+                    id="inbox-reply"
+                    maxLength={2000}
+                    name="body"
+                    placeholder="Write a human reply…"
+                    required
+                  />
+                  <button
+                    className="mt-3 inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-ink/90"
+                    type="submit"
+                  >
+                    <MessageCircleMore aria-hidden="true" className="size-4" /> Send reply
+                  </button>
+                </form>
+              ) : (
+                <p className="mt-6 border-t border-border pt-5 text-sm text-muted-foreground">
+                  Phone conversations are shown for context. Use the configured calling tools to
+                  reply.
+                </p>
+              )}
             </>
           ) : (
             <div className="flex min-h-[24rem] items-center justify-center text-center text-sm leading-6 text-muted-foreground">

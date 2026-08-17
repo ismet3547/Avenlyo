@@ -43,6 +43,7 @@ function bookingInput() {
   return {
     bookingIntentId: 'intent_1',
     confirmationText: 'Yes, please book it.',
+    triggeringInboundMessageId: 'message_1',
     toolCallId: 'tool_1',
   };
 }
@@ -54,7 +55,10 @@ function serviceFor(input: {
 }) {
   const forIntegration = vi.fn().mockResolvedValue(input.connector);
   const rpc = vi.fn((name: string) => {
-    if (name === 'claim_voice_scheduling_booking_intent') {
+    if (name === 'get_voice_scheduling_context') {
+      return Promise.resolve({ data: [{ conversation_id: 'conversation_1' }], error: null });
+    }
+    if (name === 'claim_conversation_scheduling_booking_intent') {
       return Promise.resolve({
         data: [
           {
@@ -66,7 +70,7 @@ function serviceFor(input: {
         error: null,
       });
     }
-    if (name === 'get_voice_booking_execution_context')
+    if (name === 'get_scheduling_booking_execution_context')
       return Promise.resolve({ data: [input.executionRow ?? execution], error: null });
     if (name === 'claim_booking_slot_lease')
       return Promise.resolve({ data: [{ lease_id: 'lease_1' }], error: null });
@@ -104,8 +108,11 @@ describe('VoiceBookingService booking reliability', () => {
     expect(reconcileBooking).toHaveBeenCalledOnce();
     expect(createBooking).not.toHaveBeenCalled();
     expect(forIntegration).toHaveBeenCalledWith('google_calendar', 'integration_1');
-    expect(rpc).toHaveBeenCalledWith('record_voice_booking_provider_success', expect.any(Object));
-    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+    expect(rpc).toHaveBeenCalledWith(
+      'record_scheduling_booking_provider_success',
+      expect.any(Object),
+    );
+    expect(rpc).toHaveBeenCalledWith('complete_scheduling_booking_intent', {
       target_booking_intent_id: 'intent_1',
     });
   });
@@ -129,8 +136,11 @@ describe('VoiceBookingService booking reliability', () => {
     expect(reconcileBooking).toHaveBeenCalledOnce();
     expect(createBooking).not.toHaveBeenCalled();
     expect(forIntegration).toHaveBeenCalledWith('ezyvet', 'integration_1');
-    expect(rpc).toHaveBeenCalledWith('record_voice_booking_provider_success', expect.any(Object));
-    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+    expect(rpc).toHaveBeenCalledWith(
+      'record_scheduling_booking_provider_success',
+      expect.any(Object),
+    );
+    expect(rpc).toHaveBeenCalledWith('complete_scheduling_booking_intent', {
       target_booking_intent_id: 'intent_1',
     });
   });
@@ -151,7 +161,7 @@ describe('VoiceBookingService booking reliability', () => {
     expect(createBooking).not.toHaveBeenCalled();
     expect(reconcileBooking).not.toHaveBeenCalled();
     expect(forIntegration).not.toHaveBeenCalled();
-    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+    expect(rpc).toHaveBeenCalledWith('complete_scheduling_booking_intent', {
       target_booking_intent_id: 'intent_1',
     });
   });

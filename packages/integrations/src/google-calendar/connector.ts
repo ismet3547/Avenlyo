@@ -1,6 +1,16 @@
 import { Temporal } from '@js-temporal/polyfill';
 import { BookingProviderError } from '../scheduling/errors';
-import type { AvailabilityRequest, AvailabilitySlot, BookingConnector, BookingPartyResolution, BookingPartyResolutionRequest, BookingReconciliationRequest, BookingReconciliationResult, CreateBookingRequest, CreateBookingResult } from '../scheduling/types';
+import type {
+  AvailabilityRequest,
+  AvailabilitySlot,
+  BookingConnector,
+  BookingPartyResolution,
+  BookingPartyResolutionRequest,
+  BookingReconciliationRequest,
+  BookingReconciliationResult,
+  CreateBookingRequest,
+  CreateBookingResult,
+} from '../scheduling/types';
 
 import { createGoogleAvailabilitySlots } from './availability';
 import type { GoogleCalendarClient } from './client';
@@ -11,68 +21,133 @@ export function googleEventId(bookingIntentId: string): string {
   return id;
 }
 
-function exactEvent(event: { readonly end: string; readonly id: string; readonly privateProperties: Readonly<Record<string, string>>; readonly start: string; readonly status: string }, input: BookingReconciliationRequest): boolean {
+function exactEvent(
+  event: {
+    readonly end: string;
+    readonly id: string;
+    readonly privateProperties: Readonly<Record<string, string>>;
+    readonly start: string;
+    readonly status: string;
+  },
+  input: BookingReconciliationRequest,
+): boolean {
   if (!input.bookingIntentId || !input.integrationId) return false;
-  return event.id === googleEventId(input.bookingIntentId)
-    && event.status === 'confirmed'
-    && Date.parse(event.start) === Date.parse(input.slot.startAt)
-    && Date.parse(event.end) === Date.parse(input.slot.endAt)
-    && event.privateProperties.avenlyo_booking_intent_id === input.bookingIntentId
-    && event.privateProperties.avenlyo_integration_id === input.integrationId;
+  return (
+    event.id === googleEventId(input.bookingIntentId) &&
+    event.status === 'confirmed' &&
+    Date.parse(event.start) === Date.parse(input.slot.startAt) &&
+    Date.parse(event.end) === Date.parse(input.slot.endAt) &&
+    event.privateProperties.avenlyo_booking_intent_id === input.bookingIntentId &&
+    event.privateProperties.avenlyo_integration_id === input.integrationId
+  );
 }
 function localDayBoundary(dateText: string, timezone: string, endOfDay: boolean): string {
   const date = Temporal.PlainDate.from(dateText);
   return Temporal.ZonedDateTime.from({
-    timeZone: timezone, year: date.year, month: date.month, day: date.day,
-    hour: endOfDay ? 23 : 0, minute: endOfDay ? 59 : 0, second: endOfDay ? 59 : 0,
-  }).toInstant().toString();
+    timeZone: timezone,
+    year: date.year,
+    month: date.month,
+    day: date.day,
+    hour: endOfDay ? 23 : 0,
+    minute: endOfDay ? 59 : 0,
+    second: endOfDay ? 59 : 0,
+  })
+    .toInstant()
+    .toString();
 }
 
-/** Google is a calendar, not a CRM: local trusted caller details are simply carried into the event. */
+/** Google is a calendar, not a CRM: a web visitor may book without a verified phone identity. */
 export class GoogleCalendarConnector implements BookingConnector {
   public readonly provider = 'google_calendar' as const;
   public constructor(private readonly client: GoogleCalendarClient) {}
 
-  public resolveBookingParty(input: BookingPartyResolutionRequest): Promise<BookingPartyResolution> {
-    if (!input.trustedCallerE164 && !input.trustedContactId) return Promise.resolve({ kind: 'unresolved' });
-    return Promise.resolve({ kind: 'resolved', party: { customer: { displayName: input.trustedContactDisplayName, providerKey: null, trustedPhoneE164: input.trustedCallerE164 }, subject: { displayName: input.subjectName, providerKey: null } } });
+  public resolveBookingParty(
+    input: BookingPartyResolutionRequest,
+  ): Promise<BookingPartyResolution> {
+    return Promise.resolve({
+      kind: 'resolved',
+      party: {
+        customer: {
+          displayName:
+            input.trustedContactDisplayName ??
+            (!input.trustedCallerE164 && !input.trustedContactId ? 'Website visitor' : null),
+          providerKey: null,
+          trustedPhoneE164: input.trustedCallerE164,
+        },
+        subject: { displayName: input.subjectName, providerKey: null },
+      },
+    });
   }
 
   public async getAvailability(input: AvailabilityRequest): Promise<readonly AvailabilitySlot[]> {
     const policy = input.availabilityPolicy;
-    if (!policy || input.resources.length === 0 || input.resources.length > 5) throw new BookingProviderError('invalid_request');
+    if (!policy || input.resources.length === 0 || input.resources.length > 5)
+      throw new BookingProviderError('invalid_request');
     const dates = input.dates.slice(0, 14);
     if (!dates.length) return [];
     const starts = dates.map((date) => localDayBoundary(date, input.timezone, false)).sort();
     const ends = dates.map((date) => localDayBoundary(date, input.timezone, true)).sort();
-    const timeMin = starts[0]; const timeMax = ends.at(-1);
+    const timeMin = starts[0];
+    const timeMax = ends.at(-1);
     if (!timeMin || !timeMax) return [];
-    const busyByResource = await this.client.freeBusy({ calendarIds: input.resources.map((resource) => resource.key), timeMin, timeMax, timeZone: input.timezone });
-    return createGoogleAvailabilitySlots({ appointmentType: input.appointmentType, businessHours: policy.businessHours, busyByResource, dates, minimumLeadMinutes: policy.minimumLeadMinutes, resources: input.resources, timezone: input.timezone });
+    const busyByResource = await this.client.freeBusy({
+      calendarIds: input.resources.map((resource) => resource.key),
+      timeMin,
+      timeMax,
+      timeZone: input.timezone,
+    });
+    return createGoogleAvailabilitySlots({
+      appointmentType: input.appointmentType,
+      businessHours: policy.businessHours,
+      busyByResource,
+      dates,
+      minimumLeadMinutes: policy.minimumLeadMinutes,
+      resources: input.resources,
+      timezone: input.timezone,
+    });
   }
 
   public async createBooking(input: CreateBookingRequest): Promise<CreateBookingResult> {
-    if (!input.bookingIntentId || !input.integrationId) throw new BookingProviderError('invalid_request');
+    if (!input.bookingIntentId || !input.integrationId)
+      throw new BookingProviderError('invalid_request');
     const eventId = googleEventId(input.bookingIntentId);
-    const summary = input.subject.displayName ? `${input.appointmentType.name} — ${input.subject.displayName}` : input.appointmentType.name;
+    const summary = input.subject.displayName
+      ? `${input.appointmentType.name} — ${input.subject.displayName}`
+      : input.appointmentType.name;
     const event = await this.client.insertEvent(input.resource.key, {
-      id: eventId, summary,
+      id: eventId,
+      summary,
       description: `Booked by Avenlyo${input.customer.trustedPhoneE164 ? `\nCallback: ${input.customer.trustedPhoneE164}` : ''}`,
-      start: { dateTime: input.slot.startAt, timeZone: input.slot.timezone }, end: { dateTime: input.slot.endAt, timeZone: input.slot.timezone },
-      extendedProperties: { private: { avenlyo_booking_intent_id: input.bookingIntentId, avenlyo_integration_id: input.integrationId } },
+      start: { dateTime: input.slot.startAt, timeZone: input.slot.timezone },
+      end: { dateTime: input.slot.endAt, timeZone: input.slot.timezone },
+      extendedProperties: {
+        private: {
+          avenlyo_booking_intent_id: input.bookingIntentId,
+          avenlyo_integration_id: input.integrationId,
+        },
+      },
     });
     if (event.status !== 'confirmed') throw new BookingProviderError('provider_state_unknown');
     return { appointmentKey: event.id, providerStatus: 'confirmed' };
   }
 
-  public async reconcileBooking(input: BookingReconciliationRequest): Promise<BookingReconciliationResult> {
+  public async reconcileBooking(
+    input: BookingReconciliationRequest,
+  ): Promise<BookingReconciliationResult> {
     if (!input.bookingIntentId) return { kind: 'not_found' };
     try {
-      const event = await this.client.getEvent(input.resource.key, googleEventId(input.bookingIntentId));
+      const event = await this.client.getEvent(
+        input.resource.key,
+        googleEventId(input.bookingIntentId),
+      );
       if (!exactEvent(event, input)) throw new BookingProviderError('provider_conflict');
-      return { kind: 'found', appointment: { appointmentKey: event.id, providerStatus: 'confirmed' } };
+      return {
+        kind: 'found',
+        appointment: { appointmentKey: event.id, providerStatus: 'confirmed' },
+      };
     } catch (error) {
-      if (error instanceof BookingProviderError && error.category === 'not_found') return { kind: 'not_found' };
+      if (error instanceof BookingProviderError && error.category === 'not_found')
+        return { kind: 'not_found' };
       throw error;
     }
   }
