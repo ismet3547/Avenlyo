@@ -8,12 +8,14 @@ import { VoiceBookingService } from './voice-booking-service.js';
 
 describe('VoiceBookingService booking recovery', () => {
   it('reconciles after a simulated post-success crash and never sends another provider POST', async () => {
+    const createBooking = vi.fn();
+    const reconcileBooking = vi.fn().mockResolvedValue({
+      appointment: { appointmentKey: 'appointment_1', providerStatus: 'unconfirmed' },
+      kind: 'found',
+    });
     const connector = {
-      createBooking: vi.fn(),
-      reconcileBooking: vi.fn().mockResolvedValue({
-        appointment: { appointmentKey: 'appointment_1', providerStatus: 'unconfirmed' },
-        kind: 'found',
-      }),
+      createBooking,
+      reconcileBooking,
     } as unknown as EzyVetConnector;
     const rpc = vi.fn((name: string) => {
       if (name === 'claim_voice_booking_intent') {
@@ -76,8 +78,8 @@ describe('VoiceBookingService booking recovery', () => {
       ),
     ).resolves.toEqual({ outcome: 'booked' });
 
-    expect(connector.reconcileBooking).toHaveBeenCalledOnce();
-    expect(connector.createBooking).not.toHaveBeenCalled();
+    expect(reconcileBooking).toHaveBeenCalledOnce();
+    expect(createBooking).not.toHaveBeenCalled();
     expect(rpc).toHaveBeenCalledWith('record_voice_booking_provider_success', expect.any(Object));
     expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', expect.any(Object));
   });
