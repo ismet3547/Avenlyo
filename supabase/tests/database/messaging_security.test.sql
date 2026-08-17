@@ -426,26 +426,27 @@ select extensions.is(
   1,
   'trusted human SMS reply creates exactly one queued Twilio delivery'
 );
+select set_config('test.human_sms_reply_id', (select id::text from public.messages where body = 'Human reply bound to the newest SMS'), true);
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
-  (select count(*)::integer from public.claim_sms_delivery_submission((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  (select count(*)::integer from public.claim_sms_delivery_submission(current_setting('test.human_sms_reply_id')::uuid)),
   1,
   'human SMS delivery claim authorizes exactly one provider submission'
 );
 select extensions.is(
-  (select to_e164 from public.get_sms_delivery_execution_context((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  (select to_e164 from public.get_sms_delivery_execution_context(current_setting('test.human_sms_reply_id')::uuid)),
   '+14155550101',
   'human SMS delivery resolves the original immutable inbound Twilio From after contact mutation'
 );
 select extensions.is(
-  (select from_e164 from public.get_sms_delivery_execution_context((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  (select from_e164 from public.get_sms_delivery_execution_context(current_setting('test.human_sms_reply_id')::uuid)),
   '+14155550901',
   'human SMS delivery resolves the conversation Twilio DID as its trusted sender'
 );
 select extensions.is(
-  (select count(*)::integer from public.claim_sms_delivery_submission((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  (select count(*)::integer from public.claim_sms_delivery_submission(current_setting('test.human_sms_reply_id')::uuid)),
   0,
   'human SMS delivery cannot authorize a second provider submission'
 );
