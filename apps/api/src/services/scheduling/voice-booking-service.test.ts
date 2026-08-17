@@ -35,6 +35,10 @@ const execution = {
   trusted_phone_e164: '+14155550123',
 };
 
+type ExecutionRow = Omit<typeof execution, 'provider'> & {
+  readonly provider: 'ezyvet' | 'google_calendar';
+};
+
 function bookingInput() {
   return {
     bookingIntentId: 'intent_1',
@@ -46,8 +50,9 @@ function bookingInput() {
 function serviceFor(input: {
   readonly claimState: string;
   readonly connector: BookingConnector;
-  readonly executionRow?: typeof execution;
+  readonly executionRow?: ExecutionRow;
 }) {
+  const forIntegration = vi.fn().mockResolvedValue(input.connector);
   const rpc = vi.fn((name: string) => {
     if (name === 'claim_voice_scheduling_booking_intent') {
       return Promise.resolve({
@@ -68,10 +73,11 @@ function serviceFor(input: {
     return Promise.resolve({ data: null, error: null });
   });
   return {
+    forIntegration,
     rpc,
     service: new VoiceBookingService({
       connectors: {
-        forIntegration: vi.fn().mockResolvedValue(input.connector),
+        forIntegration,
       } as unknown as ApiSchedulingConnectorRegistry,
       supabase: { rpc } as unknown as SupabaseClient<Database>,
     }),
@@ -85,7 +91,7 @@ describe('VoiceBookingService booking reliability', () => {
       appointment: { appointmentKey: 'event_1', providerStatus: 'confirmed' },
       kind: 'found',
     });
-    const { rpc, service } = serviceFor({
+    const { forIntegration, rpc, service } = serviceFor({
       claimState: 'booking_recovery',
       connector: { createBooking, reconcileBooking } as unknown as BookingConnector,
       executionRow: { ...execution, current_write_eligible: false },
@@ -97,7 +103,54 @@ describe('VoiceBookingService booking reliability', () => {
 
     expect(reconcileBooking).toHaveBeenCalledOnce();
     expect(createBooking).not.toHaveBeenCalled();
+    expect(forIntegration).toHaveBeenCalledWith('google_calendar', 'integration_1');
     expect(rpc).toHaveBeenCalledWith('record_voice_booking_provider_success', expect.any(Object));
+    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+      target_booking_intent_id: 'intent_1',
+    });
+  });
+
+  it('recovers a disconnected ezyVet booking without sending another provider POST', async () => {
+    const createBooking = vi.fn();
+    const reconcileBooking = vi.fn().mockResolvedValue({
+      appointment: { appointmentKey: 'ezyvet-appointment-1', providerStatus: 'unconfirmed' },
+      kind: 'found',
+    });
+    const { forIntegration, rpc, service } = serviceFor({
+      claimState: 'booking_recovery',
+      connector: { createBooking, reconcileBooking } as unknown as BookingConnector,
+      executionRow: { ...execution, current_write_eligible: false, provider: 'ezyvet' },
+    });
+
+    await expect(service.bookAppointment(bookingInput(), { callId: 'call_1' })).resolves.toEqual({
+      outcome: 'booked',
+    });
+
+    expect(reconcileBooking).toHaveBeenCalledOnce();
+    expect(createBooking).not.toHaveBeenCalled();
+    expect(forIntegration).toHaveBeenCalledWith('ezyvet', 'integration_1');
+    expect(rpc).toHaveBeenCalledWith('record_voice_booking_provider_success', expect.any(Object));
+    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+      target_booking_intent_id: 'intent_1',
+    });
+  });
+
+  it('persists a durable ezyVet provider result after disconnect without calling the provider', async () => {
+    const createBooking = vi.fn();
+    const reconcileBooking = vi.fn();
+    const { forIntegration, rpc, service } = serviceFor({
+      claimState: 'provider_success_pending_persistence',
+      connector: { createBooking, reconcileBooking } as unknown as BookingConnector,
+      executionRow: { ...execution, current_write_eligible: false, provider: 'ezyvet' },
+    });
+
+    await expect(service.bookAppointment(bookingInput(), { callId: 'call_1' })).resolves.toEqual({
+      outcome: 'booked',
+    });
+
+    expect(createBooking).not.toHaveBeenCalled();
+    expect(reconcileBooking).not.toHaveBeenCalled();
+    expect(forIntegration).not.toHaveBeenCalled();
     expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
       target_booking_intent_id: 'intent_1',
     });
@@ -119,6 +172,24 @@ describe('VoiceBookingService booking reliability', () => {
       outcome: 'unavailable',
     });
     expect(createBooking).not.toHaveBeenCalled();
+  });
+
+  it('blocks a fresh ezyVet write after disconnect without creating or reconciling', async () => {
+    const createBooking = vi.fn();
+    const reconcileBooking = vi.fn();
+    const { forIntegration, service } = serviceFor({
+      claimState: 'claimed',
+      connector: { createBooking, reconcileBooking } as unknown as BookingConnector,
+      executionRow: { ...execution, current_write_eligible: false, provider: 'ezyvet' },
+    });
+
+    await expect(service.bookAppointment(bookingInput(), { callId: 'call_1' })).resolves.toEqual({
+      outcome: 'unavailable',
+    });
+
+    expect(createBooking).not.toHaveBeenCalled();
+    expect(reconcileBooking).not.toHaveBeenCalled();
+    expect(forIntegration).not.toHaveBeenCalled();
   });
 
   it('blocks confirmation before execution when the database reports a changed provider policy', async () => {

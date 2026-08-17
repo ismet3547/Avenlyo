@@ -102,6 +102,13 @@ const schedulingReliabilityMigration = readFileSync(
   ),
   'utf8',
 );
+const ezyVetRecoveryMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816082000_phase_6_ezyvet_recovery_symmetry.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 const schedulingReliabilitySecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/scheduling_reliability.test.sql', import.meta.url),
   'utf8',
@@ -437,5 +444,19 @@ describe('Google Calendar scheduling migration definition', () => {
     expect(schedulingReliabilitySecurityTest).toContain('provider success persists after Google is disconnected');
     expect(schedulingReliabilitySecurityTest).toContain('removed Google type-resource mapping blocks a first provider write');
     expect(schedulingReliabilitySecurityTest).toContain('disabled ezyVet resource blocks a first provider write');
+  });
+
+  it('keeps ezyVet credentials recovery-only after a disconnect', () => {
+    expect(ezyVetRecoveryMigration).toContain('perform public.require_ezyvet_service_role()');
+    expect(ezyVetRecoveryMigration).toContain("and integration.provider = 'ezyvet'");
+    expect(ezyVetRecoveryMigration).not.toContain("integration.status = 'connected'");
+    expect(ezyVetRecoveryMigration).toContain('active_integration_id = null');
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'service role retrieves vaulted ezyVet credentials after disconnect for recovery',
+    );
+    expect(schedulingReliabilitySecurityTest).toContain('a fresh ezyVet write is blocked after disconnect');
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'service role receives no direct integration credential table grant',
+    );
   });
 });
