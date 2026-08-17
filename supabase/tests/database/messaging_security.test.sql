@@ -3,7 +3,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(39);
+select extensions.plan(57);
 
 insert into auth.users (id, email)
 values
@@ -110,6 +110,80 @@ select extensions.is(
   0,
   'media-only inbound SMS never enqueues the OpenAI text agent'
 );
+select extensions.is(
+  (select count(*)::integer from public.handoffs handoff join public.messages message on message.conversation_id = handoff.conversation_id
+    where message.external_id = 'SM00000000000000000000000000000006' and handoff.idempotency_key = 'message:' || message.id::text || ':media-unsupported'),
+  1,
+  'media-only SMS creates exactly one durable human handoff'
+);
+select extensions.is(
+  (select conversation.ai_mode from public.conversations conversation join public.messages message on message.conversation_id = conversation.id
+    where message.external_id = 'SM00000000000000000000000000000006'),
+  'human',
+  'media-only SMS stops automatic replies while a human follows up'
+);
+select extensions.is(
+  (select count(*)::integer from public.messages reply join public.messages inbound on inbound.id = reply.in_reply_to_message_id
+    where inbound.external_id = 'SM00000000000000000000000000000006' and reply.author_type = 'system'),
+  1,
+  'media-only SMS has exactly one deterministic acknowledgement'
+);
+update public.contacts set phone = '+14155550155' where phone = '+14155550105';
+select extensions.is(
+  (select transport_sender_e164 from public.messages where external_id = 'SM00000000000000000000000000000006'),
+  '+14155550105',
+  'inbound SMS retains the verified Twilio From value after the contact phone changes'
+);
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select accepted from public.bootstrap_inbound_sms('SM00000000000000000000000000000008', '+14155550107', '+14155550901', 'Please connect me to a person', '[]', '{}')),
+  true,
+  'handoff test inbound SMS is accepted through the trusted ingress'
+);
+select extensions.is(
+  (select created from public.request_message_handoff(
+    (select id from public.messages where external_id = 'SM00000000000000000000000000000008'),
+    'handoff-test', 'Customer requested a person', 'normal'
+  )),
+  true,
+  'requesting a handoff immediately changes the conversation mode'
+);
+select extensions.lives_ok(
+  $$ select * from public.persist_ai_message_reply(
+    (select id from public.messages where external_id = 'SM00000000000000000000000000000008'),
+    'A team member will help shortly.', true
+  ) $$,
+  'the triggering inbound turn may receive its one handoff acknowledgement after mode changes'
+);
+select extensions.is(
+  (select count(*)::integer from public.messages reply join public.messages inbound on inbound.id = reply.in_reply_to_message_id
+    where inbound.external_id = 'SM00000000000000000000000000000008' and reply.author_type = 'ai'),
+  1,
+  'handoff acknowledgement replay cannot create a second AI reply'
+);
+select extensions.is(
+  (select created from public.persist_ai_message_reply(
+    (select id from public.messages where external_id = 'SM00000000000000000000000000000008'),
+    'A team member will help shortly.', true
+  )),
+  false,
+  'replaying the exact handoff acknowledgement returns the original reply without duplication'
+);
+select extensions.is(
+  (select accepted from public.bootstrap_inbound_sms('SM00000000000000000000000000000009', '+14155550107', '+14155550901', 'Are you still there?', '[]', '{}')),
+  true,
+  'a later inbound message remains durable after handoff'
+);
+select extensions.is(
+  (select created from public.persist_ai_message_reply(
+    (select id from public.messages where external_id = 'SM00000000000000000000000000000009'),
+    'This must not be sent after staff takeover.', false
+  )),
+  false,
+  'late ordinary AI persistence is blocked after the conversation enters human mode'
+);
+reset role;
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
@@ -171,6 +245,41 @@ select extensions.is(
   'completed',
   'stale crash-window outbound job is finalized without a resend'
 );
+
+insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type, body, source_channel, author_type)
+select '91800000-0000-0000-0000-000000000010', organization_id, location_id, id, 'outbound', 'text', 'Delivery one', 'sms', 'system'
+from public.conversations where transport_phone_number_id = '91400000-0000-0000-0000-000000000001' limit 1;
+insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type, body, source_channel, author_type)
+select '91800000-0000-0000-0000-000000000011', organization_id, location_id, id, 'outbound', 'text', 'Delivery two', 'sms', 'system'
+from public.conversations where transport_phone_number_id = '91400000-0000-0000-0000-000000000001' limit 1;
+insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type, body, source_channel, author_type)
+select '91800000-0000-0000-0000-000000000012', organization_id, location_id, id, 'outbound', 'text', 'Delivery three', 'sms', 'system'
+from public.conversations where transport_phone_number_id = '91400000-0000-0000-0000-000000000001' limit 1;
+insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type, body, source_channel, author_type)
+select '91800000-0000-0000-0000-000000000013', organization_id, location_id, id, 'outbound', 'text', 'Delivery four', 'sms', 'system'
+from public.conversations where transport_phone_number_id = '91400000-0000-0000-0000-000000000001' limit 1;
+insert into public.message_deliveries (id, organization_id, location_id, message_id, provider, provider_message_id, status)
+values
+  ('91800000-0000-0000-0000-000000000020', '91000000-0000-0000-0000-000000000001', '91100000-0000-0000-0000-000000000001', '91800000-0000-0000-0000-000000000010', 'twilio', 'SM00000000000000000000000000000010', 'queued'),
+  ('91800000-0000-0000-0000-000000000021', '91000000-0000-0000-0000-000000000001', '91100000-0000-0000-0000-000000000001', '91800000-0000-0000-0000-000000000011', 'twilio', 'SM00000000000000000000000000000011', 'queued'),
+  ('91800000-0000-0000-0000-000000000022', '91000000-0000-0000-0000-000000000001', '91100000-0000-0000-0000-000000000001', '91800000-0000-0000-0000-000000000012', 'twilio', 'SM00000000000000000000000000000012', 'sent'),
+  ('91800000-0000-0000-0000-000000000023', '91000000-0000-0000-0000-000000000001', '91100000-0000-0000-0000-000000000001', '91800000-0000-0000-0000-000000000013', 'twilio', 'SM00000000000000000000000000000013', 'failed');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select public.record_twilio_message_status('SM00000000000000000000000000000010', 'sent');
+select public.record_twilio_message_status('SM00000000000000000000000000000011', 'failed', '30001');
+select public.record_twilio_message_status('SM00000000000000000000000000000012', 'delivered');
+select extensions.is((select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000020'), 'sent', 'queued delivery may transition to sent');
+select extensions.is((select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000021'), 'failed', 'queued delivery may transition to failed');
+select extensions.is((select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000022'), 'delivered', 'sent delivery may transition to delivered');
+select public.record_twilio_message_status('SM00000000000000000000000000000010', 'undelivered', '30002');
+select extensions.is((select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000020'), 'undelivered', 'sent delivery may transition to undelivered');
+select public.record_twilio_message_status('SM00000000000000000000000000000012', 'failed', '30003');
+select extensions.is((select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000022'), 'delivered', 'delivered delivery ignores a later failed callback');
+select public.record_twilio_message_status('SM00000000000000000000000000000013', 'sent');
+select extensions.is((select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000023'), 'failed', 'failed delivery ignores a later sent callback');
+select public.record_twilio_message_status('SM00000000000000000000000000000010', 'sent');
+select extensions.is((select status from public.message_deliveries where id = '91800000-0000-0000-0000-000000000020'), 'undelivered', 'late older callbacks do not reopen a terminal delivery');
 
 reset role;
 set local role authenticated;

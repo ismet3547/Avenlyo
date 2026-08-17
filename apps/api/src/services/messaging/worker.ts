@@ -146,6 +146,7 @@ export class MessageProcessingWorker {
         {
           target_message_id: messageId,
           target_provider_message_id: submission.messageSid,
+          target_provider_status: submission.providerStatus,
         },
       );
       if (savedError) throw new Error('SMS submission persistence failed.');

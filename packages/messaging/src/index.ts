@@ -2,7 +2,7 @@
 export type SmsKeywordCommand = 'help' | 'start' | 'stop' | null;
 
 const STOP_WORDS = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit']);
-const START_WORDS = new Set(['start', 'unstop', 'yes']);
+const START_WORDS = new Set(['start', 'unstop']);
 
 export function normalizeE164(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -17,24 +17,55 @@ export function detectSmsKeywordCommand(value: string | null | undefined): SmsKe
   return normalized === 'help' ? 'help' : null;
 }
 
-/** A monotonic provider-state ordering prevents an older callback from downgrading delivery UI. */
-export function twilioDeliveryRank(status: string): number | null {
-  switch (status) {
+export type TwilioDeliveryState =
+  | 'queued'
+  | 'submitting'
+  | 'submitted'
+  | 'sent'
+  | 'delivered'
+  | 'failed'
+  | 'undelivered'
+  | 'unknown'
+  | 'suppressed';
+
+export function normalizedTwilioDeliveryState(
+  status: string,
+): 'submitted' | 'sent' | 'delivered' | 'failed' | 'undelivered' | null {
+  switch (status.trim().toLowerCase()) {
     case 'queued':
-      return 0;
+    case 'accepted':
     case 'sending':
-      return 1;
+      return 'submitted';
     case 'sent':
-      return 2;
     case 'delivered':
-      return 3;
     case 'failed':
-      return 4;
     case 'undelivered':
-      return 5;
+      return status.trim().toLowerCase() as 'sent' | 'delivered' | 'failed' | 'undelivered';
     default:
       return null;
   }
+}
+
+export function canTransitionTwilioDeliveryState(
+  current: TwilioDeliveryState,
+  next: TwilioDeliveryState,
+): boolean {
+  if (current === next) return true;
+  if (current === 'queued')
+    return [
+      'submitting',
+      'submitted',
+      'sent',
+      'delivered',
+      'failed',
+      'undelivered',
+      'suppressed',
+    ].includes(next);
+  if (current === 'submitting')
+    return ['submitted', 'sent', 'delivered', 'failed', 'undelivered', 'unknown'].includes(next);
+  if (current === 'submitted') return ['sent', 'delivered', 'failed', 'undelivered'].includes(next);
+  if (current === 'sent') return next === 'delivered' || next === 'undelivered';
+  return false;
 }
 
 export function isTwilioMessageSid(value: string | null | undefined): value is string {

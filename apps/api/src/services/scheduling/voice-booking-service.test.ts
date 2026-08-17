@@ -32,7 +32,7 @@ const execution = {
   starts_at: '2026-09-01T10:00:00.000Z',
   subject_name: null,
   timezone: 'UTC',
-  trusted_phone_e164: '+14155550123',
+  trusted_phone_e164: '+14155550123' as string | null,
 };
 
 type ExecutionRow = Omit<typeof execution, 'provider'> & {
@@ -200,6 +200,29 @@ describe('VoiceBookingService booking reliability', () => {
     expect(createBooking).not.toHaveBeenCalled();
     expect(reconcileBooking).not.toHaveBeenCalled();
     expect(forIntegration).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for an ezyVet intent without a trusted transport-phone snapshot', async () => {
+    const createBooking = vi.fn();
+    const reconcileBooking = vi.fn();
+    const { forIntegration, rpc, service } = serviceFor({
+      claimState: 'claimed',
+      connector: { createBooking, reconcileBooking } as unknown as BookingConnector,
+      executionRow: { ...execution, provider: 'ezyvet', trusted_phone_e164: null },
+    });
+
+    await expect(service.bookAppointment(bookingInput(), { callId: 'call_1' })).resolves.toEqual({
+      outcome: 'unavailable',
+    });
+
+    expect(createBooking).not.toHaveBeenCalled();
+    expect(reconcileBooking).not.toHaveBeenCalled();
+    expect(forIntegration).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith('fail_scheduling_booking_intent', {
+      target_booking_intent_id: 'intent_1',
+      target_error_category: 'transport_identity_unavailable',
+      target_status: 'awaiting_confirmation',
+    });
   });
 
   it('blocks confirmation before execution when the database reports a changed provider policy', async () => {

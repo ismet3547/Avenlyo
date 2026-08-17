@@ -18,6 +18,8 @@ const MAX_SLOTS = 5;
 export interface ConversationSchedulingTurn {
   readonly conversationId: string;
   readonly triggeringInboundMessageId: string | null;
+  /** Trusted voice adapters preserve the caller value obtained from their call context. */
+  readonly trustedTransportPhoneE164?: string | null;
 }
 
 function utcDate(value: string): string | null {
@@ -69,7 +71,7 @@ export class SchedulingBookingService {
   ) {}
 
   public async isEnabledForConversation(conversationId: string): Promise<boolean> {
-    const context = await this.context(conversationId);
+    const context = await this.context(conversationId, null);
     if (!context) return false;
     const catalog = await this.catalog(context.integration_id);
     if (!catalog.length) return false;
@@ -86,7 +88,11 @@ export class SchedulingBookingService {
     turn: ConversationSchedulingTurn,
   ) {
     const dates = this.validateDates(input.dates);
-    const context = await this.context(turn.conversationId);
+    const context = await this.context(
+      turn.conversationId,
+      turn.triggeringInboundMessageId,
+      turn.trustedTransportPhoneE164,
+    );
     if (!context) return [];
     const catalog = await this.catalog(context.integration_id);
     const appointmentType = catalog.find(
@@ -150,8 +156,14 @@ export class SchedulingBookingService {
     },
     turn: ConversationSchedulingTurn,
   ) {
-    const context = await this.context(turn.conversationId);
+    const context = await this.context(
+      turn.conversationId,
+      turn.triggeringInboundMessageId,
+      turn.trustedTransportPhoneE164,
+    );
     if (!context) return { intent: null, outcome: 'not_found' as const };
+    if (context.provider === 'ezyvet' && !context.trusted_transport_phone_e164)
+      return { intent: null, outcome: 'not_found' as const };
     const party = await (
       await this.connector(context.provider, context.integration_id)
     ).resolveBookingParty({
@@ -173,6 +185,7 @@ export class SchedulingBookingService {
         resolved_subject_uid: party.party.subject.providerKey ?? null,
         target_candidate_id: input.candidateId,
         target_conversation_id: turn.conversationId,
+        target_inbound_message_id: turn.triggeringInboundMessageId,
         trusted_contact_id: context.contact_id,
       },
     );
@@ -217,6 +230,17 @@ export class SchedulingBookingService {
       if (claim.state === 'claimed' && !execution.current_write_eligible) {
         await this.fail(input.bookingIntentId, 'awaiting_confirmation', 'configuration_changed');
         return { outcome: 'unavailable' as const };
+      }
+      if (execution.provider === 'ezyvet' && !execution.trusted_phone_e164) {
+        if (claim.state === 'claimed')
+          await this.fail(
+            input.bookingIntentId,
+            'awaiting_confirmation',
+            'transport_identity_unavailable',
+          );
+        return claim.state === 'claimed'
+          ? { outcome: 'unavailable' as const }
+          : { outcome: 'unknown' as const };
       }
       const connector = await this.connector(execution.provider, execution.integration_id);
       const appointmentType: BookingAppointmentType = {
@@ -370,12 +394,23 @@ export class SchedulingBookingService {
     return error ? { outcome: 'unknown' as const } : { outcome: 'booked' as const };
   }
 
-  private async context(conversationId: string) {
+  private async context(
+    conversationId: string,
+    triggeringInboundMessageId: string | null,
+    adapterTrustedPhoneE164?: string | null,
+  ) {
     const { data, error } = await this.input.supabase.rpc('get_conversation_scheduling_context', {
       target_conversation_id: conversationId,
+      target_inbound_message_id: triggeringInboundMessageId,
     });
     if (error) throw new Error('Could not read scheduling context.');
-    return data[0] ?? null;
+    const context = data[0] ?? null;
+    if (
+      adapterTrustedPhoneE164 !== undefined &&
+      context?.trusted_transport_phone_e164 !== adapterTrustedPhoneE164
+    )
+      return null;
+    return context;
   }
 
   private async catalog(integrationId: string) {

@@ -72,6 +72,12 @@ export class VoiceBookingService implements VoiceSchedulingServices {
     });
     if (error) throw new Error('Could not read scheduling context.');
     const row = data[0];
-    return row ? { conversationId: row.conversation_id, triggeringInboundMessageId } : null;
+    return row
+      ? {
+          conversationId: row.conversation_id,
+          triggeringInboundMessageId,
+          trustedTransportPhoneE164: row.caller_e164,
+        }
+      : null;
   }
 }

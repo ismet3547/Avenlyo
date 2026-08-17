@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   detectSmsKeywordCommand,
   normalizeE164,
-  twilioDeliveryRank,
+  canTransitionTwilioDeliveryState,
+  normalizedTwilioDeliveryState,
   twilioWebhookUrl,
 } from './index';
 
@@ -21,9 +22,13 @@ describe('messaging primitives', () => {
     expect(detectSmsKeywordCommand('please stop')).toBeNull();
   });
 
-  it('keeps status callback ordering monotonic', () => {
-    expect(twilioDeliveryRank('queued')).toBeLessThan(twilioDeliveryRank('delivered') ?? 0);
-    expect(twilioDeliveryRank('bad')).toBeNull();
+  it('uses an explicit delivery transition graph instead of rank ordering', () => {
+    expect(normalizedTwilioDeliveryState('accepted')).toBe('submitted');
+    expect(canTransitionTwilioDeliveryState('queued', 'failed')).toBe(true);
+    expect(canTransitionTwilioDeliveryState('sent', 'delivered')).toBe(true);
+    expect(canTransitionTwilioDeliveryState('sent', 'failed')).toBe(false);
+    expect(canTransitionTwilioDeliveryState('delivered', 'failed')).toBe(false);
+    expect(canTransitionTwilioDeliveryState('failed', 'sent')).toBe(false);
   });
 
   it('uses the configured canonical webhook base', () => {

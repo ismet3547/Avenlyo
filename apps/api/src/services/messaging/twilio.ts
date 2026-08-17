@@ -40,7 +40,10 @@ export interface TwilioOutboundMessage {
 }
 
 export interface TwilioOutboundClient {
-  send(input: TwilioOutboundMessage): Promise<{ readonly messageSid: string }>;
+  send(input: TwilioOutboundMessage): Promise<{
+    readonly messageSid: string;
+    readonly providerStatus: string;
+  }>;
   verifySmsCapability(phoneNumber: string): Promise<boolean>;
 }
 
@@ -52,7 +55,10 @@ export class TwilioSdkOutboundClient implements TwilioOutboundClient {
     this.client = twilio(configuration.accountSid, configuration.authToken);
   }
 
-  public async send(input: TwilioOutboundMessage): Promise<{ readonly messageSid: string }> {
+  public async send(input: TwilioOutboundMessage): Promise<{
+    readonly messageSid: string;
+    readonly providerStatus: string;
+  }> {
     const result = await this.client.messages.create({
       body: input.body,
       from: input.from,
@@ -63,7 +69,7 @@ export class TwilioSdkOutboundClient implements TwilioOutboundClient {
       to: input.to,
     });
     if (!isTwilioMessageSid(result.sid)) throw new Error('Twilio returned an invalid message SID.');
-    return { messageSid: result.sid };
+    return { messageSid: result.sid, providerStatus: result.status };
   }
 
   public async verifySmsCapability(phoneNumber: string): Promise<boolean> {

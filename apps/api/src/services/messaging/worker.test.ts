@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MessageProcessingWorker } from './worker.js';
 
-function workerFor(input: { readonly send: () => Promise<{ readonly messageSid: string }> }) {
+function workerFor(input: {
+  readonly send: () => Promise<{ readonly messageSid: string; readonly providerStatus: string }>;
+}) {
   const rpc = vi.fn((name: string) => {
     if (name === 'claim_sms_delivery_submission') {
       return Promise.resolve({
@@ -32,7 +34,10 @@ function workerFor(input: { readonly send: () => Promise<{ readonly messageSid: 
 
 describe('MessageProcessingWorker SMS submission', () => {
   it('uses the atomic submission claim before exactly one Twilio post', async () => {
-    const send = vi.fn().mockResolvedValue({ messageSid: 'SM00000000000000000000000000000001' });
+    const send = vi.fn().mockResolvedValue({
+      messageSid: 'SM00000000000000000000000000000001',
+      providerStatus: 'queued',
+    });
     const { rpc, worker } = workerFor({ send });
 
     await (worker as unknown as { deliverSms(messageId: string): Promise<void> }).deliverSms(
@@ -46,6 +51,7 @@ describe('MessageProcessingWorker SMS submission', () => {
     expect(rpc).toHaveBeenCalledWith('record_sms_delivery_submission', {
       target_message_id: 'message-1',
       target_provider_message_id: 'SM00000000000000000000000000000001',
+      target_provider_status: 'queued',
     });
   });
 

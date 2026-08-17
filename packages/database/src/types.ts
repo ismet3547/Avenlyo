@@ -1076,7 +1076,11 @@ export interface Database {
       };
       mark_sms_delivery_sending: { Args: { target_message_id: string }; Returns: undefined };
       record_sms_delivery_submission: {
-        Args: { target_message_id: string; target_provider_message_id: string };
+        Args: {
+          target_message_id: string;
+          target_provider_message_id: string;
+          target_provider_status: string;
+        };
         Returns: undefined;
       };
       mark_sms_delivery_unknown: {
@@ -1101,7 +1105,7 @@ export interface Database {
         Returns: BookingClaimRow[];
       };
       get_conversation_scheduling_context: {
-        Args: { target_conversation_id: string };
+        Args: { target_conversation_id: string; target_inbound_message_id: string | null };
         Returns: ConversationSchedulingContextRow[];
       };
       create_conversation_booking_candidates: {
@@ -1116,6 +1120,7 @@ export interface Database {
           resolved_subject_uid: string | null;
           resolved_subject_name: string | null;
           trusted_contact_id: string | null;
+          target_inbound_message_id: string | null;
         };
         Returns: BookingIntentRow[];
       };
