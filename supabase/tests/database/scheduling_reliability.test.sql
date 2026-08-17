@@ -5,7 +5,7 @@ create extension if not exists pgtap with schema extensions;
 select extensions.plan(12);
 
 insert into auth.users (id, email) values ('83000000-0000-0000-0000-000000000001', 'reliability-owner@example.test');
-insert into public.users (id, email) values ('83000000-0000-0000-0000-000000000001', 'reliability-owner@example.test');
+insert into public.users (id, email) values ('83000000-0000-0000-0000-000000000001', 'reliability-owner@example.test') on conflict (id) do nothing;
 insert into public.organizations (id, name, slug, created_by, primary_industry_id)
 values ('83100000-0000-0000-0000-000000000001', 'Reliability', 'reliability', '83000000-0000-0000-0000-000000000001', 'veterinary');
 insert into public.locations (id, organization_id, name, timezone)
