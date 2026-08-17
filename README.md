@@ -507,3 +507,35 @@ from **Dashboard -> Integrations**, select a dedicated writer/owner calendar, cr
 Verify one event with the expected timezone, interval, and private metadata, one local appointment,
 and that a separately-created busy event removes the slot. This manual check is not run without test
 credentials.
+
+## Appointment reminders (Phase 8)
+
+Phase 8 adds deterministic SMS appointment reminders. They are disabled by default and may be
+configured only by an organization owner or admin at **Dashboard -> Appointments -> Manage
+appointment reminders**. Each location may enable the 24-hour and/or 2-hour schedule and uses
+quiet hours of 20:00â€“08:00 in its IANA timezone by default. A reminder that falls in quiet hours
+is deferred to the next permitted local time; it never changes the appointment time.
+
+The database creates at most one durable reminder per appointment and reminder type, only for a
+confirmed future appointment within a 30-day horizon. The worker claims due rows atomically with
+`FOR UPDATE SKIP LOCKED`; a crashed claim is recoverable after five minutes. Cancelled, completed,
+or disabled appointments are skipped. The booking-time verified SMS recipient is copied onto the
+appointment/reminder and is the only destination used for deliveryâ€”later edits to a contact do not
+retarget the message. Appointments without that verified recipient are safely skipped. Existing
+per-location sender opt-out policy is checked again before materializing and before submitting SMS.
+
+For Google Calendar and ezyVet appointments, the worker performs only the existing bounded
+read/reconciliation path immediately before creating the local reminder message. A disconnected,
+unavailable, missing, cancelled, or non-exact provider record is skipped. The reminder worker never
+calls `createBooking`, updates a provider appointment, or invokes OpenAI. A confirmed local
+appointment without an external provider identity does not require provider revalidation.
+
+### Manual reminder validation
+
+In a disposable environment, configure an active SMS-enabled business DID, create a confirmed
+appointment 23 hours in the future through the approved booking flow, then enable the 24-hour
+schedule for its location. Confirm one `appointment_reminders` row is claimed, one deterministic
+outbound SMS message/delivery is created, and the destination remains the booking-time phone after
+editing the contact phone. Repeat after a customer sends `STOP`: the reminder must be suppressed.
+Disable the scheduling integration or cancel the appointment before its reminder is due: no SMS
+should be created. Automated tests do not post a real SMS or query real provider accounts.

@@ -485,6 +485,49 @@ export interface SmsDeliveryExecutionRow {
   status: string;
 }
 
+export interface AppointmentReminderSettingsRow {
+  sms_enabled: boolean;
+  reminder_24h_enabled: boolean;
+  reminder_2h_enabled: boolean;
+  quiet_hours_start: string;
+  quiet_hours_end: string;
+  sms_sender_available: boolean;
+  timezone: string;
+}
+
+export interface AppointmentReminderClaimRow {
+  reminder_id: string;
+}
+
+export interface AppointmentReminderRow {
+  appointment_id: string;
+  reminder_type: 'appointment_24h' | 'appointment_2h';
+  scheduled_for: string;
+  status: 'scheduled' | 'processing' | 'sent' | 'skipped' | 'failed';
+  last_error_code: string | null;
+  message_id: string | null;
+}
+
+export interface AppointmentReminderExecutionRow {
+  reminder_id: string;
+  appointment_id: string;
+  organization_id: string;
+  location_id: string;
+  provider: 'ezyvet' | 'google_calendar' | null;
+  integration_id: string | null;
+  integration_status: string | null;
+  external_appointment_id: string | null;
+  booking_intent_id: string | null;
+  starts_at: string;
+  ends_at: string | null;
+  timezone: string;
+  provider_resource_key: string | null;
+  appointment_type_key: string | null;
+  external_contact_uid: string | null;
+  external_subject_uid: string | null;
+  trusted_sms_recipient_e164: string | null;
+}
+
 export interface MessageAgentContextRow {
   message_id: string;
   conversation_id: string;
@@ -1139,6 +1182,49 @@ export interface Database {
       complete_scheduling_booking_intent: {
         Args: { target_booking_intent_id: string };
         Returns: CompletedBookingRow[];
+      };
+      get_my_appointment_reminder_settings: {
+        Args: { target_location_id: string };
+        Returns: AppointmentReminderSettingsRow[];
+      };
+      get_my_appointment_reminders: {
+        Args: { target_location_id: string };
+        Returns: AppointmentReminderRow[];
+      };
+      upsert_my_appointment_reminder_settings: {
+        Args: {
+          target_location_id: string;
+          target_sms_enabled: boolean;
+          target_24h_enabled: boolean;
+          target_2h_enabled: boolean;
+          target_quiet_hours_start?: string;
+          target_quiet_hours_end?: string;
+        };
+        Returns: undefined;
+      };
+      refresh_appointment_reminders: {
+        Args: { target_appointment_id: string };
+        Returns: undefined;
+      };
+      claim_due_appointment_reminders: {
+        Args: { target_worker_id: string; target_limit?: number };
+        Returns: AppointmentReminderClaimRow[];
+      };
+      get_appointment_reminder_execution_context: {
+        Args: { target_reminder_id: string };
+        Returns: AppointmentReminderExecutionRow[];
+      };
+      record_appointment_reminder_revalidation: {
+        Args: {
+          target_reminder_id: string;
+          target_outcome:
+            'confirmed' | 'not_required' | 'provider_not_confirmed' | 'provider_unavailable';
+        };
+        Returns: undefined;
+      };
+      create_appointment_reminder_message: {
+        Args: { target_reminder_id: string };
+        Returns: { message_id: string }[];
       };
       fail_scheduling_booking_intent: {
         Args: {

@@ -113,6 +113,20 @@ const schedulingReliabilitySecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/scheduling_reliability.test.sql', import.meta.url),
   'utf8',
 );
+const appointmentReminderMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260818000000_phase_8_appointment_reminders.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderSecurityTest = readFileSync(
+  new URL(
+    '../../../supabase/tests/database/appointment_reminders_security.test.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -458,5 +472,33 @@ describe('Google Calendar scheduling migration definition', () => {
     expect(schedulingReliabilitySecurityTest).toContain(
       'service role receives no direct integration credential table grant',
     );
+  });
+});
+
+describe('appointment reminder migration definition', () => {
+  it('keeps reminder state durable, immutable per appointment type, and off direct client writes', () => {
+    expect(appointmentReminderMigration).toContain('create table public.appointment_reminders');
+    expect(appointmentReminderMigration).toContain('appointment_reminders_appointment_type_key');
+    expect(appointmentReminderMigration).toContain('messages_appointment_reminder_key');
+    expect(appointmentReminderMigration).toContain('trusted_sms_recipient_e164');
+    expect(appointmentReminderMigration).toContain(
+      'revoke all on table public.appointment_reminder_settings, public.appointment_reminders',
+    );
+  });
+
+  it('uses service-only durable claims and never turns reminder revalidation into a provider write', () => {
+    expect(appointmentReminderMigration).toContain('for update skip locked');
+    expect(appointmentReminderMigration).toContain("interval '5 minutes'");
+    expect(appointmentReminderMigration).toContain('require_messaging_service_role');
+    expect(appointmentReminderMigration).toContain('appointment_reminders_refresh_trigger');
+    expect(appointmentReminderMigration).not.toContain('createBooking');
+  });
+
+  it('has executable pgTAP coverage for quiet hours, tenant scope, claims, and immutable delivery identity', () => {
+    expect(appointmentReminderSecurityTest).toContain('overnight quiet hours defer');
+    expect(appointmentReminderSecurityTest).toContain('location-scoped member cannot read another location reminders');
+    expect(appointmentReminderSecurityTest).toContain('authenticated member cannot directly mutate reminder state');
+    expect(appointmentReminderSecurityTest).toContain('service worker atomically claims the due 24-hour reminder');
+    expect(appointmentReminderSecurityTest).toContain('immutable booking-time recipient after contact phone changes');
   });
 });

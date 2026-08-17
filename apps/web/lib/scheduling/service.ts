@@ -25,6 +25,25 @@ export interface SchedulingAppointmentRow {
   readonly title: string;
 }
 
+export interface AppointmentReminderSettingsRow {
+  readonly sms_enabled: boolean;
+  readonly reminder_24h_enabled: boolean;
+  readonly reminder_2h_enabled: boolean;
+  readonly quiet_hours_start: string;
+  readonly quiet_hours_end: string;
+  readonly sms_sender_available: boolean;
+  readonly timezone: string;
+}
+
+export interface AppointmentReminderRow {
+  readonly appointment_id: string;
+  readonly reminder_type: 'appointment_24h' | 'appointment_2h';
+  readonly scheduled_for: string;
+  readonly status: 'scheduled' | 'processing' | 'sent' | 'skipped' | 'failed';
+  readonly last_error_code: string | null;
+  readonly message_id: string | null;
+}
+
 export interface GoogleCalendarConfigurationRow {
   readonly integration_id: string | null;
   readonly status: string | null;
@@ -65,20 +84,64 @@ interface SchedulingRpcCaller {
     readonly error: { readonly message: string } | null;
   }>;
   (
+    name: 'get_my_appointment_reminder_settings',
+    args: { readonly target_location_id: string },
+  ): PromiseLike<{
+    readonly data: readonly AppointmentReminderSettingsRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'get_my_appointment_reminders',
+    args: { readonly target_location_id: string },
+  ): PromiseLike<{
+    readonly data: readonly AppointmentReminderRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'upsert_my_appointment_reminder_settings',
+    args: {
+      readonly target_location_id: string;
+      readonly target_sms_enabled: boolean;
+      readonly target_24h_enabled: boolean;
+      readonly target_2h_enabled: boolean;
+      readonly target_quiet_hours_start: string;
+      readonly target_quiet_hours_end: string;
+    },
+  ): PromiseLike<{ readonly data: null; readonly error: { readonly message: string } | null }>;
+  (
     name: 'get_my_google_scheduling_configuration',
     args: { readonly target_location_id: string },
-  ): PromiseLike<{ readonly data: readonly GoogleCalendarConfigurationRow[] | null; readonly error: { readonly message: string } | null }>;
+  ): PromiseLike<{
+    readonly data: readonly GoogleCalendarConfigurationRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
   (
     name: 'create_my_google_appointment_type',
-    args: { readonly target_location_id: string; readonly target_name: string; readonly target_duration_minutes: number },
-  ): PromiseLike<{ readonly data: readonly { readonly appointment_type_id: string }[] | null; readonly error: { readonly message: string } | null }>;
+    args: {
+      readonly target_location_id: string;
+      readonly target_name: string;
+      readonly target_duration_minutes: number;
+    },
+  ): PromiseLike<{
+    readonly data: readonly { readonly appointment_type_id: string }[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
   (
     name: 'update_my_google_booking_policy',
-    args: { readonly target_location_id: string; readonly selected_appointment_type_ids: readonly string[]; readonly selected_resource_ids: readonly string[]; readonly mappings: unknown[] },
+    args: {
+      readonly target_location_id: string;
+      readonly selected_appointment_type_ids: readonly string[];
+      readonly selected_resource_ids: readonly string[];
+      readonly mappings: unknown[];
+    },
   ): PromiseLike<{ readonly data: null; readonly error: { readonly message: string } | null }>;
   (
     name: 'set_my_active_scheduling_integration',
-    args: { readonly target_location_id: string; readonly target_integration_id: string; readonly target_minimum_lead_minutes: number },
+    args: {
+      readonly target_location_id: string;
+      readonly target_integration_id: string;
+      readonly target_minimum_lead_minutes: number;
+    },
   ): PromiseLike<{ readonly data: null; readonly error: { readonly message: string } | null }>;
 }
 
