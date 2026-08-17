@@ -142,6 +142,25 @@ select extensions.is(
 );
 reset role;
 
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000002', 'tool-recovery')),
+  'booking_recovery',
+  'a booking crash recovers against its stored integration after provider switch'
+);
+select extensions.is(
+  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000001', 'tool-replay')),
+  'completed',
+  'completed replay remains booked after provider switch'
+);
+select extensions.is(
+  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000003', 'tool-fresh')),
+  'configuration_changed',
+  'a fresh confirmation is blocked after active provider switch'
+);
+reset role;
+
 set local role anon;
 select extensions.throws_ok(
   $$ select * from public.get_ezyvet_execution_credentials('83400000-0000-0000-0000-000000000002') $$,
@@ -180,23 +199,6 @@ select extensions.is(
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
-select extensions.is(
-  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000002', 'tool-recovery')),
-  'booking_recovery',
-  'a booking crash recovers against its stored integration after provider switch'
-);
-select extensions.is(
-  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000001', 'tool-replay')),
-  'completed',
-  'completed replay remains booked after provider switch'
-);
-select extensions.is(
-  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000003', 'tool-fresh')),
-  'configuration_changed',
-  'a fresh confirmation is blocked after active provider switch'
-);
-reset role;
-
 update public.integrations set status = 'connected' where id = '83400000-0000-0000-0000-000000000001';
 update public.location_scheduling_settings set active_integration_id = '83400000-0000-0000-0000-000000000001';
 update public.scheduling_resources set bookable = false where id = '83600000-0000-0000-0000-000000000001';
