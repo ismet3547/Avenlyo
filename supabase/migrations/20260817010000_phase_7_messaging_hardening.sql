@@ -195,19 +195,19 @@ begin
   elsif normalized_body in ('stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit') then detected_command := 'stop';
   elsif normalized_body in ('start', 'unstop') then detected_command := 'start';
   elsif normalized_body = 'help' then detected_command := 'help'; end if;
-  select * into channel_row from public.channels where organization_id = route.organization_id and location_id = route.location_id and channel_type = 'sms' and status = 'active' order by created_at asc limit 1;
+  select * into channel_row from public.channels channel where channel.organization_id = route.organization_id and channel.location_id = route.location_id and channel.channel_type = 'sms' and channel.status = 'active' order by channel.created_at asc limit 1;
   if channel_row.id is null then
     insert into public.channels (organization_id, location_id, channel_type, display_name, status, configuration)
     values (route.organization_id, route.location_id, 'sms', 'SMS', 'active', jsonb_build_object('phone_number_id', route.id)) returning * into channel_row;
   end if;
-  select * into contact_row from public.contacts where organization_id = route.organization_id and location_id = route.location_id and phone = target_from_e164;
+  select * into contact_row from public.contacts contact where contact.organization_id = route.organization_id and contact.location_id = route.location_id and contact.phone = target_from_e164;
   if contact_row.id is null then
     insert into public.contacts (organization_id, location_id, phone, metadata)
     values (route.organization_id, route.location_id, target_from_e164, jsonb_build_object('source', 'sms')) returning * into contact_row;
   end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('sms-conversation:' || route.id::text || ':' || contact_row.id::text, 0));
-  select * into conversation_row from public.conversations where organization_id = route.organization_id and location_id = route.location_id
-    and contact_id = contact_row.id and channel_id = channel_row.id and transport_phone_number_id = route.id and status = 'open' order by updated_at desc limit 1;
+  select * into conversation_row from public.conversations conversation where conversation.organization_id = route.organization_id and conversation.location_id = route.location_id
+    and conversation.contact_id = contact_row.id and conversation.channel_id = channel_row.id and conversation.transport_phone_number_id = route.id and conversation.status = 'open' order by conversation.updated_at desc limit 1;
   if conversation_row.id is null then
     insert into public.conversations (organization_id, location_id, contact_id, channel_id, transport_phone_number_id, status, metadata)
     values (route.organization_id, route.location_id, contact_row.id, channel_row.id, route.id, 'open', jsonb_build_object('transport', 'sms')) returning * into conversation_row;
@@ -222,7 +222,7 @@ begin
       'provider_metadata', jsonb_strip_nulls(jsonb_build_object('opt_out_type', nullif(provider_opt_out, '')))), 'sms', 'customer', now())
   on conflict (organization_id, external_id) do nothing returning id into saved_message_id;
   if saved_message_id is null then
-    select id into saved_message_id from public.messages where organization_id = route.organization_id and external_id = target_message_sid;
+    select message.id into saved_message_id from public.messages message where message.organization_id = route.organization_id and message.external_id = target_message_sid;
     return query select true, true, saved_message_id, conversation_row.id, route.organization_id, route.location_id, detected_command; return;
   end if;
   insert into public.messaging_contact_preferences (organization_id, location_id, contact_id, channel_type, sender_phone_number_id, status, opted_out_at, source_message_id)
@@ -243,7 +243,7 @@ begin
     insert into public.message_deliveries (organization_id, location_id, message_id, provider) values (route.organization_id, route.location_id, deterministic_id, 'twilio');
     insert into public.message_processing_jobs (organization_id, location_id, conversation_id, message_id, job_kind) values (route.organization_id, route.location_id, conversation_row.id, deterministic_id, 'outbound_delivery');
   end if;
-  update public.conversations set last_message_at = now(), updated_at = now() where organization_id = route.organization_id and id = conversation_row.id;
+  update public.conversations conversation set last_message_at = now(), updated_at = now() where conversation.organization_id = route.organization_id and conversation.id = conversation_row.id;
   return query select true, false, saved_message_id, conversation_row.id, route.organization_id, route.location_id, detected_command;
 end;
 $$;
