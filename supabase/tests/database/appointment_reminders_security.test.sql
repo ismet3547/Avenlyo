@@ -70,9 +70,9 @@ values ('e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-0000000
 
 insert into public.appointments (id, organization_id, location_id, title, status, starts_at, ends_at, trusted_sms_recipient_e164)
 values
-  ('e8150000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'A one appointment', 'confirmed', now() + interval '23 hours', now() + interval '23 hours 30 minutes', '+14155550811'),
-  ('e8160000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', 'A two appointment', 'confirmed', now() + interval '47 hours', now() + interval '47 hours 30 minutes', '+14155550812'),
-  ('e8190000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', 'Unschedulable A two appointment', 'requested', now() + interval '47 hours', now() + interval '47 hours 30 minutes', null);
+  ('e8150000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'A one appointment', 'confirmed', date_trunc('day', now()) + interval '3 days 12 hours', date_trunc('day', now()) + interval '3 days 12 hours 30 minutes', '+14155550811'),
+  ('e8160000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', 'A two appointment', 'confirmed', date_trunc('day', now()) + interval '4 days 12 hours', date_trunc('day', now()) + interval '4 days 12 hours 30 minutes', '+14155550812'),
+  ('e8190000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', 'Unschedulable A two appointment', 'requested', date_trunc('day', now()) + interval '4 days 12 hours', date_trunc('day', now()) + interval '4 days 12 hours 30 minutes', null);
 
 select extensions.throws_ok(
   $$ insert into public.appointment_reminders (organization_id, location_id, appointment_id, reminder_type, scheduled_for)
@@ -118,6 +118,13 @@ select extensions.throws_ok(
   'authenticated member cannot claim the reminder worker queue'
 );
 reset role;
+
+-- Make the claim assertion independent of the wall clock while keeping the
+-- reminder-generation assertions above in the normal quiet-hours path.
+update public.appointment_reminders
+set scheduled_for = now() - interval '1 minute'
+where appointment_id = 'e8150000-0000-0000-0000-000000000001'
+  and reminder_type = 'appointment_24h';
 
 insert into public.appointments (id, organization_id, location_id, title, status, starts_at, ends_at, trusted_sms_recipient_e164)
 values
