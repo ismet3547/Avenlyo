@@ -71,11 +71,12 @@ values ('e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-0000000
 insert into public.appointments (id, organization_id, location_id, title, status, starts_at, ends_at, trusted_sms_recipient_e164)
 values
   ('e8150000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'A one appointment', 'confirmed', now() + interval '23 hours', now() + interval '23 hours 30 minutes', '+14155550811'),
-  ('e8160000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', 'A two appointment', 'confirmed', now() + interval '47 hours', now() + interval '47 hours 30 minutes', '+14155550812');
+  ('e8160000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', 'A two appointment', 'confirmed', now() + interval '47 hours', now() + interval '47 hours 30 minutes', '+14155550812'),
+  ('e8190000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', 'Unschedulable A two appointment', 'requested', now() + interval '47 hours', now() + interval '47 hours 30 minutes', null);
 
 select extensions.throws_ok(
   $$ insert into public.appointment_reminders (organization_id, location_id, appointment_id, reminder_type, scheduled_for)
-     values ('e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'e8160000-0000-0000-0000-000000000001', 'appointment_24h', now()) $$,
+     values ('e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'e8190000-0000-0000-0000-000000000001', 'appointment_24h', now()) $$,
   '23503',
   'insert or update on table "appointment_reminders" violates foreign key constraint "appointment_reminders_appointment_fk"',
   'a reminder cannot cross location scope to reference another appointment'
@@ -120,8 +121,8 @@ reset role;
 
 insert into public.appointments (id, organization_id, location_id, title, status, starts_at, ends_at, trusted_sms_recipient_e164)
 values
-  ('e8170000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'Cancelled appointment', 'confirmed', now() + interval '3 days', now() + interval '3 days 30 minutes', '+14155550813'),
-  ('e8180000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'Completed appointment', 'confirmed', now() + interval '4 days', now() + interval '4 days 30 minutes', '+14155550814');
+  ('e8170000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'Cancelled appointment', 'confirmed', now() + interval '3 days 11 hours', now() + interval '3 days 11 hours 30 minutes', '+14155550813'),
+  ('e8180000-0000-0000-0000-000000000001', 'e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'Completed appointment', 'confirmed', now() + interval '4 days 11 hours', now() + interval '4 days 11 hours 30 minutes', '+14155550814');
 update public.appointments set status = 'cancelled' where id = 'e8170000-0000-0000-0000-000000000001';
 update public.appointments set status = 'completed' where id = 'e8180000-0000-0000-0000-000000000001';
 select extensions.is(
@@ -148,12 +149,20 @@ select extensions.is(
   1,
   'service worker atomically claims the due 24-hour reminder'
 );
+reset role;
+select set_config(
+  'app.reminder_id',
+  (select id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'),
+  true
+);
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
-  $$ select public.record_appointment_reminder_revalidation((select id from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'), 'not_required') $$,
+  $$ select public.record_appointment_reminder_revalidation(current_setting('app.reminder_id')::uuid, 'not_required') $$,
   'local confirmed appointment can be marked as not requiring a provider read'
 );
 select extensions.lives_ok(
-  $$ select * from public.create_appointment_reminder_message((select id from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h')) $$,
+  $$ select * from public.create_appointment_reminder_message(current_setting('app.reminder_id')::uuid) $$,
   'service worker creates the deterministic reminder message through its trusted RPC'
 );
 reset role;
@@ -169,10 +178,15 @@ select extensions.is(
   'a reminder message has exactly one Twilio delivery record'
 );
 update public.contacts set phone = '+14155550999' where phone = '+14155550811';
+select set_config(
+  'app.reminder_message_id',
+  (select message_id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'),
+  true
+);
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
-  (select to_e164 from public.claim_sms_delivery_submission((select message_id from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'))),
+  (select to_e164 from public.claim_sms_delivery_submission(current_setting('app.reminder_message_id')::uuid)),
   '+14155550811',
   'SMS delivery uses the immutable booking-time recipient after contact phone changes'
 );
