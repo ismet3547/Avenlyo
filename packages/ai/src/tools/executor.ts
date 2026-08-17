@@ -4,7 +4,13 @@ import { MAX_TOOL_OUTPUT_CHARACTERS } from '../agent/limits';
 import type { AgentExecutionContext, AgentToolCall, KnowledgeSource } from '../agent/types';
 
 import { activeToolDefinitions } from './registry';
-import { requestHumanHelpSchema, searchBusinessKnowledgeSchema } from './schemas';
+import {
+  availableAppointmentsSchema,
+  bookAppointmentSchema,
+  prepareAppointmentBookingSchema,
+  requestHumanHelpSchema,
+  searchBusinessKnowledgeSchema,
+} from './schemas';
 import type { AgentToolServices, ToolExecutionResult, ToolExecutor } from './types';
 
 /** Conservative starting floor: a nearest neighbour is not necessarily a reliable business fact. */
@@ -50,14 +56,19 @@ export class ControlledToolExecutor implements ToolExecutor {
     private readonly industry: Parameters<typeof activeToolDefinitions>[0],
     private readonly services: AgentToolServices,
   ) {
-    this.tools = activeToolDefinitions(industry).map((tool) => tool.function);
+    this.tools = activeToolDefinitions(industry, services.scheduling !== undefined).map(
+      (tool) => tool.function,
+    );
   }
 
   public async execute(
     call: AgentToolCall,
     context: AgentExecutionContext,
   ): Promise<ToolExecutionResult> {
-    const definition = activeToolDefinitions(this.industry).find((tool) => tool.name === call.name);
+    const definition = activeToolDefinitions(
+      this.industry,
+      this.services.scheduling !== undefined,
+    ).find((tool) => tool.name === call.name);
     if (!definition) return rejected(call, 'Unavailable tool requested.');
 
     let rawArguments: unknown;
@@ -89,6 +100,77 @@ export class ControlledToolExecutor implements ToolExecutor {
           knowledgeOutcome: sources.length ? 'reliable' : 'empty_or_unreliable',
           modelOutput: safeJson({ matches: sources }),
           sources,
+        };
+      }
+
+      if (call.name === 'get_available_appointments' && this.services.scheduling) {
+        const parsed = availableAppointmentsSchema.safeParse(rawArguments);
+        if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
+        const candidates = await this.services.scheduling.getAvailableAppointments(
+          {
+            appointmentType: parsed.data.appointment_type,
+            dates: parsed.data.dates,
+            toolCallId: call.callId,
+          },
+          context,
+        );
+        return {
+          execution: {
+            callId: call.callId,
+            name: call.name,
+            status: 'succeeded',
+            summary: `${candidates.length} appointment option(s) found.`,
+          },
+          handoffRequested: false,
+          modelOutput: safeJson({ candidates }),
+          sources: [],
+        };
+      }
+
+      if (call.name === 'prepare_appointment_booking' && this.services.scheduling) {
+        const parsed = prepareAppointmentBookingSchema.safeParse(rawArguments);
+        if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
+        const prepared = await this.services.scheduling.prepareAppointmentBooking(
+          {
+            candidateId: parsed.data.candidate_id,
+            subjectName: parsed.data.subject_name ?? null,
+            toolCallId: call.callId,
+          },
+          context,
+        );
+        return {
+          execution: {
+            callId: call.callId,
+            name: call.name,
+            status: 'succeeded',
+            summary:
+              prepared.outcome === 'ready'
+                ? 'Booking is ready for confirmation.'
+                : 'Booking could not be prepared.',
+          },
+          handoffRequested: false,
+          modelOutput: safeJson(prepared),
+          sources: [],
+        };
+      }
+
+      if (call.name === 'book_appointment' && this.services.scheduling) {
+        const parsed = bookAppointmentSchema.safeParse(rawArguments);
+        if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
+        const booked = await this.services.scheduling.bookAppointment(
+          { bookingIntentId: parsed.data.booking_intent_id, toolCallId: call.callId },
+          context,
+        );
+        return {
+          execution: {
+            callId: call.callId,
+            name: call.name,
+            status: booked.outcome === 'booked' ? 'succeeded' : 'failed',
+            summary: `Booking outcome: ${booked.outcome}.`,
+          },
+          handoffRequested: booked.outcome === 'unknown',
+          modelOutput: safeJson(booked),
+          sources: [],
         };
       }
 

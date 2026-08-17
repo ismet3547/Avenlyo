@@ -7,7 +7,11 @@ export type {
   GoogleCalendarExecutionCredentialsRow,
   Json,
   MemberRole,
+  MessageProcessingJobRow,
+  InboxConversationRow,
+  InboxMessageRow,
   OnboardingStatus,
   OnboardingStep,
   TenantContextRow,
+  WebChatWidgetConfigurationRow,
 } from './types';

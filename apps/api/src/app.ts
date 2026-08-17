@@ -1,4 +1,5 @@
 import cors from '@fastify/cors';
+import formbody from '@fastify/formbody';
 import Fastify from 'fastify';
 
 import { env } from './env.js';
@@ -15,6 +16,8 @@ export function buildApp() {
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) => {
     done(null, body);
   });
+
+  void app.register(formbody);
 
   void app.register(cors, {
     origin: env.API_CORS_ORIGIN,

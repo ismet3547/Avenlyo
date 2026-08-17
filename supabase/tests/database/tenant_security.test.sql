@@ -187,7 +187,9 @@ select extensions.throws_ok(
       '24000000-0000-0000-0000-000000000001'
     )
   $$,
-  '23503'
+  '42501',
+  'new row violates row-level security policy for table "conversations"',
+  'direct conversation writes are denied before a client can probe cross-tenant foreign keys'
 );
 
 reset role;

@@ -21,7 +21,12 @@ export const futureToolNames = [
 ] as const;
 
 export type FutureToolName = (typeof futureToolNames)[number];
-export type ActiveToolName = 'request_human_help' | 'search_business_knowledge';
+export type ActiveToolName =
+  | 'request_human_help'
+  | 'search_business_knowledge'
+  | 'get_available_appointments'
+  | 'prepare_appointment_booking'
+  | 'book_appointment';
 
 /**
  * Deliberately inactive contracts reserve product vocabulary without authorizing integration,
@@ -57,6 +62,49 @@ export interface AgentToolServices {
     input: { readonly query: string; readonly toolCallId: string },
     context: AgentExecutionContext,
   ): Promise<readonly KnowledgeSource[]>;
+  readonly scheduling?: {
+    getAvailableAppointments(
+      input: {
+        readonly appointmentType: string;
+        readonly dates: readonly string[];
+        readonly toolCallId: string;
+      },
+      context: AgentExecutionContext,
+    ): Promise<
+      readonly {
+        readonly candidateId: string;
+        readonly endsAt: string;
+        readonly expiresAt: string;
+        readonly resourceName: string;
+        readonly startsAt: string;
+        readonly timezone: string;
+        readonly typeName: string;
+      }[]
+    >;
+    prepareAppointmentBooking(
+      input: {
+        readonly candidateId: string;
+        readonly subjectName: string | null;
+        readonly toolCallId: string;
+      },
+      context: AgentExecutionContext,
+    ): Promise<{
+      readonly intent: {
+        readonly bookingIntentId: string;
+        readonly startsAt: string;
+        readonly status: string;
+        readonly timezone: string;
+        readonly typeName: string;
+      } | null;
+      readonly outcome: 'ambiguous' | 'not_found' | 'ready';
+    }>;
+    bookAppointment(
+      input: { readonly bookingIntentId: string; readonly toolCallId: string },
+      context: AgentExecutionContext,
+    ): Promise<{
+      readonly outcome: 'booked' | 'confirmation_required' | 'unavailable' | 'unknown';
+    }>;
+  };
 }
 
 export interface ToolDefinition<TSchema extends z.ZodType> {

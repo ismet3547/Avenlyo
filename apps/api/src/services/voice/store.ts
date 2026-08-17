@@ -52,7 +52,7 @@ export interface VoiceStore {
     readonly direction: 'inbound' | 'outbound';
     readonly externalCallId: string;
     readonly externalItemId: string;
-  }): Promise<boolean>;
+  }): Promise<string | null>;
   requestHandoff(input: {
     readonly externalCallId: string;
     readonly reason: string;
@@ -162,7 +162,7 @@ export class SupabaseVoiceStore implements VoiceStore {
     readonly direction: 'inbound' | 'outbound';
     readonly externalCallId: string;
     readonly externalItemId: string;
-  }): Promise<boolean> {
+  }): Promise<string | null> {
     const { data, error } = await this.client.rpc('record_inbound_voice_transcript', {
       target_body: input.body,
       target_call_id: input.externalCallId,
@@ -170,7 +170,16 @@ export class SupabaseVoiceStore implements VoiceStore {
       target_external_item_id: input.externalItemId,
     });
     if (error) throw new Error('Voice transcript persistence failed.');
-    return data;
+    if (!data) return null;
+    const { data: messageId, error: messageError } = await this.client.rpc(
+      'get_voice_transcript_message_id',
+      {
+        target_call_id: input.externalCallId,
+        target_external_item_id: input.externalItemId,
+      },
+    );
+    if (messageError) throw new Error('Voice transcript identifier lookup failed.');
+    return messageId;
   }
 
   public async requestHandoff(input: {

@@ -74,6 +74,26 @@ describe('Google Calendar connector identity', () => {
     });
   });
 
+  it('permits an anonymous website visitor to use Google Calendar without treating a phone as verified', async () => {
+    const connector = new GoogleCalendarConnector(
+      {} as ConstructorParameters<typeof GoogleCalendarConnector>[0],
+    );
+    await expect(
+      connector.resolveBookingParty({
+        subjectName: null,
+        trustedCallerE164: null,
+        trustedContactDisplayName: null,
+        trustedContactId: null,
+      }),
+    ).resolves.toEqual({
+      kind: 'resolved',
+      party: {
+        customer: { displayName: 'Website visitor', providerKey: null, trustedPhoneE164: null },
+        subject: { displayName: null, providerKey: null },
+      },
+    });
+  });
+
   it('reconciles only the exact confirmed event with both trusted private markers', async () => {
     const getEvent = vi.fn().mockResolvedValue(event());
     const connector = new GoogleCalendarConnector({ getEvent } as unknown as GoogleCalendarClient);

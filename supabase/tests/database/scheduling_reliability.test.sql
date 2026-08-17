@@ -2,7 +2,7 @@
 -- exists, replay and persistence use the immutable booking intent/provider identity.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(25);
+select extensions.plan(32);
 
 insert into auth.users (id, email) values ('83000000-0000-0000-0000-000000000001', 'reliability-owner@example.test');
 insert into public.users (id, email) values ('83000000-0000-0000-0000-000000000001', 'reliability-owner@example.test') on conflict (id) do nothing;
@@ -38,10 +38,12 @@ insert into public.scheduling_appointment_type_resources (organization_id, locat
 values ('83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '83500000-0000-0000-0000-000000000001', '83600000-0000-0000-0000-000000000001');
 insert into public.channels (id, organization_id, location_id, channel_type, display_name)
 values ('83700000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', 'phone', 'Reliability phone');
-insert into public.conversations (id, organization_id, location_id, channel_id)
-values ('83800000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83700000-0000-0000-0000-000000000001');
-insert into public.calls (id, organization_id, location_id, conversation_id, direction, provider, external_call_id)
-values ('83900000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', 'inbound', 'openai-realtime-sip', 'reliability-call');
+insert into public.contacts (id, organization_id, location_id, phone, first_name)
+values ('83700000-0000-0000-0000-000000000002', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '+14155550199', 'Caller');
+insert into public.conversations (id, organization_id, location_id, channel_id, contact_id)
+values ('83800000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83700000-0000-0000-0000-000000000001', '83700000-0000-0000-0000-000000000002');
+insert into public.calls (id, organization_id, location_id, conversation_id, contact_id, direction, provider, external_call_id, transport_caller_e164)
+values ('83900000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83700000-0000-0000-0000-000000000002', 'inbound', 'openai-realtime-sip', 'reliability-call', '+14155550198');
 
 insert into public.booking_candidates (id, organization_id, location_id, conversation_id, integration_id, appointment_type_id, resource_id, starts_at, ends_at, timezone, expires_at) values
   ('84000000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '83500000-0000-0000-0000-000000000001', '83600000-0000-0000-0000-000000000001', now() + interval '2 hours', now() + interval '150 minutes', 'UTC', now() + interval '10 minutes'),
@@ -50,7 +52,10 @@ insert into public.booking_candidates (id, organization_id, location_id, convers
   ('84000000-0000-0000-0000-000000000004', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '83500000-0000-0000-0000-000000000001', '83600000-0000-0000-0000-000000000001', now() + interval '5 hours', now() + interval '330 minutes', 'UTC', now() + interval '10 minutes'),
   ('84000000-0000-0000-0000-000000000005', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '83500000-0000-0000-0000-000000000002', '83600000-0000-0000-0000-000000000002', now() + interval '6 hours', now() + interval '390 minutes', 'UTC', now() + interval '10 minutes'),
   ('84000000-0000-0000-0000-000000000006', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '83500000-0000-0000-0000-000000000002', '83600000-0000-0000-0000-000000000002', now() + interval '7 hours', now() + interval '450 minutes', 'UTC', now() + interval '10 minutes'),
-  ('84000000-0000-0000-0000-000000000007', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '83500000-0000-0000-0000-000000000002', '83600000-0000-0000-0000-000000000002', now() + interval '8 hours', now() + interval '510 minutes', 'UTC', now() + interval '10 minutes');
+  ('84000000-0000-0000-0000-000000000007', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '83500000-0000-0000-0000-000000000002', '83600000-0000-0000-0000-000000000002', now() + interval '8 hours', now() + interval '510 minutes', 'UTC', now() + interval '10 minutes'),
+  ('84000000-0000-0000-0000-000000000008', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '83500000-0000-0000-0000-000000000001', '83600000-0000-0000-0000-000000000001', now() + interval '9 hours', now() + interval '570 minutes', 'UTC', now() + interval '10 minutes'),
+  ('84000000-0000-0000-0000-000000000009', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '83500000-0000-0000-0000-000000000001', '83600000-0000-0000-0000-000000000001', now() + interval '10 hours', now() + interval '630 minutes', 'UTC', now() + interval '10 minutes'),
+  ('84000000-0000-0000-0000-000000000010', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '83500000-0000-0000-0000-000000000002', '83600000-0000-0000-0000-000000000002', now() + interval '11 hours', now() + interval '690 minutes', 'UTC', now() + interval '10 minutes');
 insert into public.booking_intents (id, organization_id, location_id, conversation_id, integration_id, candidate_id, status, external_contact_uid, external_subject_uid, subject_name) values
   ('84100000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000001', 'booking', null, null, null),
   ('84100000-0000-0000-0000-000000000002', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000002', 'booking', null, null, null),
@@ -58,10 +63,64 @@ insert into public.booking_intents (id, organization_id, location_id, conversati
   ('84100000-0000-0000-0000-000000000004', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000004', 'booking', null, null, null),
   ('84100000-0000-0000-0000-000000000005', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '84000000-0000-0000-0000-000000000005', 'booking', 'ezyvet-contact', 'ezyvet-subject', 'Max'),
   ('84100000-0000-0000-0000-000000000006', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '84000000-0000-0000-0000-000000000006', 'booking', 'ezyvet-contact', 'ezyvet-subject', 'Max'),
-  ('84100000-0000-0000-0000-000000000007', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '84000000-0000-0000-0000-000000000007', 'awaiting_confirmation', 'ezyvet-contact', 'ezyvet-subject', 'Max');
+  ('84100000-0000-0000-0000-000000000007', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000002', '84000000-0000-0000-0000-000000000007', 'awaiting_confirmation', 'ezyvet-contact', 'ezyvet-subject', 'Max'),
+  ('84100000-0000-0000-0000-000000000008', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000008', 'awaiting_confirmation', null, null, null),
+  ('84100000-0000-0000-0000-000000000009', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', '83400000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000009', 'awaiting_confirmation', null, null, null);
+insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type, body, source_channel, author_type, created_at) values
+  ('84200000-0000-0000-0000-000000000001', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', 'inbound', 'voice_transcript', 'what time was that?', 'voice', 'customer', now() + interval '1 minute'),
+  ('84200000-0000-0000-0000-000000000002', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', 'inbound', 'voice_transcript', 'yes please book it', 'voice', 'customer', now() + interval '2 minutes'),
+  ('84200000-0000-0000-0000-000000000003', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', 'inbound', 'voice_transcript', 'yes please book it', 'voice', 'customer', now() + interval '3 minutes'),
+  ('84200000-0000-0000-0000-000000000004', '83100000-0000-0000-0000-000000000001', '83200000-0000-0000-0000-000000000001', '83800000-0000-0000-0000-000000000001', 'inbound', 'voice_transcript', 'what time was that?', 'voice', 'customer', now() + interval '4 minutes');
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select caller_e164 from public.get_voice_scheduling_context('reliability-call')),
+  '+14155550198',
+  'voice scheduling context uses the trusted call transport identity instead of contacts.phone'
+);
+reset role;
+update public.contacts set phone = '+14155550197' where id = '83700000-0000-0000-0000-000000000002';
+update public.location_scheduling_settings set active_integration_id = '83400000-0000-0000-0000-000000000002';
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.lives_ok(
+  $$ select * from public.prepare_conversation_scheduling_booking_intent(
+    '83800000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000010',
+    'ezyvet-contact', 'ezyvet-subject', 'Max', '83700000-0000-0000-0000-000000000002', null
+  ) $$,
+  'voice ezyVet preparation succeeds using the captured call caller identity after a contact phone mutation'
+);
+reset role;
+select extensions.is(
+  (select trusted_transport_phone_e164 from public.booking_intents where candidate_id = '84000000-0000-0000-0000-000000000010'),
+  '+14155550198',
+  'booking intent snapshots the immutable trusted caller phone rather than the edited contact phone'
+);
+update public.location_scheduling_settings set active_integration_id = '83400000-0000-0000-0000-000000000001';
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select state from public.claim_conversation_scheduling_booking_intent('83800000-0000-0000-0000-000000000001', '84200000-0000-0000-0000-000000000001', '84100000-0000-0000-0000-000000000008', 'tool-generic-nonaffirmative')),
+  'confirmation_required',
+  'generic scheduling claim rejects a non-affirmative exact triggering message'
+);
+select extensions.is(
+  (select state from public.claim_conversation_scheduling_booking_intent('83800000-0000-0000-0000-000000000001', '84200000-0000-0000-0000-000000000002', '84100000-0000-0000-0000-000000000008', 'tool-generic-affirmative')),
+  'claimed',
+  'generic scheduling claim accepts the exact later affirmative message'
+);
+select extensions.is(
+  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000009', 'tool-voice-current-nonaffirmative', '84200000-0000-0000-0000-000000000004')),
+  'confirmation_required',
+  'voice adapter cannot reuse a previous YES when the current transcript is not affirmative'
+);
+select extensions.is(
+  (select state from public.claim_voice_scheduling_booking_intent('reliability-call', '84100000-0000-0000-0000-000000000009', 'tool-voice-current-affirmative', '84200000-0000-0000-0000-000000000003')),
+  'claimed',
+  'voice adapter claims only when its exact persisted triggering transcript is affirmative'
+);
 select extensions.lives_ok(
   $$ select public.record_voice_booking_provider_success('84100000-0000-0000-0000-000000000001', 'google-event-1', 'confirmed') $$,
   'trusted backend records a confirmed Google provider result'

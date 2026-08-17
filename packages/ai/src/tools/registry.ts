@@ -5,6 +5,12 @@ import { mayExposeHandoffTool } from '../policy/action-policy';
 import type { AgentFunctionTool } from '../agent/types';
 
 import {
+  availableAppointmentsSchema,
+  bookAppointmentFunction,
+  bookAppointmentSchema,
+  getAvailableAppointmentsFunction,
+  prepareAppointmentBookingFunction,
+  prepareAppointmentBookingSchema,
   requestHumanHelpFunction,
   requestHumanHelpSchema,
   searchBusinessKnowledgeFunction,
@@ -23,10 +29,29 @@ const handoffTool: ToolDefinition<typeof requestHumanHelpSchema> = {
   name: 'request_human_help',
   schema: requestHumanHelpSchema,
 };
+const availabilityTool: ToolDefinition<typeof availableAppointmentsSchema> = {
+  function: getAvailableAppointmentsFunction,
+  name: 'get_available_appointments',
+  schema: availableAppointmentsSchema,
+};
+const prepareTool: ToolDefinition<typeof prepareAppointmentBookingSchema> = {
+  function: prepareAppointmentBookingFunction,
+  name: 'prepare_appointment_booking',
+  schema: prepareAppointmentBookingSchema,
+};
+const bookTool: ToolDefinition<typeof bookAppointmentSchema> = {
+  function: bookAppointmentFunction,
+  name: 'book_appointment',
+  schema: bookAppointmentSchema,
+};
 
 /** Source-controlled registry: no customer, website, or model input can add a tool. */
-export function activeToolDefinitions(industry: IndustryPack): readonly ToolDefinition<ZodType>[] {
-  return mayExposeHandoffTool(industry) ? [searchTool, handoffTool] : [searchTool];
+export function activeToolDefinitions(
+  industry: IndustryPack,
+  schedulingEnabled = false,
+): readonly ToolDefinition<ZodType>[] {
+  const base = mayExposeHandoffTool(industry) ? [searchTool, handoffTool] : [searchTool];
+  return schedulingEnabled ? [...base, availabilityTool, prepareTool, bookTool] : base;
 }
 
 export function activeToolsForIndustry(industry: IndustryPack): readonly AgentFunctionTool[] {

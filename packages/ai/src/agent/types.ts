@@ -10,6 +10,9 @@ export interface AgentExecutionContext {
   readonly locationId: string | null;
   readonly mode: AgentMode;
   readonly organizationId: string;
+  /** Trusted transport metadata supplied by the channel adapter, never model input. */
+  readonly channel?: 'sms' | 'web' | undefined;
+  readonly triggeringInboundMessageId?: string | null | undefined;
 }
 
 export interface AgentBusinessContext {

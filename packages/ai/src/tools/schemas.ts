@@ -11,6 +11,23 @@ export const requestHumanHelpSchema = z
   })
   .strict();
 
+export const availableAppointmentsSchema = z
+  .object({
+    appointment_type: z.string().trim().min(1).max(160),
+    dates: z
+      .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+      .min(1)
+      .max(14),
+  })
+  .strict();
+export const prepareAppointmentBookingSchema = z
+  .object({
+    candidate_id: z.string().uuid(),
+    subject_name: z.string().trim().min(1).max(80).optional(),
+  })
+  .strict();
+export const bookAppointmentSchema = z.object({ booking_intent_id: z.string().uuid() }).strict();
+
 export const searchBusinessKnowledgeFunction = {
   description:
     'Search approved, published business knowledge for a factual business-specific customer question.',
@@ -37,6 +54,44 @@ export const requestHumanHelpFunction = {
       urgency: { enum: ['normal', 'urgent'], type: 'string' },
     },
     required: ['reason', 'urgency'],
+    type: 'object',
+  },
+  strict: true,
+} as const;
+
+export const getAvailableAppointmentsFunction = {
+  description: 'Find bookable appointment options for requested dates. Never infer availability.',
+  name: 'get_available_appointments',
+  parameters: {
+    additionalProperties: false,
+    properties: {
+      appointment_type: { type: 'string' },
+      dates: { items: { type: 'string' }, type: 'array' },
+    },
+    required: ['appointment_type', 'dates'],
+    type: 'object',
+  },
+  strict: true,
+} as const;
+export const prepareAppointmentBookingFunction = {
+  description: 'Prepare one offered appointment option. This does not book an appointment.',
+  name: 'prepare_appointment_booking',
+  parameters: {
+    additionalProperties: false,
+    properties: { candidate_id: { type: 'string' }, subject_name: { type: 'string' } },
+    required: ['candidate_id'],
+    type: 'object',
+  },
+  strict: true,
+} as const;
+export const bookAppointmentFunction = {
+  description:
+    'Book a prepared option only when the current customer message explicitly confirms it.',
+  name: 'book_appointment',
+  parameters: {
+    additionalProperties: false,
+    properties: { booking_intent_id: { type: 'string' } },
+    required: ['booking_intent_id'],
     type: 'object',
   },
   strict: true,

@@ -348,6 +348,7 @@ export class VoiceToolExecutor {
           {
             bookingIntentId: parsed.data.booking_intent_id,
             confirmationText: call.confirmationText ?? null,
+            triggeringInboundMessageId: call.triggeringInboundMessageId ?? null,
             toolCallId: call.callId,
           },
           this.context,

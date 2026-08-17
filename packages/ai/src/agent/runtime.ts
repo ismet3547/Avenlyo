@@ -99,7 +99,13 @@ export class AgentRuntime {
     }
 
     const live = buildLiveContext(input.business.timezone);
-    const instructions = buildAgentInstructions(input.industry, input.business, live);
+    const instructions = `${buildAgentInstructions(input.industry, input.business, live)}\n\n${
+      input.context.channel === 'sms'
+        ? 'CHANNEL: SMS. Keep one response concise (normally 600â€“800 characters or less). Do not send a burst of separate messages. If a safety or handoff response needs more space, prioritize the complete safety/handoff instruction over detail.'
+        : input.context.channel === 'web'
+          ? 'CHANNEL: Website chat. Be concise, but you may provide a little more detail than SMS.'
+          : ''
+    }`;
     const providerInput: AgentProviderInputItem[] = [
       ...buildBoundedConversationContext(input.history, userMessage),
     ];

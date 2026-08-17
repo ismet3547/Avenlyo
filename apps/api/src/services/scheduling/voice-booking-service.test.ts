@@ -32,7 +32,7 @@ const execution = {
   starts_at: '2026-09-01T10:00:00.000Z',
   subject_name: null,
   timezone: 'UTC',
-  trusted_phone_e164: '+14155550123',
+  trusted_phone_e164: '+14155550123' as string | null,
 };
 
 type ExecutionRow = Omit<typeof execution, 'provider'> & {
@@ -43,6 +43,7 @@ function bookingInput() {
   return {
     bookingIntentId: 'intent_1',
     confirmationText: 'Yes, please book it.',
+    triggeringInboundMessageId: 'message_1',
     toolCallId: 'tool_1',
   };
 }
@@ -54,7 +55,10 @@ function serviceFor(input: {
 }) {
   const forIntegration = vi.fn().mockResolvedValue(input.connector);
   const rpc = vi.fn((name: string) => {
-    if (name === 'claim_voice_scheduling_booking_intent') {
+    if (name === 'get_voice_scheduling_context') {
+      return Promise.resolve({ data: [{ conversation_id: 'conversation_1' }], error: null });
+    }
+    if (name === 'claim_conversation_scheduling_booking_intent') {
       return Promise.resolve({
         data: [
           {
@@ -66,7 +70,7 @@ function serviceFor(input: {
         error: null,
       });
     }
-    if (name === 'get_voice_booking_execution_context')
+    if (name === 'get_scheduling_booking_execution_context')
       return Promise.resolve({ data: [input.executionRow ?? execution], error: null });
     if (name === 'claim_booking_slot_lease')
       return Promise.resolve({ data: [{ lease_id: 'lease_1' }], error: null });
@@ -104,8 +108,11 @@ describe('VoiceBookingService booking reliability', () => {
     expect(reconcileBooking).toHaveBeenCalledOnce();
     expect(createBooking).not.toHaveBeenCalled();
     expect(forIntegration).toHaveBeenCalledWith('google_calendar', 'integration_1');
-    expect(rpc).toHaveBeenCalledWith('record_voice_booking_provider_success', expect.any(Object));
-    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+    expect(rpc).toHaveBeenCalledWith(
+      'record_scheduling_booking_provider_success',
+      expect.any(Object),
+    );
+    expect(rpc).toHaveBeenCalledWith('complete_scheduling_booking_intent', {
       target_booking_intent_id: 'intent_1',
     });
   });
@@ -129,8 +136,11 @@ describe('VoiceBookingService booking reliability', () => {
     expect(reconcileBooking).toHaveBeenCalledOnce();
     expect(createBooking).not.toHaveBeenCalled();
     expect(forIntegration).toHaveBeenCalledWith('ezyvet', 'integration_1');
-    expect(rpc).toHaveBeenCalledWith('record_voice_booking_provider_success', expect.any(Object));
-    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+    expect(rpc).toHaveBeenCalledWith(
+      'record_scheduling_booking_provider_success',
+      expect.any(Object),
+    );
+    expect(rpc).toHaveBeenCalledWith('complete_scheduling_booking_intent', {
       target_booking_intent_id: 'intent_1',
     });
   });
@@ -151,7 +161,7 @@ describe('VoiceBookingService booking reliability', () => {
     expect(createBooking).not.toHaveBeenCalled();
     expect(reconcileBooking).not.toHaveBeenCalled();
     expect(forIntegration).not.toHaveBeenCalled();
-    expect(rpc).toHaveBeenCalledWith('complete_voice_booking_intent', {
+    expect(rpc).toHaveBeenCalledWith('complete_scheduling_booking_intent', {
       target_booking_intent_id: 'intent_1',
     });
   });
@@ -190,6 +200,29 @@ describe('VoiceBookingService booking reliability', () => {
     expect(createBooking).not.toHaveBeenCalled();
     expect(reconcileBooking).not.toHaveBeenCalled();
     expect(forIntegration).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for an ezyVet intent without a trusted transport-phone snapshot', async () => {
+    const createBooking = vi.fn();
+    const reconcileBooking = vi.fn();
+    const { forIntegration, rpc, service } = serviceFor({
+      claimState: 'claimed',
+      connector: { createBooking, reconcileBooking } as unknown as BookingConnector,
+      executionRow: { ...execution, provider: 'ezyvet', trusted_phone_e164: null },
+    });
+
+    await expect(service.bookAppointment(bookingInput(), { callId: 'call_1' })).resolves.toEqual({
+      outcome: 'unavailable',
+    });
+
+    expect(createBooking).not.toHaveBeenCalled();
+    expect(reconcileBooking).not.toHaveBeenCalled();
+    expect(forIntegration).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith('fail_scheduling_booking_intent', {
+      target_booking_intent_id: 'intent_1',
+      target_error_category: 'transport_identity_unavailable',
+      target_status: 'awaiting_confirmation',
+    });
   });
 
   it('blocks confirmation before execution when the database reports a changed provider policy', async () => {

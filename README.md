@@ -5,7 +5,8 @@ capture leads, book appointments, and hand off to people when appropriate.
 
 This repository contains the Phase 0 foundation, **Phase 1 authenticated onboarding**, **Phase 2
 reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, **Phase 4 inbound
-voice control**, and **Phase 5 veterinary ezyVet scheduling**. It
+voice control**, **Phase 5 veterinary ezyVet scheduling**, **Phase 6 Google Calendar scheduling**,
+and **Phase 7 unified SMS and web-chat messaging**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
 empty state. It does not include production integrations, billing, live customer AI, or AI workflows.
@@ -70,6 +71,10 @@ Copy-Item apps/api/.env.example apps/api/.env
 | `OPENAI_REALTIME_MODEL`     | No                                   | Server-only Realtime model. Defaults to `gpt-realtime-2.1`.               |
 | `OPENAI_PROJECT_ID`         | No                                   | Optional server-only OpenAI project ID (`proj_...`).                      |
 | `EZYVET_PARTNER_ID`         | ezyVet scheduling                    | Server-only ezyVet partner identifier; enables the trusted connector.    |
+| `TWILIO_ACCOUNT_SID`        | SMS webhook/outbound delivery         | Avenlyo-owned Twilio Account SID; never browser-exposed.                 |
+| `TWILIO_AUTH_TOKEN`         | SMS webhook/outbound delivery         | Server-only Twilio token used only by the official Twilio SDK.           |
+| `TWILIO_MESSAGING_WEBHOOK_BASE_URL` | SMS webhook/outbound delivery | Exact public API base used to validate webhook signatures/callbacks.     |
+| `OPENAI_AGENT_MODEL`        | No                                   | Text-agent Responses model. Defaults to `gpt-5.6`.                       |
 
 Never commit actual `.env` or `.env.local` files. The API validates its environment once at
 startup; the web app validates its public configuration once when loaded.
@@ -152,6 +157,55 @@ supabase/migrations/   Versioned PostgreSQL schema and RLS policies
 - The web dashboard uses real Supabase Auth and reads organization/location context from a trusted
   RPC. Without public Supabase variables, only public pages boot; protected routes return users to
   sign-in.
+
+## Unified messaging (Phase 7)
+
+Phase 7 adds a single tenant-aware conversation model for inbound SMS and hosted web chat. The
+existing controlled agent core, approved knowledge retrieval, safety escalation, scheduling state
+machine, and human-handoff semantics are reused by transport adapters; there is no separate SMS or
+web-chat agent. Each inbound message creates at most one durable `message_processing_jobs` row.
+Workers claim work with `FOR UPDATE SKIP LOCKED`, reclaim stale claims, and check for a persisted AI
+reply before calling the model again. An AI reply is unique per inbound message.
+
+`conversations.ai_mode` is either `ai` or `human`. A handoff or staff takeover switches to `human`
+immediately, so new inbound jobs do not send automatic replies. Staff can reply and later resume
+AI from **Dashboard -> Inbox**; resuming itself does not create a message.
+
+### SMS setup
+
+Set the three `TWILIO_*` variables only in `apps/api/.env`. Configure Twilio to send incoming
+messages to:
+
+```text
+POST https://your-api.example/v1/webhooks/twilio/messaging/inbound
+```
+
+Every callback is verified with Twilio's maintained Node SDK against the exact configured base URL
+and every submitted form field. The endpoint returns empty TwiML only after durable routing by a
+configured, globally unique SMS-enabled DID. Unknown DIDs leave no tenant state. `MessageSid` is
+idempotent, media is stored as metadata only, and STOP/START/HELP are deterministic provider
+keyword fallbacks. Outbound staff/AI SMS uses the trusted conversation contact and assigned DID;
+it cannot take a destination from a model or browser request. If a provider submission is ambiguous,
+the delivery is marked `unknown` and is never blindly resent. Status callbacks update delivery state
+monotonically.
+
+Twilio resources, phone-number purchase, and real credentialed smoke tests remain manual operations.
+No automated test sends an SMS.
+
+### Web chat setup
+
+Owners/admins configure **AI Front Office -> Website Chat** for a location: enable it, list exact
+HTTPS origins (with `http://localhost:<port>` allowed only for development), then copy the generated
+script tag. The script first creates a browser-origin-validated session, then hosts the UI in an
+Avenlyo iframe. Visitors receive an opaque 256-bit token stored only as a SHA-256 hash and refreshed
+for 24 hours of inactivity. The browser never receives a Supabase token, service-role key, provider
+credential, or raw embedding. Messages are plain text (2,000 characters), use client UUID
+idempotency, and poll at a bounded three-second interval.
+
+Anonymous web chat can create a conversation without inventing a verified contact. A scheduling
+adapter must therefore require a trusted identity before an ezyVet write; it should hand off instead
+of fabricating a contact or pet. Google Calendar remains able to use the existing approved local
+booking model where its connector does not require that external identity.
 
 ## Controlled AI Agent Test
 

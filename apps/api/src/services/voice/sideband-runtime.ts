@@ -33,6 +33,7 @@ export class VoiceSidebandRuntime {
   private readonly auditedToolCallIds = new Set<string>();
   private readonly completedToolCallIds = new Set<string>();
   private latestCallerTranscript: string | null = null;
+  private latestCallerTranscriptMessageId: string | null = null;
   private schedulingBlocked = false;
 
   public constructor(private readonly options: VoiceSidebandRuntimeOptions) {
@@ -110,6 +111,7 @@ export class VoiceSidebandRuntime {
     });
     if (!stored) return;
     this.latestCallerTranscript = event.transcript;
+    this.latestCallerTranscriptMessageId = stored;
     this.options.sessions.recordActivity(this.options.context.callId);
     const safety = detectSafetyEscalation(this.options.context.industry, event.transcript);
     if (safety) {
@@ -148,6 +150,7 @@ export class VoiceSidebandRuntime {
       arguments: event.arguments,
       callId: event.call_id,
       confirmationText: this.latestCallerTranscript,
+      triggeringInboundMessageId: this.latestCallerTranscriptMessageId,
       name: event.name,
       schedulingBlocked: this.schedulingBlocked,
     });
