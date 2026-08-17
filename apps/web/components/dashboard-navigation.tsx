@@ -14,6 +14,7 @@ import { signOutAction } from '@/app/auth/actions';
 
 const navigation: ReadonlyArray<{ href: string; icon: LucideIcon; label: string }> = [
   { href: '/dashboard', label: 'Home', icon: Home },
+  { href: '/dashboard/inbox', label: 'Inbox', icon: MessageSquare },
   { href: '/dashboard/conversations', label: 'Conversations', icon: MessageSquare },
   { href: '/dashboard/customers', label: 'Customers', icon: Users },
   { href: '/dashboard/appointments', label: 'Appointments', icon: CalendarDays },

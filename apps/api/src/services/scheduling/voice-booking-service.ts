@@ -8,7 +8,7 @@ import type {
 } from '@avenlyo/integrations';
 import { BookingProviderError } from '@avenlyo/integrations';
 import type { Database } from '@avenlyo/database';
-import { hasExplicitBookingConfirmation, type VoiceSchedulingServices } from '@avenlyo/voice';
+import type { VoiceSchedulingServices } from '@avenlyo/voice';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { ApiSchedulingConnectorRegistry } from './connector-registry.js';
@@ -102,7 +102,8 @@ export class VoiceBookingService implements VoiceSchedulingServices {
   }
 
   public async bookAppointment(input: { readonly bookingIntentId: string; readonly confirmationText: string | null; readonly toolCallId: string }, context: { readonly callId: string }) {
-    if (!hasExplicitBookingConfirmation(input.confirmationText)) return { outcome: 'confirmation_required' as const };
+    // Confirmation text from a realtime/model event is never authoritative. The trusted SQL
+    // claim below reads the persisted later customer transcript in the same conversation.
     const { data, error } = await this.input.supabase.rpc('claim_voice_scheduling_booking_intent', { target_booking_intent_id: input.bookingIntentId, target_call_id: context.callId, target_tool_call_id: input.toolCallId });
     const claim = data?.[0];
     if (error || !claim || claim.state === 'confirmation_required') return { outcome: 'confirmation_required' as const };

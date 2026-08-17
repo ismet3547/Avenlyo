@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpenCheck, PhoneCall, TestTube2 } from 'lucide-react';
+import { BookOpenCheck, MessageSquareText, PhoneCall, TestTube2 } from 'lucide-react';
 
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 
@@ -18,7 +18,7 @@ export default async function AiFrontOfficePage() {
         Prepare approved business knowledge, then run internal AI Front Office tests with a small,
         auditable tool set.
       </p>
-      <div className="mt-8 grid gap-5 sm:grid-cols-3">
+      <div className="mt-8 grid gap-5 sm:grid-cols-2">
         <Link
           className="rounded-2xl border border-border bg-white p-6 shadow-sm transition hover:border-primary/50 hover:shadow-md"
           href="/dashboard/ai-front-office/knowledge"
@@ -27,6 +27,16 @@ export default async function AiFrontOfficePage() {
           <h2 className="mt-4 text-lg font-semibold text-ink">Business Knowledge</h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             Import, review, and publish the website facts the agent may retrieve.
+          </p>
+        </Link>
+        <Link
+          className="rounded-2xl border border-border bg-white p-6 shadow-sm transition hover:border-primary/50 hover:shadow-md"
+          href="/dashboard/ai-front-office/web-chat"
+        >
+          <MessageSquareText aria-hidden="true" className="size-6 text-primary" />
+          <h2 className="mt-4 text-lg font-semibold text-ink">Website Chat</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            Configure a first-party embedded chat widget and its approved website origins.
           </p>
         </Link>
         <Link

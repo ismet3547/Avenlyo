@@ -380,6 +380,120 @@ export interface SchedulingAppointmentRow {
   created_at: string;
 }
 
+export interface MessagingInboundBootstrapRow {
+  accepted: boolean;
+  is_duplicate: boolean;
+  message_id: string | null;
+  conversation_id: string | null;
+  organization_id: string | null;
+  location_id: string | null;
+  command: string | null;
+}
+
+export interface WebChatSessionRow {
+  session_id: string;
+  conversation_id: string;
+  welcome_message: string | null;
+}
+
+export interface WebChatMessageRow {
+  message_id: string;
+  conversation_id: string;
+  is_duplicate: boolean;
+}
+
+export interface PublicWebChatMessageRow {
+  message_id: string;
+  direction: string;
+  author_type: string;
+  body: string | null;
+  created_at: string;
+}
+
+export interface InboxConversationRow {
+  conversation_id: string;
+  location_id: string | null;
+  channel_type: string;
+  contact_name: string | null;
+  contact_phone: string | null;
+  latest_body: string | null;
+  latest_at: string;
+  ai_mode: 'ai' | 'human';
+  handoff_open: boolean;
+}
+
+export interface InboxMessageRow {
+  message_id: string;
+  direction: string;
+  author_type: string;
+  body: string | null;
+  source_channel: string;
+  delivery_status: string | null;
+  created_at: string;
+}
+
+export interface MessageProcessingJobRow {
+  job_id: string;
+  job_kind: 'inbound_ai' | 'outbound_delivery';
+  message_id: string;
+  conversation_id: string;
+  organization_id: string;
+  location_id: string | null;
+  attempts: number;
+}
+
+export interface MessageRuntimeContextRow {
+  message_id: string;
+  conversation_id: string;
+  organization_id: string;
+  location_id: string | null;
+  channel_type: 'sms' | 'web' | 'phone' | 'email' | 'whatsapp';
+  ai_mode: 'ai' | 'human';
+  body: string | null;
+  contact_id: string | null;
+  contact_phone: string | null;
+  transport_phone_number_id: string | null;
+  inbound_message_id: string;
+}
+
+export interface AssistantMessageResultRow {
+  message_id: string | null;
+  created: boolean;
+}
+
+export interface SmsDeliveryExecutionRow {
+  message_id: string;
+  delivery_id: string;
+  to_e164: string;
+  from_e164: string;
+  body: string;
+  status: string;
+}
+
+export interface MessageAgentContextRow {
+  message_id: string;
+  conversation_id: string;
+  organization_id: string;
+  location_id: string;
+  industry_id: string;
+  organization_name: string;
+  location_name: string;
+  location_timezone: string;
+  location_address: Json;
+  business_hours: Json;
+  business_phone: string | null;
+  website_url: string | null;
+  history: Json;
+}
+
+export interface WebChatWidgetConfigurationRow {
+  widget_id: string;
+  public_key: string;
+  enabled: boolean;
+  allowed_origins: Json;
+  welcome_message: string | null;
+}
+
 type EmptyRecord = Record<never, never>;
 
 export interface Database {
@@ -659,7 +773,11 @@ export interface Database {
         Returns: { user_id: string; organization_id: string; location_id: string }[];
       };
       store_google_calendar_connection: {
-        Args: { target_organization_id: string; target_location_id: string; target_refresh_token: string };
+        Args: {
+          target_organization_id: string;
+          target_location_id: string;
+          target_refresh_token: string;
+        };
         Returns: { integration_id: string }[];
       };
       get_google_calendar_execution_credentials: {
@@ -683,11 +801,20 @@ export interface Database {
         Returns: { appointment_type_id: string }[];
       };
       update_my_google_booking_policy: {
-        Args: { target_location_id: string; selected_appointment_type_ids: string[]; selected_resource_ids: string[]; mappings: Json };
+        Args: {
+          target_location_id: string;
+          selected_appointment_type_ids: string[];
+          selected_resource_ids: string[];
+          mappings: Json;
+        };
         Returns: undefined;
       };
       set_my_active_scheduling_integration: {
-        Args: { target_location_id: string; target_integration_id: string; target_minimum_lead_minutes?: number };
+        Args: {
+          target_location_id: string;
+          target_integration_id: string;
+          target_minimum_lead_minutes?: number;
+        };
         Returns: undefined;
       };
       disable_google_calendar_integration: {
@@ -750,11 +877,22 @@ export interface Database {
         Returns: BookingIntentRow[];
       };
       prepare_voice_scheduling_booking_intent: {
-        Args: { target_call_id: string; target_candidate_id: string; resolved_contact_uid: string | null; resolved_subject_uid: string | null; resolved_subject_name: string | null; trusted_contact_id: string | null };
+        Args: {
+          target_call_id: string;
+          target_candidate_id: string;
+          resolved_contact_uid: string | null;
+          resolved_subject_uid: string | null;
+          resolved_subject_name: string | null;
+          trusted_contact_id: string | null;
+        };
         Returns: BookingIntentRow[];
       };
       claim_voice_scheduling_booking_intent: {
-        Args: { target_call_id: string; target_booking_intent_id: string; target_tool_call_id: string };
+        Args: {
+          target_call_id: string;
+          target_booking_intent_id: string;
+          target_tool_call_id: string;
+        };
         Returns: BookingClaimRow[];
       };
       claim_booking_slot_lease: {
@@ -800,6 +938,135 @@ export interface Database {
       get_my_scheduling_appointments: {
         Args: { target_location_id: string };
         Returns: SchedulingAppointmentRow[];
+      };
+      bootstrap_inbound_sms: {
+        Args: {
+          target_message_sid: string;
+          target_from_e164: string;
+          target_to_e164: string;
+          target_body: string;
+          target_media?: Json;
+          target_provider_metadata?: Json;
+        };
+        Returns: MessagingInboundBootstrapRow[];
+      };
+      create_web_chat_session: {
+        Args: {
+          target_widget_public_key: string;
+          target_origin: string;
+          target_token_hash: string;
+          target_rate_scope: string;
+        };
+        Returns: WebChatSessionRow[];
+      };
+      append_web_chat_message: {
+        Args: {
+          target_token_hash: string;
+          target_origin: string;
+          target_client_message_id: string;
+          target_body: string;
+          target_rate_scope: string;
+        };
+        Returns: WebChatMessageRow[];
+      };
+      get_web_chat_messages: {
+        Args: { target_token_hash: string; target_origin: string; target_after?: string | null };
+        Returns: PublicWebChatMessageRow[];
+      };
+      get_my_inbox_conversations: {
+        Args: { target_location_id?: string | null };
+        Returns: InboxConversationRow[];
+      };
+      get_my_inbox_messages: {
+        Args: { target_conversation_id: string };
+        Returns: InboxMessageRow[];
+      };
+      take_over_my_conversation: { Args: { target_conversation_id: string }; Returns: undefined };
+      resume_my_conversation_ai: { Args: { target_conversation_id: string }; Returns: undefined };
+      create_my_human_reply: {
+        Args: { target_conversation_id: string; target_body: string };
+        Returns: { message_id: string; source_channel: string }[];
+      };
+      get_my_web_chat_widget: {
+        Args: { target_location_id: string };
+        Returns: WebChatWidgetConfigurationRow[];
+      };
+      upsert_my_web_chat_widget: {
+        Args: {
+          target_location_id: string;
+          target_enabled: boolean;
+          target_allowed_origins: Json;
+          target_welcome_message?: string | null;
+        };
+        Returns: WebChatWidgetConfigurationRow[];
+      };
+      claim_message_processing_jobs: {
+        Args: { target_worker_id: string; target_limit?: number };
+        Returns: MessageProcessingJobRow[];
+      };
+      complete_message_processing_job: { Args: { target_job_id: string }; Returns: undefined };
+      retry_message_processing_job: {
+        Args: { target_job_id: string; target_error_code: string };
+        Returns: undefined;
+      };
+      get_message_runtime_context: {
+        Args: { target_message_id: string };
+        Returns: MessageRuntimeContextRow[];
+      };
+      persist_ai_message_reply: {
+        Args: {
+          target_inbound_message_id: string;
+          target_body: string;
+          target_handoff_requested?: boolean;
+        };
+        Returns: AssistantMessageResultRow[];
+      };
+      get_message_agent_context: {
+        Args: { target_message_id: string };
+        Returns: MessageAgentContextRow[];
+      };
+      has_persisted_ai_reply: {
+        Args: { target_inbound_message_id: string };
+        Returns: boolean;
+      };
+      request_message_handoff: {
+        Args: {
+          target_inbound_message_id: string;
+          target_tool_call_id: string;
+          target_reason: string;
+          target_urgency?: string;
+        };
+        Returns: { handoff_id: string; created: boolean }[];
+      };
+      get_sms_delivery_execution_context: {
+        Args: { target_message_id: string };
+        Returns: SmsDeliveryExecutionRow[];
+      };
+      mark_sms_delivery_sending: { Args: { target_message_id: string }; Returns: undefined };
+      record_sms_delivery_submission: {
+        Args: { target_message_id: string; target_provider_message_id: string };
+        Returns: undefined;
+      };
+      mark_sms_delivery_unknown: {
+        Args: { target_message_id: string; target_error_code: string };
+        Returns: undefined;
+      };
+      record_twilio_message_status: {
+        Args: {
+          target_provider_message_id: string;
+          target_status: string;
+          target_error_code?: string | null;
+        };
+        Returns: undefined;
+      };
+      claim_conversation_scheduling_booking_intent: {
+        Args: {
+          target_conversation_id: string;
+          target_inbound_message_id: string;
+          target_booking_intent_id: string;
+          target_tool_call_id: string;
+        };
+        Returns: BookingClaimRow[];
       };
     };
     Enums: EmptyRecord;

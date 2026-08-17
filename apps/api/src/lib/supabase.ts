@@ -16,9 +16,13 @@ export function createApiSupabaseClient() {
 }
 
 /** Voice webhooks have no user JWT. This client is created only inside the Fastify backend. */
-export function createVoiceServiceSupabaseClient() {
+/** Server-only client for trusted webhook, worker, and provider execution paths. */
+export function createServiceSupabaseClient() {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
   return createClient<Database>(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
   });
 }
+
+/** @deprecated Use createServiceSupabaseClient for new trusted backend paths. */
+export const createVoiceServiceSupabaseClient = createServiceSupabaseClient;
