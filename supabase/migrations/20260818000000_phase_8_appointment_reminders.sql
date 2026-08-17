@@ -5,6 +5,9 @@ alter table public.appointments
   add constraint appointments_trusted_sms_recipient_e164_check
     check (trusted_sms_recipient_e164 is null or trusted_sms_recipient_e164 ~ E'^\\+[1-9][0-9]{7,14}$');
 
+alter table public.appointments
+  add constraint appointments_organization_location_id_key unique (organization_id, location_id, id);
+
 create table public.appointment_reminder_settings (
   id uuid primary key default extensions.gen_random_uuid(),
   organization_id uuid not null references public.organizations (id) on delete cascade,
@@ -44,12 +47,12 @@ create table public.appointment_reminders (
   constraint appointment_reminders_appointment_fk foreign key (organization_id, location_id, appointment_id)
     references public.appointments (organization_id, location_id, id) on delete cascade,
   constraint appointment_reminders_organization_id_id_key unique (organization_id, id),
+  constraint appointment_reminders_organization_location_id_key unique (organization_id, location_id, id),
   constraint appointment_reminders_appointment_type_key unique (appointment_id, reminder_type),
   constraint appointment_reminders_trusted_sms_recipient_e164_check check
     (trusted_sms_recipient_e164 is null or trusted_sms_recipient_e164 ~ E'^\\+[1-9][0-9]{7,14}$')
 );
 
-alter table public.appointments add constraint appointments_organization_location_id_key unique (organization_id, location_id, id);
 alter table public.messages add column appointment_reminder_id uuid;
 alter table public.messages add constraint messages_organization_location_id_id_key unique (organization_id, location_id, id);
 alter table public.messages add constraint messages_appointment_reminder_fk foreign key (organization_id, location_id, appointment_reminder_id)
