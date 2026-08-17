@@ -220,7 +220,7 @@ begin
     nullif(btrim(target_body), ''), target_message_sid,
     jsonb_build_object('provider', 'twilio', 'has_media', media_count > 0, 'media_count', media_count, 'content_types', content_types,
       'provider_metadata', jsonb_strip_nulls(jsonb_build_object('opt_out_type', nullif(provider_opt_out, '')))), 'sms', 'customer', now())
-  on conflict (organization_id, external_id) do nothing returning id into saved_message_id;
+  on conflict on constraint messages_organization_external_key do nothing returning id into saved_message_id;
   if saved_message_id is null then
     select message.id into saved_message_id from public.messages message where message.organization_id = route.organization_id and message.external_id = target_message_sid;
     return query select true, true, saved_message_id, conversation_row.id, route.organization_id, route.location_id, detected_command; return;
@@ -228,7 +228,7 @@ begin
   insert into public.messaging_contact_preferences (organization_id, location_id, contact_id, channel_type, sender_phone_number_id, status, opted_out_at, source_message_id)
   values (route.organization_id, route.location_id, contact_row.id, 'sms', route.id, case when detected_command = 'stop' then 'opted_out' else 'active' end,
     case when detected_command = 'stop' then now() else null end, saved_message_id)
-  on conflict (organization_id, location_id, contact_id, channel_type, sender_phone_number_id) do update set
+  on conflict on constraint messaging_contact_preferences_route_key do update set
     status = case when detected_command = 'stop' then 'opted_out' when detected_command = 'start' then 'active' else public.messaging_contact_preferences.status end,
     opted_out_at = case when detected_command = 'stop' then now() when detected_command = 'start' then null else public.messaging_contact_preferences.opted_out_at end,
     source_message_id = excluded.source_message_id, updated_at = now();
