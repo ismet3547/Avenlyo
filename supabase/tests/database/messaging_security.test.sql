@@ -225,9 +225,13 @@ select extensions.throws_ok(
   'insert or update on table "messages" violates foreign key constraint "messages_reply_conversation_scope_fk"',
   'a reply cannot point at an inbound message from another conversation in the same organization'
 );
-insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type)
-select '91800000-0000-0000-0000-000000000001', organization_id, location_id, id, contact_id, 'outbound', 'text', 'Durable test reply', 'sms', 'system'
-from public.conversations where transport_phone_number_id = '91400000-0000-0000-0000-000000000001' limit 1;
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, in_reply_to_message_id)
+select '91800000-0000-0000-0000-000000000001', conversation.organization_id, conversation.location_id, conversation.id, conversation.contact_id,
+  'outbound', 'text', 'Durable test reply', 'sms', 'system', inbound.id
+from public.conversations conversation
+join public.messages inbound on inbound.organization_id = conversation.organization_id and inbound.conversation_id = conversation.id
+  and inbound.external_id = 'SM00000000000000000000000000000001'
+where conversation.transport_phone_number_id = '91400000-0000-0000-0000-000000000001';
 insert into public.message_deliveries (id, organization_id, location_id, message_id, provider)
 select '91800000-0000-0000-0000-000000000002', organization_id, location_id, id, 'twilio' from public.messages where id = '91800000-0000-0000-0000-000000000001';
 insert into public.message_processing_jobs (id, organization_id, location_id, conversation_id, message_id, job_kind, status, claimed_at, claimed_by)
