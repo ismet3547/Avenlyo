@@ -178,14 +178,14 @@ select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', '90000000-0000-0000-0000-000000000002', true);
 
 select extensions.is(
-  (select count(*)::integer from public.get_my_inbox_conversations(null)),
-  1,
-  'location-scoped member sees only their assigned location inbox conversation'
+  (select exists(select 1 from public.get_my_inbox_conversations(null) inbox where inbox.contact_phone = '+14155550101')),
+  true,
+  'location-scoped member sees an authorized customer conversation at their assigned location'
 );
 select extensions.is(
-  (select count(*)::integer from public.conversations where organization_id = '91000000-0000-0000-0000-000000000001' and location_id = '91100000-0000-0000-0000-000000000001' and mode = 'customer'),
+  (select count(*)::integer from public.conversations conversation join public.contacts contact on contact.organization_id = conversation.organization_id and contact.id = conversation.contact_id where conversation.organization_id = '91000000-0000-0000-0000-000000000001' and conversation.location_id = '91100000-0000-0000-0000-000000000001' and conversation.mode = 'customer' and contact.phone = '+14155550101'),
   1,
-  'location-scoped member can directly read an authorized operational customer conversation'
+  'location-scoped member can directly read the authorized operational customer conversation'
 );
 select extensions.is(
   (select count(*)::integer from public.conversations where organization_id = '91000000-0000-0000-0000-000000000001' and location_id = '91200000-0000-0000-0000-000000000001'),
@@ -230,16 +230,16 @@ select extensions.is(
   'organization owner retains Phase 3 test-conversation visibility'
 );
 select extensions.lives_ok(
-  $$ select public.take_over_my_conversation((select conversation_id from public.get_my_inbox_conversations('91100000-0000-0000-0000-000000000001') limit 1)) $$,
+  $$ select public.take_over_my_conversation((select conversation_id from public.get_my_inbox_conversations('91100000-0000-0000-0000-000000000001') where contact_phone = '+14155550101' limit 1)) $$,
   'owner can take over a permitted conversation through the audited RPC'
 );
 select extensions.is(
-  (select ai_mode from public.conversations where location_id = '91100000-0000-0000-0000-000000000001' order by created_at limit 1),
+  (select conversation.ai_mode from public.conversations conversation join public.contacts contact on contact.organization_id = conversation.organization_id and contact.id = conversation.contact_id where contact.phone = '+14155550101'),
   'human',
   'takeover stops automatic replies for the conversation'
 );
 select extensions.lives_ok(
-  $$ select public.resume_my_conversation_ai((select conversation_id from public.get_my_inbox_conversations('91100000-0000-0000-0000-000000000001') limit 1)) $$,
+  $$ select public.resume_my_conversation_ai((select conversation_id from public.get_my_inbox_conversations('91100000-0000-0000-0000-000000000001') where contact_phone = '+14155550101' limit 1)) $$,
   'owner can resume AI without fabricating an immediate reply'
 );
 

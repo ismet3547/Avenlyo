@@ -135,8 +135,8 @@ begin
   select * into session_row from public.web_chat_sessions
     where token_hash = target_token_hash and expires_at > now() for update;
   if session_row.id is null then raise exception using errcode = '42501', message = 'Web chat session is unavailable'; end if;
-  select id into saved_message_id from public.messages
-    where organization_id = session_row.organization_id and conversation_id = session_row.conversation_id and client_message_id = target_client_message_id;
+  select message.id into saved_message_id from public.messages message
+    where message.organization_id = session_row.organization_id and message.conversation_id = session_row.conversation_id and message.client_message_id = target_client_message_id;
   if saved_message_id is not null then return query select saved_message_id, session_row.conversation_id, true; return; end if;
   insert into public.messages (organization_id, location_id, conversation_id, direction, message_type, body, metadata, source_channel, author_type, client_message_id, sent_at)
   values (session_row.organization_id, session_row.location_id, session_row.conversation_id, 'inbound', 'text', btrim(target_body),
