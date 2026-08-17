@@ -276,7 +276,7 @@ language plpgsql security definer set search_path = '' as $$
 declare delivery public.message_deliveries%rowtype; message public.messages%rowtype; conversation public.conversations%rowtype; contact public.contacts%rowtype; phone public.phone_numbers%rowtype;
 begin
   perform public.require_messaging_service_role();
-  select * into delivery from public.message_deliveries where message_id = target_message_id and provider = 'twilio' for update;
+  select * into delivery from public.message_deliveries delivery_row where delivery_row.message_id = target_message_id and delivery_row.provider = 'twilio' for update;
   if delivery.id is null or delivery.status <> 'queued' then return; end if;
   select * into message from public.messages where organization_id = delivery.organization_id and id = delivery.message_id;
   select * into conversation from public.conversations where organization_id = message.organization_id and id = message.conversation_id;
@@ -345,7 +345,7 @@ begin
   ), updated as (
     update public.message_processing_jobs job set status = 'processing', attempts = attempts + 1, claimed_at = now(), claimed_by = btrim(target_worker_id), updated_at = now()
     from claimed where job.id = claimed.id returning job.*
-  ) select id, job_kind, message_id, conversation_id, organization_id, location_id, attempts from updated;
+  ) select updated.id, updated.job_kind, updated.message_id, updated.conversation_id, updated.organization_id, updated.location_id, updated.attempts from updated;
 end;
 $$;
 
