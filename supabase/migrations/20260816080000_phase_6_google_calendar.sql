@@ -148,17 +148,17 @@ end; $$;
 create function public.create_google_oauth_state(target_user_id uuid, target_location_id uuid, target_state_hash text)
 returns table (organization_id uuid, location_id uuid)
 language plpgsql security definer set search_path = '' as $$
-declare authorization record;
+declare authz record;
 begin
   perform public.require_scheduling_service_role();
   if coalesce(target_state_hash, '') !~ '^[0-9a-f]{64}$' then
     raise exception using errcode = '22023', message = 'OAuth state is invalid';
   end if;
-  select * into authorization from public.get_google_backend_authorization(target_user_id, target_location_id);
-  if authorization.organization_id is null then raise exception using errcode = '42501', message = 'Organization owner or admin access is required'; end if;
+  select * into authz from public.get_google_backend_authorization(target_user_id, target_location_id);
+  if authz.organization_id is null then raise exception using errcode = '42501', message = 'Organization owner or admin access is required'; end if;
   insert into public.oauth_connection_states (state_hash, provider, user_id, organization_id, location_id, expires_at)
-  values (target_state_hash, 'google_calendar', target_user_id, authorization.organization_id, authorization.location_id, now() + interval '10 minutes');
-  return query select authorization.organization_id, authorization.location_id;
+  values (target_state_hash, 'google_calendar', target_user_id, authz.organization_id, authz.location_id, now() + interval '10 minutes');
+  return query select authz.organization_id, authz.location_id;
 end; $$;
 
 create function public.consume_google_oauth_state(target_state_hash text)
