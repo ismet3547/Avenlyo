@@ -51,9 +51,10 @@ describe('AppointmentReminderWorker', () => {
       appointment: { appointmentKey: 'external-1', providerStatus: 'confirmed' },
       kind: 'found',
     });
+    const createBooking = vi.fn();
     const { forIntegration, rpc, worker } = workerFor({
       connector: {
-        createBooking: vi.fn(),
+        createBooking,
         getAvailability: vi.fn(),
         provider: 'ezyvet',
         reconcileBooking,
@@ -67,6 +68,7 @@ describe('AppointmentReminderWorker', () => {
 
     expect(forIntegration).toHaveBeenCalledWith('ezyvet', 'integration-1');
     expect(reconcileBooking).toHaveBeenCalledOnce();
+    expect(createBooking).not.toHaveBeenCalled();
     expect(rpc).toHaveBeenCalledWith('record_appointment_reminder_revalidation', {
       target_outcome: 'confirmed',
       target_reminder_id: 'reminder-1',
@@ -88,6 +90,33 @@ describe('AppointmentReminderWorker', () => {
     expect(forIntegration).not.toHaveBeenCalled();
     expect(rpc).toHaveBeenCalledWith('record_appointment_reminder_revalidation', {
       target_outcome: 'provider_unavailable',
+      target_reminder_id: 'reminder-1',
+    });
+    expect(rpc).not.toHaveBeenCalledWith('create_appointment_reminder_message', expect.anything());
+  });
+
+  it('suppresses a mismatched Google event without any provider mutation', async () => {
+    const reconcileBooking = vi.fn().mockResolvedValue({ kind: 'not_found' });
+    const createBooking = vi.fn();
+    const { rpc, worker } = workerFor({
+      connector: {
+        createBooking,
+        getAvailability: vi.fn(),
+        provider: 'google_calendar',
+        reconcileBooking,
+        resolveBookingParty: vi.fn(),
+      },
+      context: { ...providerContext, provider: 'google_calendar' },
+    });
+
+    await (worker as unknown as { process(reminderId: string): Promise<void> }).process(
+      'reminder-1',
+    );
+
+    expect(reconcileBooking).toHaveBeenCalledOnce();
+    expect(createBooking).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith('record_appointment_reminder_revalidation', {
+      target_outcome: 'provider_not_confirmed',
       target_reminder_id: 'reminder-1',
     });
     expect(rpc).not.toHaveBeenCalledWith('create_appointment_reminder_message', expect.anything());
@@ -115,6 +144,20 @@ describe('AppointmentReminderWorker', () => {
     });
     expect(rpc).toHaveBeenCalledWith('create_appointment_reminder_message', {
       target_reminder_id: 'reminder-1',
+    });
+  });
+
+  it('runs one bounded schedule reconciliation before claiming due reminders', async () => {
+    const { rpc, worker } = workerFor({});
+
+    await (worker as unknown as { run(): Promise<void> }).run();
+
+    expect(rpc).toHaveBeenNthCalledWith(1, 'reconcile_appointment_reminder_schedules', {
+      target_limit: 50,
+    });
+    expect(rpc).toHaveBeenNthCalledWith(2, 'claim_due_appointment_reminders', {
+      target_limit: 4,
+      target_worker_id: expect.stringMatching(/^reminder-/),
     });
   });
 });

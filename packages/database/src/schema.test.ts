@@ -127,6 +127,20 @@ const appointmentReminderSecurityTest = readFileSync(
   ),
   'utf8',
 );
+const appointmentReminderReliabilityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260818100000_phase_8_reminder_reliability_hardening.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderReliabilityTest = readFileSync(
+  new URL(
+    '../../../supabase/tests/database/appointment_reminder_reliability.test.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -495,10 +509,31 @@ describe('appointment reminder migration definition', () => {
   });
 
   it('has executable pgTAP coverage for quiet hours, tenant scope, claims, and immutable delivery identity', () => {
-    expect(appointmentReminderSecurityTest).toContain('overnight quiet hours defer');
+    expect(appointmentReminderSecurityTest).toContain('overnight quiet hours move');
     expect(appointmentReminderSecurityTest).toContain('location-scoped member cannot read another location reminders');
     expect(appointmentReminderSecurityTest).toContain('authenticated member cannot directly mutate reminder state');
     expect(appointmentReminderSecurityTest).toContain('service worker atomically claims the due 24-hour reminder');
     expect(appointmentReminderSecurityTest).toContain('immutable booking-time recipient after contact phone changes');
+  });
+
+  it('hardens rollout, earlier quiet-hour scheduling, delivery truth, and bounded reconciliation', () => {
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'normalize_completed_booking_appointments_internal',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'appointments_trusted_sms_recipient_immutable',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain('delivery_pending');
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'sync_appointment_reminder_delivery_status',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'reconcile_appointment_reminder_schedules',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain('for update of appointment skip locked');
+    expect(appointmentReminderReliabilityMigration).not.toContain('createBooking');
+    expect(appointmentReminderReliabilityTest).toContain('spring-forward adjustment chooses');
+    expect(appointmentReminderReliabilityTest).toContain('STOP before submission authorizes zero Twilio sends');
+    expect(appointmentReminderReliabilityTest).toContain('bounded reconciliation creates 24-hour and 2-hour reminders exactly once');
   });
 });

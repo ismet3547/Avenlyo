@@ -512,17 +512,33 @@ credentials.
 
 Phase 8 adds deterministic SMS appointment reminders. They are disabled by default and may be
 configured only by an organization owner or admin at **Dashboard -> Appointments -> Manage
-appointment reminders**. Each location may enable the 24-hour and/or 2-hour schedule and uses
-quiet hours of 20:00â€“08:00 in its IANA timezone by default. A reminder that falls in quiet hours
-is deferred to the next permitted local time; it never changes the appointment time.
+appointment reminders**. Enabling SMS requires an active SMS-enabled business DID for that
+location. Each location may enable the 24-hour and/or 2-hour schedule and uses quiet hours of
+20:00â€“08:00 in its IANA timezone by default.
+
+A nominal reminder outside quiet hours is unchanged. If it falls inside quiet hours, Avenlyo moves
+it to the closest earlier permitted local instant and schedules it only if it remains in the useful
+window: 26â€“18 hours before for a 24-hour reminder, and 150â€“75 minutes before for a 2-hour
+reminder. It is never deferred later, never moved to or after the appointment, and is omitted when
+the earlier boundary would fall in a spring-forward gap or outside its useful window. For an
+ambiguous fall-back boundary, PostgreSQL's standard-time (later UTC) interpretation is used only
+when it is still strictly earlier than the nominal instant; otherwise the reminder is omitted.
 
 The database creates at most one durable reminder per appointment and reminder type, only for a
 confirmed future appointment within a 30-day horizon. The worker claims due rows atomically with
-`FOR UPDATE SKIP LOCKED`; a crashed claim is recoverable after five minutes. Cancelled, completed,
-or disabled appointments are skipped. The booking-time verified SMS recipient is copied onto the
-appointment/reminder and is the only destination used for deliveryâ€”later edits to a contact do not
-retarget the message. Appointments without that verified recipient are safely skipped. Existing
-per-location sender opt-out policy is checked again before materializing and before submitting SMS.
+`FOR UPDATE SKIP LOCKED`; every fresh claim resets revalidation and a crashed claim is recoverable
+after five minutes. A bounded reconciliation batch runs before claims, so appointments entering the
+30-day horizon and pending timing-policy changes are picked up without an unbounded settings
+transaction. Cancelled, completed, disabled, or unverified appointments are skipped.
+
+The booking-time verified SMS recipient is copied onto the appointment/reminder as a write-once
+snapshot and is the only destination used for deliveryâ€”later edits to a contact do not retarget the
+message. Appointments without that verified recipient are safely skipped. Existing per-location
+sender opt-out policy is checked again before materializing and before submitting SMS. Materializing
+a message produces `delivery_pending`, not `sent`: the existing Phase 7 Twilio delivery state
+machine is authoritative. Only `sent`/`delivered` marks a reminder sent; suppression skips it, and
+failed, undelivered, or unknown delivery outcomes mark it failed. No delivery transition retries a
+provider submission blindly.
 
 For Google Calendar and ezyVet appointments, the worker performs only the existing bounded
 read/reconciliation path immediately before creating the local reminder message. A disconnected,
@@ -535,7 +551,9 @@ appointment without an external provider identity does not require provider reva
 In a disposable environment, configure an active SMS-enabled business DID, create a confirmed
 appointment 23 hours in the future through the approved booking flow, then enable the 24-hour
 schedule for its location. Confirm one `appointment_reminders` row is claimed, one deterministic
-outbound SMS message/delivery is created, and the destination remains the booking-time phone after
-editing the contact phone. Repeat after a customer sends `STOP`: the reminder must be suppressed.
-Disable the scheduling integration or cancel the appointment before its reminder is due: no SMS
-should be created. Automated tests do not post a real SMS or query real provider accounts.
+outbound SMS message/delivery is created with `delivery_pending`, and the destination remains the
+booking-time phone after editing the contact phone. Confirm that only a Twilio `sent` or `delivered`
+callback marks the reminder sent. Repeat after a customer sends `STOP` before the delivery claim:
+the delivery must be suppressed and no provider submission should occur. Disable the scheduling
+integration or cancel the appointment before its reminder is due: no SMS should be created.
+Automated tests do not post a real SMS or query real provider accounts.

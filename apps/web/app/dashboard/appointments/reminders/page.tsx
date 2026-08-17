@@ -79,7 +79,8 @@ export default async function AppointmentRemindersPage() {
         <label className="flex cursor-pointer items-start gap-3 text-sm">
           <input
             className="mt-1 size-4 accent-primary"
-            defaultChecked={configured.sms_enabled}
+            defaultChecked={configured.sms_enabled && configured.sms_sender_available}
+            disabled={!configured.sms_sender_available}
             name="smsEnabled"
             type="checkbox"
           />
@@ -137,8 +138,9 @@ export default async function AppointmentRemindersPage() {
             />
           </label>
           <p className="col-span-full text-xs leading-5 text-muted-foreground">
-            When a reminder falls in quiet hours, it is deferred to the next permitted local time.
-            The appointment itself is never changed.
+            When a reminder falls in quiet hours, it is moved to the closest earlier permitted local
+            time only when it remains in its useful send window. It is never delayed closer to the
+            appointment.
           </p>
         </fieldset>
         <div className="flex items-center gap-4 border-t border-border pt-5">

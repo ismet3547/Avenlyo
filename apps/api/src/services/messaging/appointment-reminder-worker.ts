@@ -7,6 +7,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ApiSchedulingConnectorRegistry } from '../scheduling/connector-registry.js';
 
 const IDLE_POLL_MS = 30_000;
+const RECONCILIATION_BATCH_SIZE = 50;
 
 /**
  * Claims durable reminders and revalidates an already-booked appointment with a read-only
@@ -62,6 +63,14 @@ export class AppointmentReminderWorker {
   }
 
   private async run(): Promise<void> {
+    // A bounded reconciliation admits appointments only when they enter the 30-day horizon and
+    // catches policy-version changes without turning settings saves into unbounded requests.
+    const { error: reconciliationError } = await this.input.supabase.rpc(
+      'reconcile_appointment_reminder_schedules',
+      { target_limit: RECONCILIATION_BATCH_SIZE },
+    );
+    if (reconciliationError) return;
+
     const { data: claims, error } = await this.input.supabase.rpc(
       'claim_due_appointment_reminders',
       {

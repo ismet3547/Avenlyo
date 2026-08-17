@@ -7,13 +7,13 @@ select extensions.plan(21);
 
 select extensions.is(
   public.reminder_local_time('2026-08-20 21:00:00+00', 'UTC', '20:00', '08:00'),
-  '2026-08-21 08:00:00+00'::timestamptz,
-  'overnight quiet hours defer an evening reminder to the following local morning'
+  '2026-08-20 19:59:59.999999+00'::timestamptz,
+  'overnight quiet hours move an evening reminder to the preceding permitted instant'
 );
 select extensions.is(
   public.reminder_local_time('2026-08-20 06:00:00+00', 'UTC', '20:00', '08:00'),
-  '2026-08-20 08:00:00+00'::timestamptz,
-  'overnight quiet hours defer an early-morning reminder to that morning cutoff'
+  '2026-08-19 19:59:59.999999+00'::timestamptz,
+  'overnight quiet hours move an early-morning reminder to the preceding evening cutoff'
 );
 
 insert into auth.users (id, email)
@@ -64,6 +64,12 @@ select extensions.throws_ok(
   'location-scoped member cannot manage reminder settings'
 );
 reset role;
+
+update public.appointment_reminder_settings
+set quiet_hours_start = ((now() at time zone 'UTC')::time + interval '2 hours')::time,
+  quiet_hours_end = ((now() at time zone 'UTC')::time + interval '3 hours')::time
+where organization_id = 'e8100000-0000-0000-0000-000000000001'
+  and location_id = 'e8110000-0000-0000-0000-000000000001';
 
 insert into public.appointment_reminder_settings (organization_id, location_id, sms_enabled)
 values ('e8100000-0000-0000-0000-000000000001', 'e8120000-0000-0000-0000-000000000001', true);

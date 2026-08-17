@@ -499,6 +499,10 @@ export interface AppointmentReminderClaimRow {
   reminder_id: string;
 }
 
+export interface AppointmentReminderReconciliationRow {
+  appointment_id: string;
+}
+
 export interface AppointmentReminderRow {
   appointment_id: string;
   reminder_type: 'appointment_24h' | 'appointment_2h';
@@ -1209,6 +1213,10 @@ export interface Database {
       claim_due_appointment_reminders: {
         Args: { target_worker_id: string; target_limit?: number };
         Returns: AppointmentReminderClaimRow[];
+      };
+      reconcile_appointment_reminder_schedules: {
+        Args: { target_limit?: number };
+        Returns: AppointmentReminderReconciliationRow[];
       };
       get_appointment_reminder_execution_context: {
         Args: { target_reminder_id: string };
