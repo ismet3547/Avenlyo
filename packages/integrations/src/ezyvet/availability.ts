@@ -22,35 +22,19 @@ function validTimeZone(value: string): boolean {
   }
 }
 
-function offsetMilliseconds(timezone: string, timestamp: number): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    hour12: false,
-    timeZone: timezone,
-    timeZoneName: 'longOffset',
-  }).formatToParts(new Date(timestamp));
-  const offset = parts.find((part) => part.type === 'timeZoneName')?.value;
-  if (offset === 'GMT') return 0;
-  const match = /^GMT([+-])(\d{2}):(\d{2})$/.exec(offset ?? '');
-  if (!match) throw new BookingProviderError('provider_error');
-  const minutes = Number(match[2]) * 60 + Number(match[3]);
-  return (match[1] === '+' ? 1 : -1) * minutes * 60_000;
-}
-
-/** Turns the API's date + wall-clock start into an absolute instant in the verified site timezone. */
-function absoluteStart(date: string, start: string, timezone: string): string | null {
-  const wallClock = start.includes('T') ? start.slice(start.indexOf('T') + 1) : start;
-  const match = /^(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,3})?$/.exec(wallClock);
-  if (!match) return null;
-  const provisional = Date.parse(`${date}T${match[1]}:${match[2]}:${match[3] ?? '00'}.000Z`);
-  if (!Number.isFinite(provisional)) return null;
-  let instant = provisional - offsetMilliseconds(timezone, provisional);
-  instant = provisional - offsetMilliseconds(timezone, instant);
-  return new Date(instant).toISOString();
+/** ezyCAB emits absolute ISO-8601 slot starts. Never reinterpret an explicit provider offset. */
+function absoluteStart(start: string): string | null {
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(start)
+  ) {
+    return null;
+  }
+  const parsed = Date.parse(start);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
 function slotFromRecord(
   value: unknown,
-  date: string,
   resourceKey: string,
   appointmentTypeKey: string,
   timezone: string,
@@ -73,7 +57,7 @@ function slotFromRecord(
   ) {
     return null;
   }
-  const startAt = absoluteStart(date, start, timezone);
+  const startAt = absoluteStart(start);
   if (!startAt) return null;
   return {
     appointmentTypeKey,
@@ -103,11 +87,18 @@ function availabilityFromPayload(
     const attributes = record(entry.attributes);
     const resourceKey = string(record(record(entry.relationships).resource).id);
     const date = string(attributes.date);
+    const providerTimezone = string(attributes.timezone);
+    if (
+      !providerTimezone ||
+      !validTimeZone(providerTimezone) ||
+      providerTimezone !== input.timezone
+    ) {
+      throw new BookingProviderError('provider_error');
+    }
     if (!resourceKey || !date || !permittedResources.has(resourceKey) || !validDate(date)) continue;
     for (const rawSlot of array(attributes.slots)) {
       const normalized = slotFromRecord(
         rawSlot,
-        date,
         resourceKey,
         input.appointmentType.key,
         input.timezone,

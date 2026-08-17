@@ -222,7 +222,11 @@ begin
 end;
 $$;
 
-create or replace function public.get_voice_booking_execution_context(target_booking_intent_id uuid)
+-- PostgreSQL cannot change OUT columns through CREATE OR REPLACE. This function is backend-only,
+-- so drop/recreate it and restore its sole intended service-role grant below.
+drop function public.get_voice_booking_execution_context(uuid);
+
+create function public.get_voice_booking_execution_context(target_booking_intent_id uuid)
 returns table (
   booking_intent_id uuid, organization_id uuid, location_id uuid, conversation_id uuid, contact_id uuid,
   integration_id uuid, external_contact_uid text, external_subject_uid text, subject_name text,
@@ -354,3 +358,5 @@ $$;
 
 revoke all on function public.record_voice_booking_provider_success(uuid, text, text) from public;
 grant execute on function public.record_voice_booking_provider_success(uuid, text, text) to service_role;
+revoke all on function public.get_voice_booking_execution_context(uuid) from public;
+grant execute on function public.get_voice_booking_execution_context(uuid) to service_role;

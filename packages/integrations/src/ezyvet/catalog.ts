@@ -13,7 +13,11 @@ function providerObject(value: unknown, names: readonly string[]): Record<string
 }
 
 function positiveDuration(value: unknown): number | null {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 10 && value <= 480
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 10 &&
+    value <= 360 &&
+    value % 5 === 0
     ? value
     : null;
 }

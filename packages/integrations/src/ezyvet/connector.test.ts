@@ -145,9 +145,7 @@ describe('ezyVet connector contracts', () => {
     });
     transport.enqueue({
       body: {
-        data: [
-          { id: 'animal_1', isDead: false, name: 'Max', ownerId: 'contact_1', status: 'active' },
-        ],
+        data: [{ id: 'animal_1', name: 'Max', ownerId: 'contact_1' }],
       },
       status: 200,
     });
@@ -162,6 +160,35 @@ describe('ezyVet connector contracts', () => {
     expect(transport.requests.at(-1)?.url).toBe(
       'https://api.trial.ezyvet.com/v4/animal?isDead=false&name=Max&ownerId=contact_1&status=active',
     );
+  });
+
+  it('keeps only durations ezyCAB can schedule', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({ body: siteInformation, status: 200 });
+    transport.enqueue({
+      body: {
+        items: [10, 30, 360, 365, 480, 17].map((default_duration) => ({
+          appointmenttype: {
+            active: true,
+            default_duration,
+            name: String(default_duration),
+            uid: `type_${default_duration}`,
+          },
+        })),
+      },
+      status: 200,
+    });
+    transport.enqueue({ body: { items: [] }, status: 200 });
+    await expect(
+      new EzyVetConnector(client(transport)).getSchedulingCatalog(),
+    ).resolves.toMatchObject({
+      appointmentTypes: [
+        { defaultDurationMinutes: 10, key: 'type_10' },
+        { defaultDurationMinutes: 30, key: 'type_30' },
+        { defaultDurationMinutes: 360, key: 'type_360' },
+      ],
+    });
   });
 
   it('rejects a booking call in a trial environment without inventing a trial ezyCAB host', async () => {
@@ -180,12 +207,13 @@ describe('ezyVet connector contracts', () => {
         {
           attributes: {
             date: '2026-09-01',
+            timezone: 'America/New_York',
             slots: [
               {
                 available: true,
                 duration: 30,
                 relationships: { appointmentType: { data: [{ id: 'type_1' }] } },
-                start: '10:00:00',
+                start: '2025-07-14T09:30:00.000-04:00',
               },
             ],
           },
@@ -203,12 +231,12 @@ describe('ezyVet connector contracts', () => {
         (_, index) => `2026-09-${String(index + 1).padStart(2, '0')}`,
       ),
       resources: [{ key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: 'sep_1' }],
-      timezone: 'UTC',
+      timezone: 'America/New_York',
     });
     expect(slots).toHaveLength(1);
     expect(slots[0]).toMatchObject({
-      endAt: '2026-09-01T10:30:00.000Z',
-      startAt: '2026-09-01T10:00:00.000Z',
+      endAt: '2025-07-14T14:00:00.000Z',
+      startAt: '2025-07-14T13:30:00.000Z',
     });
     expect(
       transport.requests.filter((request) => request.url.includes('/ezycab/availability')),
@@ -218,22 +246,59 @@ describe('ezyVet connector contracts', () => {
     );
   });
 
+  it('normalizes a winter ISO offset and rejects a provider timezone mismatch', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({
+      body: {
+        data: [
+          {
+            attributes: {
+              date: '2025-01-14',
+              timezone: 'America/New_York',
+              slots: [
+                {
+                  available: true,
+                  duration: 30,
+                  relationships: { appointmentType: { data: [{ id: 'type_1' }] } },
+                  start: '2025-01-14T09:30:00.000-05:00',
+                },
+              ],
+            },
+            relationships: { resource: { id: 'resource_1' } },
+          },
+        ],
+      },
+      status: 200,
+    });
+    const connector = new EzyVetConnector(client(transport, productionCredentials));
+    await expect(
+      connector.getAvailability({
+        appointmentType: { defaultDurationMinutes: 30, key: 'type_1', name: 'Wellness' },
+        dates: ['2025-01-14'],
+        resources: [{ key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: 'sep_1' }],
+        timezone: 'America/New_York',
+      }),
+    ).resolves.toMatchObject([{ startAt: '2025-01-14T14:30:00.000Z' }]);
+  });
+
   it('posts once to ezyCAB and reconciles only an exact active appointment within its narrow resource/start range', async () => {
     const transport = new FakeEzyVetTransport();
     transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
     transport.enqueue({ body: { appointment: 'appointment_1' }, status: 201 });
     transport.enqueue({
       body: {
+        meta: { nextToken: null },
         data: [
           {
-            attributes: { active: true, start_at: '2026-09-01T10:00:00.000Z' },
-            id: 'appointment_1',
-            relationships: {
-              animal: { data: { id: 'animal_1' } },
-              appointmentType: { data: [{ id: 'type_1' }] },
-              contact: { data: { id: 'contact_1' } },
-              resource: { data: { id: 'resource_1' } },
-            },
+            active: true,
+            animal_uid: 'animal_1',
+            contact_uid: 'contact_1',
+            id: 12346,
+            resources: [{ name: 'Dr Ray', type: 'user', uid: 'resource_1' }],
+            start_at: 1788256800,
+            type_uid: 'type_1',
+            uid: 'appointment_1',
           },
         ],
       },
@@ -260,9 +325,8 @@ describe('ezyVet connector contracts', () => {
     });
     await expect(connector.reconcileBooking(request)).resolves.toMatchObject({ kind: 'found' });
     expect(transport.requests[1]?.url).toBe('https://apiv2.ezyvet.com/ezycab/booking');
-    expect(transport.requests[2]?.url).toContain(
-      'https://apiv2.ezyvet.com/ezycab/v2.1/appointments?',
+    expect(transport.requests[2]?.url).toBe(
+      'https://apiv2.ezyvet.com/ezycab/v2.1/appointments?filter%5Bactive%5D%5Beq%5D=true&filter%5Bresources.uid%5D%5Bin%5D=%5B%22resource_1%22%5D&filter%5Bstart_at%5D%5Bgte%5D=2026-09-01T09%3A59%3A00.000Z&filter%5Bstart_at%5D%5Blte%5D=2026-09-01T10%3A01%3A00.000Z&pageSize=50',
     );
-    expect(transport.requests[2]?.url).toContain('filter%5Bresources.uid%5D%5Bin%5D=resource_1');
   });
 });

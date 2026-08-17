@@ -28,7 +28,8 @@ export async function resolveOwnedAnimal(
       boolean(animal.isDead ?? animal.is_dead ?? animal.deceased) === true
     )
       continue;
-    if (string(animal.status)?.toLowerCase() !== 'active') continue;
+    const status = string(animal.status);
+    if (status && status.toLowerCase() !== 'active') continue;
     const owner = string(
       animal.ownerId ?? animal.owner_id ?? animal.contact_uid ?? animal.contactUid,
     );
