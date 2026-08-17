@@ -517,17 +517,23 @@ end;
 $$;
 
 create or replace function public.create_my_human_reply(target_conversation_id uuid, target_body text)
-returns table (message_id uuid, channel_type text)
+returns table (message_id uuid, source_channel text)
 language plpgsql security definer set search_path = '' as $$
-declare conversation_row public.conversations%rowtype; channel_row public.channels%rowtype; saved_message_id uuid;
+declare conversation_row public.conversations%rowtype; channel_row public.channels%rowtype; saved_message_id uuid; contact_opted_out boolean;
 begin
-  if length(btrim(coalesce(target_body, ''))) not between 1 and 2000 then raise exception using errcode = '22023', message = 'Message body is invalid'; end if;
-  select * into conversation_row from public.conversations where id = target_conversation_id and public.has_location_access(organization_id, location_id) for update;
-  if conversation_row.id is null then raise exception using errcode = '42501', message = 'Conversation is unavailable'; end if;
+  if length(btrim(coalesce(target_body, ''))) not between 1 and 2000 then raise exception using errcode = '22023', message = 'Reply is invalid'; end if;
+  select * into conversation_row from public.conversations where id = target_conversation_id;
+  if conversation_row.id is null or not public.has_location_write_access(conversation_row.organization_id, conversation_row.location_id) then raise exception using errcode = '42501', message = 'Conversation is not available'; end if;
   select * into channel_row from public.channels where organization_id = conversation_row.organization_id and id = conversation_row.channel_id;
-  insert into public.messages (organization_id, location_id, conversation_id, contact_id, direction, message_type, body, metadata, source_channel, author_type, sent_at)
+  if channel_row.channel_type not in ('sms', 'web') then raise exception using errcode = '22023', message = 'Text reply is not supported for this conversation'; end if;
+  select exists(select 1 from public.messaging_contact_preferences preference where preference.organization_id = conversation_row.organization_id
+    and preference.location_id = conversation_row.location_id and preference.contact_id = conversation_row.contact_id
+    and preference.channel_type = 'sms' and preference.sender_phone_number_id = conversation_row.transport_phone_number_id
+    and preference.status = 'opted_out') into contact_opted_out;
+  if channel_row.channel_type = 'sms' and contact_opted_out then raise exception using errcode = '42501', message = 'SMS contact has opted out'; end if;
+  insert into public.messages (organization_id, location_id, conversation_id, contact_id, direction, message_type, body, metadata, source_channel, author_type, sent_by_user_id, sent_at)
   values (conversation_row.organization_id, conversation_row.location_id, conversation_row.id, conversation_row.contact_id, 'outbound', 'text', btrim(target_body),
-    jsonb_build_object('transport', channel_row.channel_type), case when channel_row.channel_type = 'sms' then 'sms' else 'web' end, 'human', now()) returning id into saved_message_id;
+    jsonb_build_object('transport', channel_row.channel_type), channel_row.channel_type, 'human', auth.uid(), now()) returning id into saved_message_id;
   if channel_row.channel_type = 'sms' then
     insert into public.message_deliveries (organization_id, location_id, message_id, provider) values (conversation_row.organization_id, conversation_row.location_id, saved_message_id, 'twilio');
     insert into public.message_processing_jobs (organization_id, location_id, conversation_id, message_id, job_kind) values (conversation_row.organization_id, conversation_row.location_id, conversation_row.id, saved_message_id, 'outbound_delivery');
