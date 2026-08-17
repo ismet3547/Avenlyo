@@ -3,7 +3,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(57);
+select extensions.plan(69);
 
 insert into auth.users (id, email)
 values
@@ -381,6 +381,102 @@ select extensions.is(
 select extensions.lives_ok(
   $$ select public.resume_my_conversation_ai((select conversation_id from public.get_my_inbox_conversations('91100000-0000-0000-0000-000000000001') where contact_phone = '+14155550101' limit 1)) $$,
   'owner can resume AI without fabricating an immediate reply'
+);
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select accepted from public.bootstrap_inbound_sms('SM00000000000000000000000000000010', '+14155550101', '+14155550901', 'A newer inbound SMS', '[]', '{}')),
+  true,
+  'a second SMS from the same sender is accepted through the trusted route'
+);
+reset role;
+update public.messages set created_at = created_at + interval '1 second', sent_at = sent_at + interval '1 second'
+  where external_id = 'SM00000000000000000000000000000010';
+select extensions.is(
+  (select latest.conversation_id = first_message.conversation_id from public.messages latest
+    cross join public.messages first_message
+    where latest.external_id = 'SM00000000000000000000000000000010'
+      and first_message.external_id = 'SM00000000000000000000000000000001'),
+  true,
+  'the newer inbound SMS belongs to the original conversation and route'
+);
+update public.contacts set phone = '+14155559999' where phone = '+14155550101';
+
+set local role authenticated;
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config('request.jwt.claim.sub', '90000000-0000-0000-0000-000000000001', true);
+select extensions.lives_ok(
+  $$ select public.take_over_my_conversation((select conversation_id from public.messages where external_id = 'SM00000000000000000000000000000010')) $$,
+  'owner can take over the trusted SMS conversation before replying'
+);
+select extensions.lives_ok(
+  $$ select * from public.create_my_human_reply((select conversation_id from public.messages where external_id = 'SM00000000000000000000000000000010'), 'Human reply bound to the newest SMS') $$,
+  'owner can create an SMS reply from the inbox through the trusted RPC'
+);
+reset role;
+select extensions.is(
+  (select reply.in_reply_to_message_id from public.messages reply where reply.body = 'Human reply bound to the newest SMS'),
+  (select id from public.messages where external_id = 'SM00000000000000000000000000000010'),
+  'human SMS reply binds to the latest eligible inbound SMS, not a contact field'
+);
+select extensions.is(
+  (select count(*)::integer from public.message_deliveries delivery join public.messages reply on reply.id = delivery.message_id
+    where reply.body = 'Human reply bound to the newest SMS' and delivery.provider = 'twilio' and delivery.status = 'queued'),
+  1,
+  'trusted human SMS reply creates exactly one queued Twilio delivery'
+);
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select count(*)::integer from public.claim_sms_delivery_submission((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  1,
+  'human SMS delivery claim authorizes exactly one provider submission'
+);
+select extensions.is(
+  (select to_e164 from public.get_sms_delivery_execution_context((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  '+14155550101',
+  'human SMS delivery resolves the original immutable inbound Twilio From after contact mutation'
+);
+select extensions.is(
+  (select from_e164 from public.get_sms_delivery_execution_context((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  '+14155550901',
+  'human SMS delivery resolves the conversation Twilio DID as its trusted sender'
+);
+select extensions.is(
+  (select count(*)::integer from public.claim_sms_delivery_submission((select id from public.messages where body = 'Human reply bound to the newest SMS'))),
+  0,
+  'human SMS delivery cannot authorize a second provider submission'
+);
+reset role;
+
+insert into public.contacts (id, organization_id, location_id, phone)
+values ('91800000-0000-0000-0000-000000000030', '91000000-0000-0000-0000-000000000001', '91100000-0000-0000-0000-000000000001', '+14155550130');
+insert into public.conversations (id, organization_id, location_id, contact_id, channel_id, transport_phone_number_id, mode, status)
+select '91800000-0000-0000-0000-000000000031', '91000000-0000-0000-0000-000000000001', '91100000-0000-0000-0000-000000000001',
+  '91800000-0000-0000-0000-000000000030', channel.id, '91400000-0000-0000-0000-000000000001', 'customer', 'open'
+from public.channels channel
+where channel.organization_id = '91000000-0000-0000-0000-000000000001' and channel.location_id = '91100000-0000-0000-0000-000000000001'
+  and channel.channel_type = 'sms' and channel.status = 'active';
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type)
+values ('91800000-0000-0000-0000-000000000032', '91000000-0000-0000-0000-000000000001', '91100000-0000-0000-0000-000000000001',
+  '91800000-0000-0000-0000-000000000031', '91800000-0000-0000-0000-000000000030', 'inbound', 'text', 'Untrusted legacy inbound', 'sms', 'customer');
+
+set local role authenticated;
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config('request.jwt.claim.sub', '90000000-0000-0000-0000-000000000001', true);
+select extensions.throws_ok(
+  $$ select * from public.create_my_human_reply('91800000-0000-0000-0000-000000000031', 'This must not queue') $$,
+  '42501',
+  'SMS transport identity is unavailable',
+  'human SMS replies without an immutable inbound transport identity are rejected before delivery creation'
+);
+reset role;
+select extensions.is(
+  (select count(*)::integer from public.messages where body = 'This must not queue'),
+  0,
+  'missing SMS transport identity creates neither an outbound message nor an undeliverable provider delivery'
 );
 
 reset role;
