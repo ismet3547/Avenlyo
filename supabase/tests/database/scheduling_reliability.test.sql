@@ -197,8 +197,6 @@ select extensions.is(
   'disabling ezyVet leaves an active Google provider unchanged'
 );
 
-set local role service_role;
-select set_config('request.jwt.claim.role', 'service_role', true);
 update public.integrations set status = 'connected' where id = '83400000-0000-0000-0000-000000000001';
 update public.location_scheduling_settings set active_integration_id = '83400000-0000-0000-0000-000000000001';
 update public.scheduling_resources set bookable = false where id = '83600000-0000-0000-0000-000000000001';
