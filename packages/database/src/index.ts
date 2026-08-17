@@ -4,6 +4,7 @@ export type {
   BootstrapWorkspaceRow,
   Database,
   EzyVetExecutionCredentialsRow,
+  GoogleCalendarExecutionCredentialsRow,
   Json,
   MemberRole,
   OnboardingStatus,

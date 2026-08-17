@@ -84,6 +84,17 @@ const schedulingHardeningMigration = readFileSync(
   ),
   'utf8',
 );
+const googleCalendarMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816080000_phase_6_google_calendar.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const googleCalendarSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/google_calendar_security.test.sql', import.meta.url),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -371,5 +382,38 @@ describe('veterinary scheduling migration definition', () => {
       'provider success has a recoverable, non-repostable persistence state',
     );
     expect(schedulingSecurityTest).toContain('authenticated users cannot reopen a completed');
+  });
+});
+
+describe('Google Calendar scheduling migration definition', () => {
+  it('keeps one trusted active provider and provider-neutral booking data', () => {
+    expect(googleCalendarMigration).toContain("provider in ('ezyvet', 'google_calendar')");
+    expect(googleCalendarMigration).toContain('create table public.location_scheduling_settings');
+    expect(googleCalendarMigration).toContain('active_integration_id');
+    expect(googleCalendarMigration).toContain('alter column external_contact_uid drop not null');
+    expect(googleCalendarMigration).toContain('booking_intents_contact_scope_fk');
+  });
+
+  it('makes OAuth state and refresh credentials backend-only', () => {
+    expect(googleCalendarMigration).toContain('create table public.oauth_connection_states');
+    expect(googleCalendarMigration).toContain("expires_at > created_at");
+    expect(googleCalendarMigration).toContain('consume_google_oauth_state');
+    expect(googleCalendarMigration).toContain('vault.update_secret');
+    expect(googleCalendarMigration).toContain('get_google_calendar_execution_credentials');
+  });
+
+  it('uses mapping-scoped resources and exclusion slot leases', () => {
+    expect(googleCalendarMigration).toContain('create table public.scheduling_appointment_type_resources');
+    expect(googleCalendarMigration).toContain('scheduling_type_resource_resource_fk');
+    expect(googleCalendarMigration).toContain('create table public.booking_slot_leases');
+    expect(googleCalendarMigration).toContain('booking_slot_leases_no_overlap');
+    expect(googleCalendarMigration).toContain("tstzrange(starts_at, ends_at, '[)')");
+  });
+
+  it('has executable tenant and backend-only pgTAP coverage', () => {
+    expect(googleCalendarSecurityTest).toContain('type-resource mapping rejects a cross-tenant resource');
+    expect(googleCalendarSecurityTest).toContain('member cannot read OAuth state');
+    expect(googleCalendarSecurityTest).toContain('consumed OAuth state cannot be reused');
+    expect(googleCalendarSecurityTest).toContain('overlapping leases for the same resource are rejected');
   });
 });

@@ -1,12 +1,17 @@
 import {
   connectEzyVetAction,
+  connectGoogleCalendarAction,
+  createGoogleAppointmentTypeAction,
+  discoverGoogleCalendarsAction,
+  disconnectGoogleCalendarAction,
   disconnectEzyVetAction,
+  saveGoogleBookingPolicyAction,
   saveEzyVetBookablePolicyAction,
   syncEzyVetCatalogAction,
 } from './actions';
 
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
-import { schedulingRpc, type EzyVetConfigurationRow } from '@/lib/scheduling/service';
+import { schedulingRpc, type EzyVetConfigurationRow, type GoogleCalendarConfigurationRow } from '@/lib/scheduling/service';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
 
 type ConfigurationRow = EzyVetConfigurationRow;
@@ -33,6 +38,16 @@ export default async function IntegrationsPage() {
         ).data ?? [])
       : [];
   const integration = rows[0] ?? null;
+  const googleRows: readonly GoogleCalendarConfigurationRow[] = auth && locationId
+    ? ((await schedulingRpc(auth.supabase)('get_my_google_scheduling_configuration', { target_location_id: locationId })).data ?? [])
+    : [];
+  const google = googleRows[0] ?? null;
+  const googleTypes = new Map<string, GoogleCalendarConfigurationRow>();
+  const googleResources = new Map<string, GoogleCalendarConfigurationRow>();
+  for (const row of googleRows) {
+    if (row.appointment_type_id) googleTypes.set(row.appointment_type_id, row);
+    if (row.resource_id) googleResources.set(row.resource_id, row);
+  }
   const types = new Map<string, ConfigurationRow>();
   const resources = new Map<string, ConfigurationRow>();
   for (const row of rows) {
@@ -50,7 +65,7 @@ export default async function IntegrationsPage() {
           Integrations are owner/admin-only
         </h1>
         <p className="mt-3 text-sm leading-6 text-muted-foreground">
-          Ask an owner or admin to configure ezyVet scheduling for this location.
+          Ask an owner or admin to configure scheduling for this location.
         </p>
       </section>
     );
@@ -199,6 +214,39 @@ export default async function IntegrationsPage() {
           </form>
         </section>
       ) : null}
+
+      <section className="mt-6 rounded-2xl border border-border bg-white p-5 shadow-sm sm:p-6">
+        <p className="font-utility text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+          Google Calendar
+        </p>
+        <h2 className="mt-2 text-lg font-semibold text-ink">Provider-neutral scheduling</h2>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">
+          Google Calendar contributes availability and one normal event after caller confirmation. It is not a customer database.
+        </p>
+        {google?.status === 'connected' ? (
+          <div className="mt-4 space-y-4">
+            <p className="text-sm text-muted-foreground">Connected · last verified {formatDate(google.last_verified_at)}{google.is_active ? ' · active scheduling provider' : ''}.</p>
+            <div className="flex flex-wrap gap-3">
+              <form action={discoverGoogleCalendarsAction}><button className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-white" type="submit">Refresh writable calendars</button></form>
+              <form action={disconnectGoogleCalendarAction}><button className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-ink" type="submit">Disconnect</button></form>
+            </div>
+            <form action={createGoogleAppointmentTypeAction} className="grid gap-3 border-t border-border pt-4 sm:grid-cols-3">
+              <input className="rounded-lg border border-border px-3 py-2 text-sm" name="name" placeholder="Consultation" required />
+              <input className="rounded-lg border border-border px-3 py-2 text-sm" defaultValue="30" max="360" min="10" name="durationMinutes" required step="5" type="number" />
+              <button className="rounded-lg border border-border px-4 py-2 text-sm font-semibold text-ink" type="submit">Add appointment type</button>
+            </form>
+            <form action={saveGoogleBookingPolicyAction} className="grid gap-5 border-t border-border pt-4 sm:grid-cols-2">
+              <input name="googleIntegrationId" type="hidden" value={google.integration_id ?? ''} />
+              <label className="text-sm font-medium text-ink">Minimum lead minutes<input className="mt-2 block w-full rounded-lg border border-border px-3 py-2" defaultValue={google.minimum_lead_minutes ?? 60} max="1440" min="15" name="minimumLeadMinutes" step="15" type="number" /></label>
+              <div className="text-sm font-medium text-ink">Appointment types<div className="mt-2 space-y-2 font-normal">{[...googleTypes.values()].map((row) => <label className="flex items-center gap-2" key={row.appointment_type_id}><input defaultChecked={row.appointment_type_bookable ?? false} name="googleAppointmentTypeId" type="checkbox" value={row.appointment_type_id ?? ''}/>{row.appointment_type_name} · {row.appointment_type_duration_minutes} min</label>)}</div></div>
+              <div className="text-sm font-medium text-ink">Writable calendars<div className="mt-2 space-y-2 font-normal">{[...googleResources.values()].map((row) => <label className="flex items-center gap-2" key={row.resource_id}><input defaultChecked={row.resource_bookable ?? false} name="googleResourceId" type="checkbox" value={row.resource_id ?? ''}/>{row.resource_name} · {row.resource_access_role}</label>)}</div></div>
+              <button className="w-fit rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-white" type="submit">Save policy and make active</button>
+            </form>
+          </div>
+        ) : (
+          <form action={connectGoogleCalendarAction} className="mt-4"><button className="rounded-lg bg-ink px-4 py-2 text-sm font-semibold text-white" type="submit">Connect Google Calendar</button></form>
+        )}
+      </section>
     </section>
   );
 }

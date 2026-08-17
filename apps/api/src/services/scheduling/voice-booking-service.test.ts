@@ -1,9 +1,9 @@
 import type { Database } from '@avenlyo/database';
-import type { EzyVetConnector } from '@avenlyo/integrations';
+import type { BookingConnector } from '@avenlyo/integrations';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { EzyVetIntegrationService } from './ezyvet-service.js';
+import type { ApiSchedulingConnectorRegistry } from './connector-registry.js';
 import { VoiceBookingService } from './voice-booking-service.js';
 
 describe('VoiceBookingService booking recovery', () => {
@@ -16,9 +16,9 @@ describe('VoiceBookingService booking recovery', () => {
     const connector = {
       createBooking,
       reconcileBooking,
-    } as unknown as EzyVetConnector;
+    } as unknown as BookingConnector;
     const rpc = vi.fn((name: string) => {
-      if (name === 'claim_voice_booking_intent') {
+      if (name === 'claim_voice_scheduling_booking_intent') {
         return Promise.resolve({
           data: [
             {
@@ -61,9 +61,9 @@ describe('VoiceBookingService booking recovery', () => {
       return Promise.resolve({ data: null, error: null });
     });
     const service = new VoiceBookingService({
-      ezyVet: {
-        connectorForIntegration: vi.fn().mockResolvedValue(connector),
-      } as unknown as EzyVetIntegrationService,
+      connectors: {
+        forIntegration: vi.fn().mockResolvedValue(connector),
+      } as unknown as ApiSchedulingConnectorRegistry,
       supabase: { rpc } as unknown as SupabaseClient<Database>,
     });
 

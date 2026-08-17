@@ -8,6 +8,8 @@ import type {
   CreateBookingResult,
   CustomerResolution,
   CustomerResolutionRequest,
+  BookingPartyResolution,
+  BookingPartyResolutionRequest,
   SchedulingCatalog,
   SubjectResolution,
   SubjectResolutionRequest,
@@ -94,5 +96,29 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
 
   public async resolveSubject(input: SubjectResolutionRequest): Promise<SubjectResolution> {
     return resolveOwnedAnimal(this.client, input.customer, input.petName);
+  }
+
+  public async resolveBookingParty(
+    input: BookingPartyResolutionRequest,
+  ): Promise<BookingPartyResolution> {
+    if (!input.trustedCallerE164 || !input.subjectName) return { kind: 'unresolved' };
+    const customer = await this.resolveCustomer({ trustedCallerE164: input.trustedCallerE164 });
+    if (customer.kind !== 'resolved') return customer;
+    const subject = await this.resolveSubject({
+      customer: customer.customer,
+      petName: input.subjectName,
+    });
+    if (subject.kind !== 'resolved') return subject;
+    return {
+      kind: 'resolved',
+      party: {
+        customer: {
+          displayName: customer.customer.displayName,
+          providerKey: customer.customer.key,
+          trustedPhoneE164: input.trustedCallerE164,
+        },
+        subject: { displayName: subject.subject.displayName, providerKey: subject.subject.key },
+      },
+    };
   }
 }

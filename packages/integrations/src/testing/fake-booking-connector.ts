@@ -4,19 +4,16 @@ import type {
   BookingConnector,
   CreateBookingRequest,
   CreateBookingResult,
-  CustomerResolution,
-  CustomerResolutionRequest,
-  SubjectResolution,
-  SubjectResolutionRequest,
+  BookingPartyResolution,
+  BookingPartyResolutionRequest,
 } from '../scheduling/types';
 
 export class FakeBookingConnector implements BookingConnector {
   public readonly provider = 'ezyvet' as const;
   public readonly bookings: CreateBookingRequest[] = [];
   public readonly availabilityRequests: AvailabilityRequest[] = [];
-  public customer: CustomerResolution = { kind: 'unresolved' };
+  public party: BookingPartyResolution = { kind: 'unresolved' };
   public slots: readonly AvailabilitySlot[] = [];
-  public subject: SubjectResolution = { kind: 'unresolved' };
   public bookingResult: CreateBookingResult = {
     appointmentKey: 'appointment_fake_1',
     providerStatus: 'unconfirmed',
@@ -32,13 +29,8 @@ export class FakeBookingConnector implements BookingConnector {
     return Promise.resolve(this.slots);
   }
 
-  public resolveCustomer(input: CustomerResolutionRequest): Promise<CustomerResolution> {
+  public resolveBookingParty(input: BookingPartyResolutionRequest): Promise<BookingPartyResolution> {
     void input;
-    return Promise.resolve(this.customer);
-  }
-
-  public resolveSubject(input: SubjectResolutionRequest): Promise<SubjectResolution> {
-    void input;
-    return Promise.resolve(this.subject);
+    return Promise.resolve(this.party);
   }
 }

@@ -361,3 +361,84 @@ phone number that exactly matches an existing trial contact with a uniquely name
 offered slot explicitly. Verify the returned appointment in ezyVet and the local Appointments page.
 This requires real ezyVet credentials and is therefore not run by CI or this repository's automated
 tests.
+
+## Google Calendar scheduling (Phase 6)
+
+Scheduling now has one provider-neutral path:
+
+```text
+Voice (and future channels) -> VoiceBookingService -> SchedulingConnectorRegistry
+  -> BookingConnector (ezyVet or Google Calendar)
+```
+
+Each location has one explicit active scheduling integration. Connected integrations can coexist,
+but the runtime never guesses between them. Existing configured ezyVet locations remain selected;
+Google Calendar is never selected automatically. Google Calendar is available to veterinary, auto
+repair, and medspa locations, while the existing industry handoff protections still block scheduling
+after urgent veterinary, clinical-eligibility, or vehicle-safety escalation.
+
+### Google OAuth and credentials
+
+Create an Avenlyo-owned Google OAuth web application and set these **server-only** values in
+`apps/api/.env`:
+
+```dotenv
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_OAUTH_REDIRECT_URI=http://localhost:4000/v1/scheduling/google-calendar/callback
+```
+
+The redirect URI must exactly match the URI registered in Google Cloud Console. The browser only
+starts the owner/admin-authorized flow; Fastify creates a random state, stores only its SHA-256 hash
+with a 10-minute single-use expiry, exchanges the authorization code server-side, and consumes that
+state atomically. It always requests offline access and this fixed minimal scope set:
+
+- `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
+- `https://www.googleapis.com/auth/calendar.events.freebusy`
+- `https://www.googleapis.com/auth/calendar.events`
+
+No Gmail, Contacts, Drive, profile, or email scope is requested. The per-business refresh token is
+stored only as a Supabase Vault secret referenced by `integration_credentials`; access tokens are
+memory-only and expire from the bounded cache. A reconnect updates the existing Vault secret and
+increments its credential version. If Google omits a refresh token, a valid existing token is kept;
+a first-time connection without one is rejected.
+
+### Calendar policy and availability
+
+Calendar discovery reads calendar-list metadata only. Only calendars with Google effective
+`writer` or `owner` access can become scheduling resources; primary calendars are not automatically
+bookable. Owners/admins explicitly choose resources, create Avenlyo-managed appointment types
+(10–360 minutes in 5-minute increments), map types to resources, configure minimum lead time
+(default 60 minutes), and select the active provider.
+
+For Google, availability is a trusted intersection of location business hours, IANA timezone,
+minimum lead, and Google FreeBusy ranges. It uses a 14-day horizon, 15-minute local grid, at most
+five resources and five model-facing candidates. Busy ranges are merged as `[start, end)` and a
+full appointment duration must fit. Candidates still expire after ten minutes.
+
+Before the one permitted Google event write, Avenlyo claims a short PostgreSQL exclusion lease for
+the resource/interval and rechecks FreeBusy. This prevents two Avenlyo callers from writing the
+same calendar interval without holding a database transaction open over Google network calls.
+
+### Booking and recovery
+
+`prepare_appointment_booking` accepts only an offered candidate and optional subject context. ezyVet
+continues to require exact external Contact/Animal resolution. Google Calendar uses trusted local
+caller/contact context and never invents a Google customer, pet, or vehicle ID. A later explicit
+customer confirmation is still required before any provider write.
+
+Google events are normal single events only: no attendees, invitations, Meet links, recurrence,
+reminders, updates, cancellation, or webhooks. Their deterministic lower-case hexadecimal ID is
+derived from the booking-intent UUID. Private extended properties contain only the booking-intent
+and integration IDs. `events.insert` is never blindly retried: a timeout, network error, 5xx, or
+409 triggers one bounded `events.get` reconciliation of that exact ID, calendar, interval, and
+private marker. A mismatch is treated as a safe conflict for human follow-up, never overwritten.
+
+### Manual Google validation
+
+Automated tests never call Google. With disposable Google OAuth credentials, connect a test account
+from **Dashboard -> Integrations**, select a dedicated writer/owner calendar, create and map a
+30-minute type, set business hours, then complete a voice booking with a later explicit confirmation.
+Verify one event with the expected timezone, interval, and private metadata, one local appointment,
+and that a separately-created busy event removes the slot. This manual check is not run without test
+credentials.

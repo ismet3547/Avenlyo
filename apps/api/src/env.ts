@@ -9,6 +9,9 @@ export const env = parseEnvironment(
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(4000),
     EZYVET_PARTNER_ID: z.string().min(1).optional(),
+    GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+    GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
+    GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     OPENAI_API_KEY: z.string().min(1).optional(),
     OPENAI_PROJECT_ID: z.string().min(1).optional(),
@@ -31,4 +34,12 @@ export const isVoiceRuntimeConfigured = Boolean(
 
 export const isEzyVetRuntimeConfigured = Boolean(
   env.EZYVET_PARTNER_ID && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY,
+);
+
+export const isGoogleCalendarRuntimeConfigured = Boolean(
+  env.GOOGLE_CLIENT_ID &&
+    env.GOOGLE_CLIENT_SECRET &&
+    env.GOOGLE_OAUTH_REDIRECT_URI &&
+    env.SUPABASE_URL &&
+    env.SUPABASE_SERVICE_ROLE_KEY,
 );

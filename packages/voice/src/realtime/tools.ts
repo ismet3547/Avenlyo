@@ -31,7 +31,7 @@ export const availableAppointmentsSchema = z
 export const prepareAppointmentBookingSchema = z
   .object({
     candidate_id: z.string().uuid(),
-    pet_name: z.string().trim().min(1).max(80),
+    subject_name: z.string().trim().min(1).max(80).optional(),
   })
   .strict();
 export const bookAppointmentSchema = z.object({ booking_intent_id: z.string().uuid() }).strict();
@@ -53,7 +53,7 @@ export const transferCallFunction: VoiceFunctionTool = {
 
 const getAvailableAppointmentsFunction: VoiceFunctionTool = {
   description:
-    'Find currently bookable veterinary appointment options. Never infer availability; ask the caller for their preferred date first.',
+    'Find currently bookable appointment options. Never infer availability; ask the caller for their preferred date first.',
   name: 'get_available_appointments',
   parameters: {
     additionalProperties: false,
@@ -69,15 +69,15 @@ const getAvailableAppointmentsFunction: VoiceFunctionTool = {
 
 const prepareAppointmentBookingFunction: VoiceFunctionTool = {
   description:
-    'Resolve the caller and pet for one previously offered appointment option. This only prepares a booking; it does not book.',
+    'Prepare one previously offered appointment option from trusted caller context. This does not book.',
   name: 'prepare_appointment_booking',
   parameters: {
     additionalProperties: false,
     properties: {
       candidate_id: { type: 'string' },
-      pet_name: { type: 'string' },
+      subject_name: { type: 'string' },
     },
-    required: ['candidate_id', 'pet_name'],
+    required: ['candidate_id'],
     type: 'object',
   },
   strict: true,
@@ -114,7 +114,7 @@ export function activeVoiceTools(input: {
   if (input.transferEnabled && input.industry.allowedActions.includes('handoff_to_human')) {
     tools.push(transferCallFunction);
   }
-  if (input.schedulingEnabled && input.industry.id === 'veterinary') {
+  if (input.schedulingEnabled) {
     tools.push(
       getAvailableAppointmentsFunction,
       prepareAppointmentBookingFunction,
@@ -322,7 +322,7 @@ export class VoiceToolExecutor {
         const prepared = await this.services.scheduling.prepareAppointmentBooking(
           {
             candidateId: parsed.data.candidate_id,
-            petName: parsed.data.pet_name,
+            subjectName: parsed.data.subject_name ?? null,
             toolCallId: call.callId,
           },
           this.context,
