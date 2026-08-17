@@ -1,12 +1,14 @@
 import { OpenAIEmbeddingProvider } from '@avenlyo/knowledge';
 import { VoiceSessionManager, type VoiceSessionFinalizer } from '@avenlyo/voice';
 
-import { env, isVoiceRuntimeConfigured } from '../../env.js';
+import { env, isGoogleCalendarRuntimeConfigured, isVoiceRuntimeConfigured } from '../../env.js';
 import { createVoiceServiceSupabaseClient } from '../../lib/supabase.js';
 import { VoiceInboundCallService } from './inbound-service.js';
 import { OpenAIRealtimeCallControlProvider } from './openai-realtime-control.js';
 import { SupabaseVoiceStore } from './store.js';
 import { EzyVetIntegrationService } from '../scheduling/ezyvet-service.js';
+import { ApiSchedulingConnectorRegistry } from '../scheduling/connector-registry.js';
+import { GoogleCalendarIntegrationService } from '../scheduling/google-calendar-service.js';
 import { VoiceBookingService } from '../scheduling/voice-booking-service.js';
 
 export interface VoiceIncomingHandler {
@@ -37,9 +39,18 @@ export function createVoiceRuntime(): VoiceRuntime | null {
   };
   const sessions = new VoiceSessionManager({ control, finalizer });
   const embeddings = new OpenAIEmbeddingProvider({ apiKey: env.OPENAI_API_KEY });
-  const scheduling = env.EZYVET_PARTNER_ID
+  const ezyVet = env.EZYVET_PARTNER_ID
+    ? new EzyVetIntegrationService({ partnerId: env.EZYVET_PARTNER_ID, supabase })
+    : undefined;
+  const googleCalendar = isGoogleCalendarRuntimeConfigured && env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_OAUTH_REDIRECT_URI
+    ? new GoogleCalendarIntegrationService({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, oauthRedirectUri: env.GOOGLE_OAUTH_REDIRECT_URI, supabase })
+    : undefined;
+  const scheduling = ezyVet || googleCalendar
     ? new VoiceBookingService({
-        ezyVet: new EzyVetIntegrationService({ partnerId: env.EZYVET_PARTNER_ID, supabase }),
+        connectors: new ApiSchedulingConnectorRegistry({
+          ...(ezyVet ? { ezyVet } : {}),
+          ...(googleCalendar ? { googleCalendar } : {}),
+        }),
         supabase,
       })
     : undefined;

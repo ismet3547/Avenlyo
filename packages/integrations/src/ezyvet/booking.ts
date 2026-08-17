@@ -8,10 +8,15 @@ export async function createEzyVetBooking(
   client: EzyVetClient,
   input: CreateBookingRequest,
 ): Promise<CreateBookingResult> {
+  const customerKey = input.customer.providerKey ?? ('key' in input.customer ? input.customer.key : null);
+  const subjectKey = input.subject.providerKey ?? ('key' in input.subject ? input.subject.key : null);
+  if (!customerKey || !subjectKey) {
+    throw new BookingProviderError('invalid_request');
+  }
   const payload = await client.postEzyCab('/ezycab/booking', {
-    animal: input.subject.key,
+    animal: subjectKey,
     appointmentStatus: 'unconfirmed',
-    contact: input.customer.key,
+    contact: customerKey,
     description: input.description,
     durationMinutes: input.appointmentType.defaultDurationMinutes,
     provider: input.resource.key,

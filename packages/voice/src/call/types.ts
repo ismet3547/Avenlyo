@@ -119,7 +119,7 @@ export interface VoiceSchedulingServices {
     context: VoiceCallContext,
   ): Promise<readonly VoiceBookingCandidate[]>;
   prepareAppointmentBooking(
-    input: { readonly candidateId: string; readonly petName: string; readonly toolCallId: string },
+    input: { readonly candidateId: string; readonly subjectName: string | null; readonly toolCallId: string },
     context: VoiceCallContext,
   ): Promise<{
     readonly intent: VoiceBookingIntent | null;

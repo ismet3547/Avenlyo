@@ -183,7 +183,7 @@ export class VoiceInboundCallService {
   }
 
   private async schedulingEnabled(context: VoiceCallContext): Promise<boolean> {
-    if (context.industry.id !== 'veterinary' || !this.options.scheduling) return false;
+    if (!this.options.scheduling) return false;
     try {
       return await this.options.scheduling.isEnabledForCall(context);
     } catch {

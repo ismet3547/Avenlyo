@@ -84,6 +84,35 @@ const schedulingHardeningMigration = readFileSync(
   ),
   'utf8',
 );
+const googleCalendarMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816080000_phase_6_google_calendar.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const googleCalendarSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/google_calendar_security.test.sql', import.meta.url),
+  'utf8',
+);
+const schedulingReliabilityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816081000_phase_6_scheduling_reliability.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const ezyVetRecoveryMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260816082000_phase_6_ezyvet_recovery_symmetry.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const schedulingReliabilitySecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/scheduling_reliability.test.sql', import.meta.url),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -371,5 +400,63 @@ describe('veterinary scheduling migration definition', () => {
       'provider success has a recoverable, non-repostable persistence state',
     );
     expect(schedulingSecurityTest).toContain('authenticated users cannot reopen a completed');
+  });
+});
+
+describe('Google Calendar scheduling migration definition', () => {
+  it('keeps one trusted active provider and provider-neutral booking data', () => {
+    expect(googleCalendarMigration).toContain("provider in ('ezyvet', 'google_calendar')");
+    expect(googleCalendarMigration).toContain('create table public.location_scheduling_settings');
+    expect(googleCalendarMigration).toContain('active_integration_id');
+    expect(googleCalendarMigration).toContain('alter column external_contact_uid drop not null');
+    expect(googleCalendarMigration).toContain('booking_intents_contact_scope_fk');
+  });
+
+  it('makes OAuth state and refresh credentials backend-only', () => {
+    expect(googleCalendarMigration).toContain('create table public.oauth_connection_states');
+    expect(googleCalendarMigration).toContain("expires_at > created_at");
+    expect(googleCalendarMigration).toContain('consume_google_oauth_state');
+    expect(googleCalendarMigration).toContain('vault.update_secret');
+    expect(googleCalendarMigration).toContain('get_google_calendar_execution_credentials');
+  });
+
+  it('uses mapping-scoped resources and exclusion slot leases', () => {
+    expect(googleCalendarMigration).toContain('create table public.scheduling_appointment_type_resources');
+    expect(googleCalendarMigration).toContain('scheduling_type_resource_resource_fk');
+    expect(googleCalendarMigration).toContain('create table public.booking_slot_leases');
+    expect(googleCalendarMigration).toContain('booking_slot_leases_no_overlap');
+    expect(googleCalendarMigration).toContain("tstzrange(starts_at, ends_at, '[)')");
+  });
+
+  it('has executable tenant and backend-only pgTAP coverage', () => {
+    expect(googleCalendarSecurityTest).toContain('type-resource mapping rejects a cross-tenant resource');
+    expect(googleCalendarSecurityTest).toContain('member cannot read OAuth state');
+    expect(googleCalendarSecurityTest).toContain('consumed OAuth state cannot be reused');
+    expect(googleCalendarSecurityTest).toContain('overlapping leases for the same resource are rejected');
+  });
+
+  it('separates mutable new-write policy from durable provider recovery', () => {
+    expect(schedulingReliabilityMigration).toContain('provider_booking_status');
+    expect(schedulingReliabilityMigration).toContain("intent.status = 'provider_success_pending_persistence'");
+    expect(schedulingReliabilityMigration).toContain("settings.active_integration_id = intent.integration_id");
+    expect(schedulingReliabilityMigration).toContain("intent.status = 'booking' and integration.status = 'connected'");
+    expect(schedulingReliabilityMigration).toContain('drop function public.complete_voice_booking_intent(uuid, text, text)');
+    expect(schedulingReliabilitySecurityTest).toContain('provider success persists after Google is disconnected');
+    expect(schedulingReliabilitySecurityTest).toContain('removed Google type-resource mapping blocks a first provider write');
+    expect(schedulingReliabilitySecurityTest).toContain('disabled ezyVet resource blocks a first provider write');
+  });
+
+  it('keeps ezyVet credentials recovery-only after a disconnect', () => {
+    expect(ezyVetRecoveryMigration).toContain('perform public.require_ezyvet_service_role()');
+    expect(ezyVetRecoveryMigration).toContain("and integration.provider = 'ezyvet'");
+    expect(ezyVetRecoveryMigration).not.toContain("integration.status = 'connected'");
+    expect(ezyVetRecoveryMigration).toContain('active_integration_id = null');
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'service role retrieves vaulted ezyVet credentials after disconnect for recovery',
+    );
+    expect(schedulingReliabilitySecurityTest).toContain('a fresh ezyVet write is blocked after disconnect');
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'service role receives no direct integration credential table grant',
+    );
   });
 });

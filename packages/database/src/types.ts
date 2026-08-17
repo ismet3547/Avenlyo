@@ -190,6 +190,41 @@ export interface EzyVetIntegrationLocationRow {
   site_timezone: string | null;
 }
 
+export interface GoogleBackendAuthorizationRow {
+  organization_id: string;
+  location_id: string;
+  location_timezone: string;
+}
+
+export interface GoogleCalendarExecutionCredentialsRow {
+  organization_id: string;
+  location_id: string;
+  refresh_token: string;
+  credential_version: number;
+}
+
+export interface GoogleCalendarIntegrationLocationRow {
+  integration_id: string;
+  status: string;
+  last_verified_at: string | null;
+}
+
+export interface GoogleCalendarConfigurationRow {
+  integration_id: string | null;
+  status: string | null;
+  last_verified_at: string | null;
+  is_active: boolean | null;
+  minimum_lead_minutes: number | null;
+  appointment_type_id: string | null;
+  appointment_type_name: string | null;
+  appointment_type_duration_minutes: number | null;
+  appointment_type_bookable: boolean | null;
+  resource_id: string | null;
+  resource_name: string | null;
+  resource_access_role: string | null;
+  resource_bookable: boolean | null;
+}
+
 export interface EzyVetIntegrationConfigurationRow {
   integration_id: string | null;
   status: string | null;
@@ -228,6 +263,30 @@ export interface VoiceSchedulingContextRow {
   caller_e164: string | null;
   integration_id: string;
   site_timezone: string;
+}
+
+export interface GenericVoiceSchedulingContextRow {
+  organization_id: string;
+  location_id: string;
+  conversation_id: string;
+  contact_id: string | null;
+  caller_e164: string | null;
+  contact_display_name: string | null;
+  integration_id: string;
+  provider: 'ezyvet' | 'google_calendar';
+  timezone: string;
+  business_hours: Json;
+  minimum_lead_minutes: number;
+}
+
+export interface SchedulingBookableCatalogRow {
+  appointment_type_id: string;
+  appointment_type_uid: string;
+  appointment_type_name: string;
+  default_duration_minutes: number;
+  resource_id: string;
+  resource_uid: string;
+  resource_name: string;
 }
 
 export interface BookingCandidateRow {
@@ -274,6 +333,35 @@ export interface BookingExecutionContextRow {
   timezone: string;
   provider_appointment_id: string | null;
   intent_status: string;
+}
+
+export interface GenericBookingExecutionContextRow {
+  booking_intent_id: string;
+  organization_id: string;
+  location_id: string;
+  conversation_id: string;
+  contact_id: string | null;
+  integration_id: string;
+  provider: 'ezyvet' | 'google_calendar';
+  external_contact_uid: string | null;
+  external_subject_uid: string | null;
+  subject_name: string | null;
+  trusted_phone_e164: string | null;
+  customer_display_name: string | null;
+  appointment_type_uid: string;
+  appointment_type_name: string;
+  default_duration_minutes: number;
+  resource_uid: string;
+  resource_name: string;
+  starts_at: string;
+  ends_at: string;
+  timezone: string;
+  business_hours: Json;
+  minimum_lead_minutes: number;
+  provider_appointment_id: string | null;
+  provider_booking_status: 'confirmed' | 'unconfirmed' | null;
+  intent_status: string;
+  current_write_eligible: boolean;
 }
 
 export interface CompletedBookingRow {
@@ -558,6 +646,54 @@ export interface Database {
         Args: { target_organization_id: string; target_location_id: string };
         Returns: EzyVetIntegrationLocationRow[];
       };
+      get_google_backend_authorization: {
+        Args: { target_user_id: string; target_location_id: string };
+        Returns: GoogleBackendAuthorizationRow[];
+      };
+      create_google_oauth_state: {
+        Args: { target_user_id: string; target_location_id: string; target_state_hash: string };
+        Returns: GoogleBackendAuthorizationRow[];
+      };
+      consume_google_oauth_state: {
+        Args: { target_state_hash: string };
+        Returns: { user_id: string; organization_id: string; location_id: string }[];
+      };
+      store_google_calendar_connection: {
+        Args: { target_organization_id: string; target_location_id: string; target_refresh_token: string };
+        Returns: { integration_id: string }[];
+      };
+      get_google_calendar_execution_credentials: {
+        Args: { target_integration_id: string };
+        Returns: GoogleCalendarExecutionCredentialsRow[];
+      };
+      get_google_calendar_integration_for_location: {
+        Args: { target_organization_id: string; target_location_id: string };
+        Returns: GoogleCalendarIntegrationLocationRow[];
+      };
+      save_google_calendar_resources: {
+        Args: { target_integration_id: string; calendars: Json };
+        Returns: undefined;
+      };
+      get_my_google_scheduling_configuration: {
+        Args: { target_location_id: string };
+        Returns: GoogleCalendarConfigurationRow[];
+      };
+      create_my_google_appointment_type: {
+        Args: { target_location_id: string; target_name: string; target_duration_minutes: number };
+        Returns: { appointment_type_id: string }[];
+      };
+      update_my_google_booking_policy: {
+        Args: { target_location_id: string; selected_appointment_type_ids: string[]; selected_resource_ids: string[]; mappings: Json };
+        Returns: undefined;
+      };
+      set_my_active_scheduling_integration: {
+        Args: { target_location_id: string; target_integration_id: string; target_minimum_lead_minutes?: number };
+        Returns: undefined;
+      };
+      disable_google_calendar_integration: {
+        Args: { target_organization_id: string; target_location_id: string };
+        Returns: undefined;
+      };
       save_ezyvet_catalog: {
         Args: {
           target_integration_id: string;
@@ -587,6 +723,14 @@ export interface Database {
         Args: { target_call_id: string };
         Returns: VoiceSchedulingContextRow[];
       };
+      get_voice_scheduling_context: {
+        Args: { target_call_id: string };
+        Returns: GenericVoiceSchedulingContextRow[];
+      };
+      get_scheduling_bookable_catalog: {
+        Args: { target_integration_id: string };
+        Returns: SchedulingBookableCatalogRow[];
+      };
       get_ezyvet_bookable_catalog: {
         Args: { target_integration_id: string };
         Returns: EzyVetBookableCatalogRow[];
@@ -605,6 +749,22 @@ export interface Database {
         };
         Returns: BookingIntentRow[];
       };
+      prepare_voice_scheduling_booking_intent: {
+        Args: { target_call_id: string; target_candidate_id: string; resolved_contact_uid: string | null; resolved_subject_uid: string | null; resolved_subject_name: string | null; trusted_contact_id: string | null };
+        Returns: BookingIntentRow[];
+      };
+      claim_voice_scheduling_booking_intent: {
+        Args: { target_call_id: string; target_booking_intent_id: string; target_tool_call_id: string };
+        Returns: BookingClaimRow[];
+      };
+      claim_booking_slot_lease: {
+        Args: { target_booking_intent_id: string };
+        Returns: { lease_id: string }[];
+      };
+      release_booking_slot_lease: {
+        Args: { target_booking_intent_id: string };
+        Returns: undefined;
+      };
       claim_voice_booking_intent: {
         Args: {
           target_call_id: string;
@@ -615,14 +775,10 @@ export interface Database {
       };
       get_voice_booking_execution_context: {
         Args: { target_booking_intent_id: string };
-        Returns: BookingExecutionContextRow[];
+        Returns: GenericBookingExecutionContextRow[];
       };
       complete_voice_booking_intent: {
-        Args: {
-          target_booking_intent_id: string;
-          target_external_appointment_id: string;
-          target_provider_status: 'confirmed' | 'unconfirmed';
-        };
+        Args: { target_booking_intent_id: string };
         Returns: CompletedBookingRow[];
       };
       record_voice_booking_provider_success: {

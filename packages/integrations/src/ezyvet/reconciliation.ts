@@ -21,6 +21,8 @@ function exactAppointmentUid(value: unknown, input: BookingReconciliationRequest
   const typeUid = string(appointment.type_uid);
   const animalUid = string(appointment.animal_uid);
   const contactUid = string(appointment.contact_uid);
+  const subjectKey = input.subject.providerKey ?? ('key' in input.subject ? input.subject.key : null);
+  const customerKey = input.customer.providerKey ?? ('key' in input.customer ? input.customer.key : null);
   const hasResource = array(appointment.resources).some(
     (resource) => string(record(resource).uid) === input.resource.key,
   );
@@ -29,8 +31,8 @@ function exactAppointmentUid(value: unknown, input: BookingReconciliationRequest
     boolean(appointment.active) !== true ||
     startAt !== input.slot.startAt ||
     typeUid !== input.appointmentType.key ||
-    animalUid !== input.subject.key ||
-    contactUid !== input.customer.key ||
+    animalUid !== subjectKey ||
+    contactUid !== customerKey ||
     !hasResource
   ) {
     return null;

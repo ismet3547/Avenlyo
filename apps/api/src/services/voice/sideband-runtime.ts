@@ -56,7 +56,7 @@ export class VoiceSidebandRuntime {
         transferCall: async (input) => this.transfer(input.reason, input.toolCallId),
       },
       transferAllowed,
-      options.scheduling !== undefined && options.context.industry.id === 'veterinary',
+      options.scheduling !== undefined,
     );
   }
 
