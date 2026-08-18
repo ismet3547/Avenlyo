@@ -8,7 +8,7 @@ import {
   searchBusinessKnowledgeSchema,
 } from '@avenlyo/ai';
 import type { KnowledgeSource } from '@avenlyo/ai';
-import type { IndustryPack } from '@avenlyo/industries';
+import { requiresUrgentLeadHandoff, type IndustryPack } from '@avenlyo/industries';
 import { z } from 'zod';
 
 import { MAX_VOICE_TOOL_CALLS } from '../call/limits';
@@ -374,7 +374,12 @@ export class VoiceToolExecutor {
           },
           this.context,
         );
-        const handoffRequested = lead.state === 'needs_human';
+        // A conflict intentionally remains needs_clarification. The trusted industry pack,
+        // not the model-visible persistence result, determines urgent review.
+        const handoffRequested = requiresUrgentLeadHandoff(
+          this.context.industry,
+          parsed.data.urgency,
+        );
         if (handoffRequested) {
           await this.services.requestHumanHelp(
             {

@@ -3,7 +3,7 @@
 
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(42);
+select extensions.plan(45);
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
 begin
@@ -81,9 +81,12 @@ select extensions.is((select service_category from public.leads where conversati
 select extensions.is((select service_category from public.leads where conversation_id = 'e1630000-0000-0000-0000-000000000001'), 'wellness', 'new lead keeps its conflicting category');
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
-select extensions.is((select state from public.capture_conversation_lead('e1810000-0000-0000-0000-000000000001', 'lead-tool-urgent', 'wellness', 'urgent', 'appointment', null, '{}', 'needs_human')), 'needs_human', 'urgent follow-up requests a human handoff');
+select extensions.is((select state from public.capture_conversation_lead('e1810000-0000-0000-0000-000000000001', 'lead-tool-urgent-conflict', 'grooming', 'urgent', 'appointment', null, '{}', 'needs_human')), 'needs_clarification', 'urgent conflict keeps the clarification result state');
+select extensions.is((select created from public.request_message_handoff('e1810000-0000-0000-0000-000000000001', 'lead-tool-urgent-conflict:urgent-lead', 'An urgent lead needs a team follow-up.', 'urgent')), true, 'urgent conflicting capture requests one durable message handoff');
+select extensions.is((select created from public.request_message_handoff('e1810000-0000-0000-0000-000000000001', 'lead-tool-urgent-conflict:urgent-lead', 'An urgent lead needs a team follow-up.', 'urgent')), false, 'replayed urgent conflicting capture reuses the durable handoff');
 reset role;
 select extensions.is((select urgency from public.leads where conversation_id = 'e1600000-0000-0000-0000-000000000001'), 'urgent', 'later urgent capture upgrades durable urgency');
+select extensions.is((select count(*)::integer from public.handoffs where conversation_id = 'e1600000-0000-0000-0000-000000000001' and urgency = 'urgent'), 1, 'urgent conflicting capture creates no duplicate durable handoff');
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is((select state from public.capture_conversation_lead('e1810000-0000-0000-0000-000000000001', 'lead-tool-routine', 'wellness', 'routine', 'appointment', null, '{}', 'qualified')), 'qualified', 'lower urgency follow-up remains a valid capture');

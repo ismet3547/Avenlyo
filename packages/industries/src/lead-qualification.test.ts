@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { autoRepairPack, medspaPack, veterinaryPack } from './packs';
-import { validateLeadCapture } from './lead-qualification';
+import { requiresUrgentLeadHandoff, validateLeadCapture } from './lead-qualification';
 
 describe('industry lead qualification', () => {
   it('qualifies a minimal veterinary appointment interest without clinical details', () => {
@@ -34,5 +34,22 @@ describe('industry lead qualification', () => {
         urgency: 'urgent',
       }),
     ).toMatchObject({ facts: { details: {} }, qualification: 'needs_human' });
+  });
+
+  it('derives urgent human review only from the industry pack policy', () => {
+    expect(requiresUrgentLeadHandoff(veterinaryPack, 'urgent')).toBe(true);
+    expect(requiresUrgentLeadHandoff(veterinaryPack, 'routine')).toBe(false);
+    expect(
+      requiresUrgentLeadHandoff(
+        {
+          ...veterinaryPack,
+          leadQualification: {
+            ...veterinaryPack.leadQualification,
+            urgencyPolicy: { urgentRequiresHumanReview: false },
+          },
+        },
+        'urgent',
+      ),
+    ).toBe(false);
   });
 });

@@ -14,6 +14,11 @@ export interface ValidatedLeadCapture {
   readonly qualification: 'needs_human' | 'needs_more_information' | 'qualified';
 }
 
+/** Urgent lead handoff is a source-controlled industry policy, never a model-provided flag. */
+export function requiresUrgentLeadHandoff(industry: IndustryPack, urgency: LeadUrgency): boolean {
+  return urgency === 'urgent' && industry.leadQualification.urgencyPolicy.urgentRequiresHumanReview;
+}
+
 /** Validates only declarative business facts. It deliberately never accepts identities or state. */
 export function validateLeadCapture(
   industry: IndustryPack,
@@ -47,12 +52,10 @@ export function validateLeadCapture(
   return {
     facts: normalized,
     missingFields,
-    qualification:
-      facts.urgency === 'urgent' &&
-      industry.leadQualification.urgencyPolicy.urgentRequiresHumanReview
-        ? 'needs_human'
-        : missingFields.length
-          ? 'needs_more_information'
-          : 'qualified',
+    qualification: requiresUrgentLeadHandoff(industry, facts.urgency)
+      ? 'needs_human'
+      : missingFields.length
+        ? 'needs_more_information'
+        : 'qualified',
   };
 }

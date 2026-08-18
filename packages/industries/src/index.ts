@@ -7,7 +7,7 @@ export {
   veterinaryPack,
 } from './packs';
 export { industryIdSchema, industrySelectionSchema } from './validation';
-export { validateLeadCapture } from './lead-qualification';
+export { requiresUrgentLeadHandoff, validateLeadCapture } from './lead-qualification';
 export type { LeadCaptureFacts, ValidatedLeadCapture } from './lead-qualification';
 export { industryIds, isIndustryId } from './types';
 export type {

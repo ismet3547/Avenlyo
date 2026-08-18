@@ -170,4 +170,79 @@ describe('voice tool boundary', () => {
       context,
     );
   });
+
+  it('requests one urgent voice handoff when a contradiction remains needs_clarification', async () => {
+    const capture = vi
+      .fn()
+      .mockResolvedValue({
+        missingFields: ['service_category'],
+        state: 'needs_clarification' as const,
+      });
+    const requestHumanHelp = vi.fn().mockResolvedValue({ created: true });
+    const executor = new VoiceToolExecutor(
+      context,
+      {
+        leadCapture: { capture },
+        requestHumanHelp,
+        searchBusinessKnowledge: vi.fn(),
+        transferCall: vi.fn(),
+      },
+      false,
+    );
+    const call = {
+      arguments:
+        '{"customerGoal":"appointment","details":{},"serviceCategory":"grooming","urgency":"urgent"}',
+      callId: 'lead-voice-urgent-conflict',
+      name: 'capture_lead' as const,
+      triggeringInboundMessageId: '00000000-0000-0000-0000-000000000014',
+    };
+
+    await expect(executor.execute(call)).resolves.toMatchObject({ handoffRequested: true });
+    await expect(executor.execute(call)).resolves.toMatchObject({ handoffRequested: true });
+    expect(capture).toHaveBeenCalledOnce();
+    expect(capture).toHaveBeenCalledWith(
+      expect.objectContaining({ serviceCategory: 'grooming', urgency: 'urgent' }),
+      context,
+    );
+    expect(requestHumanHelp).toHaveBeenCalledOnce();
+    expect(requestHumanHelp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolCallId: 'lead-voice-urgent-conflict:urgent-lead',
+        urgency: 'urgent',
+      }),
+      context,
+    );
+  });
+
+  it('does not request a voice handoff for a routine contradiction', async () => {
+    const requestHumanHelp = vi.fn().mockResolvedValue({ created: true });
+    const executor = new VoiceToolExecutor(
+      context,
+      {
+        leadCapture: {
+          capture: vi
+            .fn()
+            .mockResolvedValue({
+              missingFields: ['service_category'],
+              state: 'needs_clarification',
+            }),
+        },
+        requestHumanHelp,
+        searchBusinessKnowledge: vi.fn(),
+        transferCall: vi.fn(),
+      },
+      false,
+    );
+
+    await expect(
+      executor.execute({
+        arguments:
+          '{"customerGoal":"appointment","details":{},"serviceCategory":"grooming","urgency":"routine"}',
+        callId: 'lead-voice-routine-conflict',
+        name: 'capture_lead',
+        triggeringInboundMessageId: '00000000-0000-0000-0000-000000000014',
+      }),
+    ).resolves.toMatchObject({ handoffRequested: false });
+    expect(requestHumanHelp).not.toHaveBeenCalled();
+  });
 });

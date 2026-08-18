@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { requiresUrgentLeadHandoff } from '@avenlyo/industries';
+
 import { MAX_TOOL_OUTPUT_CHARACTERS } from '../agent/limits';
 import type { AgentExecutionContext, AgentToolCall, KnowledgeSource } from '../agent/types';
 
@@ -130,7 +132,9 @@ export class ControlledToolExecutor implements ToolExecutor {
           },
           context,
         );
-        const requiresHandoff = lead.state === 'needs_human';
+        // The persisted result can be needs_clarification when facts conflict. Urgency review
+        // remains a source-controlled policy decision and must not depend on that result state.
+        const requiresHandoff = requiresUrgentLeadHandoff(this.industry, parsed.data.urgency);
         if (requiresHandoff) {
           await this.services.requestHumanHelp(
             {

@@ -465,6 +465,137 @@ describe('controlled agent runtime', () => {
     );
   });
 
+  it('requests urgent text follow-up even when a contradiction remains needs_clarification', async () => {
+    const capture = vi
+      .fn()
+      .mockResolvedValue({
+        missingFields: ['service_category'],
+        state: 'needs_clarification' as const,
+      });
+    const requestHumanHelp = vi.fn().mockResolvedValue({ created: true });
+    const executor = new ControlledToolExecutor(
+      veterinaryPack,
+      serviceDouble({ leadCapture: { capture }, requestHumanHelp }),
+    );
+
+    const response = await executor.execute(
+      {
+        arguments: JSON.stringify({
+          customerGoal: 'appointment',
+          details: {},
+          serviceCategory: 'grooming',
+          urgency: 'urgent',
+        }),
+        callId: 'lead-text-urgent-conflict',
+        name: 'capture_lead',
+      },
+      context,
+    );
+
+    expect(response).toMatchObject({
+      execution: { status: 'succeeded' },
+      handoffRequested: true,
+    });
+    expect(JSON.parse(response.modelOutput)).toMatchObject({ state: 'needs_clarification' });
+    expect(capture).toHaveBeenCalledWith(
+      expect.objectContaining({ serviceCategory: 'grooming', urgency: 'urgent' }),
+      context,
+    );
+    expect(requestHumanHelp).toHaveBeenCalledOnce();
+    expect(requestHumanHelp).toHaveBeenCalledWith(
+      {
+        reason: 'An urgent lead needs a team follow-up.',
+        toolCallId: 'lead-text-urgent-conflict:urgent-lead',
+        urgency: 'urgent',
+      },
+      context,
+    );
+  });
+
+  it('does not request a text handoff for a routine contradiction', async () => {
+    const requestHumanHelp = vi.fn().mockResolvedValue({ created: true });
+    const executor = new ControlledToolExecutor(
+      veterinaryPack,
+      serviceDouble({
+        leadCapture: {
+          capture: vi
+            .fn()
+            .mockResolvedValue({
+              missingFields: ['service_category'],
+              state: 'needs_clarification',
+            }),
+        },
+        requestHumanHelp,
+      }),
+    );
+
+    await expect(
+      executor.execute(
+        {
+          arguments:
+            '{"customerGoal":"appointment","details":{},"serviceCategory":"grooming","urgency":"routine"}',
+          callId: 'lead-text-routine-conflict',
+          name: 'capture_lead',
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({ handoffRequested: false });
+    expect(requestHumanHelp).not.toHaveBeenCalled();
+  });
+
+  it('keeps the normal urgent text handoff and respects an industry pack that disables it', async () => {
+    const urgentRequestHumanHelp = vi.fn().mockResolvedValue({ created: true });
+    const urgentExecutor = new ControlledToolExecutor(
+      veterinaryPack,
+      serviceDouble({
+        leadCapture: {
+          capture: vi.fn().mockResolvedValue({ missingFields: [], state: 'needs_human' }),
+        },
+        requestHumanHelp: urgentRequestHumanHelp,
+      }),
+    );
+    await expect(
+      urgentExecutor.execute(
+        {
+          arguments:
+            '{"customerGoal":"appointment","details":{},"serviceCategory":"wellness","urgency":"urgent"}',
+          callId: 'lead-text-urgent',
+          name: 'capture_lead',
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({ handoffRequested: true });
+    expect(urgentRequestHumanHelp).toHaveBeenCalledOnce();
+
+    const noUrgentReviewExecutor = new ControlledToolExecutor(
+      {
+        ...veterinaryPack,
+        leadQualification: {
+          ...veterinaryPack.leadQualification,
+          urgencyPolicy: { urgentRequiresHumanReview: false },
+        },
+      },
+      serviceDouble({
+        leadCapture: {
+          capture: vi.fn().mockResolvedValue({ missingFields: [], state: 'needs_human' }),
+        },
+        requestHumanHelp: urgentRequestHumanHelp,
+      }),
+    );
+    await expect(
+      noUrgentReviewExecutor.execute(
+        {
+          arguments:
+            '{"customerGoal":"appointment","details":{},"serviceCategory":"wellness","urgency":"urgent"}',
+          callId: 'lead-text-urgent-policy-disabled',
+          name: 'capture_lead',
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({ handoffRequested: false });
+    expect(urgentRequestHumanHelp).toHaveBeenCalledOnce();
+  });
+
   it('rejects model-forged lead identities and state before the lead service', async () => {
     const capture = vi.fn();
     const { runtime: agent } = runtime(
