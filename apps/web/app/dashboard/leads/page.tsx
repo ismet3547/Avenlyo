@@ -82,6 +82,14 @@ export default async function LeadsPage({
         Leads are created from trusted customer turns and become converted only after a durable
         booking is persisted.
       </p>
+      {workspace.role !== 'member' ? (
+        <Link
+          className="mt-4 inline-flex text-sm font-semibold text-primary hover:underline"
+          href="/dashboard/leads/follow-ups"
+        >
+          Follow-up settings
+        </Link>
+      ) : null}
       <div className="mt-6 space-y-3" aria-label="Lead filters">
         <div className="flex flex-wrap gap-2">
           <span className="mr-1 py-1 text-xs font-semibold text-muted-foreground">Status</span>

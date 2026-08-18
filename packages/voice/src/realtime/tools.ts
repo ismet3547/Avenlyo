@@ -51,6 +51,30 @@ export const rescheduleOptionsSchema = z
   .strict();
 export const appointmentCandidateSchema = z.object({ candidate_id: z.string().uuid() }).strict();
 export const appointmentIntentSchema = z.object({ change_intent_id: z.string().uuid() }).strict();
+export const prepareSmsFollowupConsentSchema = z.object({}).strict();
+export const confirmSmsFollowupConsentSchema = z
+  .object({ consent_intent_id: z.string().uuid() })
+  .strict();
+
+const prepareSmsFollowupConsentFunction: VoiceFunctionTool = {
+  description:
+    'Prepare an optional SMS follow-up consent request for this exact caller. Ask the caller whether they would like a text follow-up before using it. Never ask for or provide a phone number.',
+  name: 'prepare_sms_followup_consent',
+  parameters: { additionalProperties: false, properties: {}, required: [], type: 'object' },
+  strict: true,
+};
+const confirmSmsFollowupConsentFunction: VoiceFunctionTool = {
+  description:
+    'Record consent only after the caller gives a later, clear yes to the follow-up text question. Use the opaque consent intent returned by preparation; never supply a phone number or transcript.',
+  name: 'confirm_sms_followup_consent',
+  parameters: {
+    additionalProperties: false,
+    properties: { consent_intent_id: { type: 'string' } },
+    required: ['consent_intent_id'],
+    type: 'object',
+  },
+  strict: true,
+};
 
 export const transferCallFunction: VoiceFunctionTool = {
   description:
@@ -193,6 +217,7 @@ export function activeVoiceTools(input: {
   ];
   if (input.industry.allowedActions.includes('capture_lead'))
     tools.push(baseTool(captureLeadFunction));
+  tools.push(prepareSmsFollowupConsentFunction, confirmSmsFollowupConsentFunction);
   if (input.transferEnabled && input.industry.allowedActions.includes('handoff_to_human')) {
     tools.push(transferCallFunction);
   }
@@ -213,6 +238,19 @@ export function activeVoiceTools(input: {
 }
 
 export interface VoiceToolServices {
+  readonly followupConsent?: {
+    confirm(
+      input: {
+        readonly consentIntentId: string;
+        readonly triggeringInboundMessageId: string | null;
+      },
+      context: VoiceCallContext,
+    ): Promise<{ readonly granted: boolean }>;
+    prepare(
+      input: { readonly triggeringInboundMessageId: string | null },
+      context: VoiceCallContext,
+    ): Promise<{ readonly consentIntentId: string; readonly expiresAt: string }>;
+  };
   readonly leadCapture?: {
     capture(
       input: {
@@ -355,6 +393,46 @@ export class VoiceToolExecutor {
                 transferred: false,
               },
         );
+      }
+      if (call.name === 'prepare_sms_followup_consent' && this.services.followupConsent) {
+        const parsed = prepareSmsFollowupConsentSchema.safeParse(rawArguments);
+        if (!parsed.success)
+          return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const consent = await this.services.followupConsent.prepare(
+          { triggeringInboundMessageId: call.triggeringInboundMessageId ?? null },
+          this.context,
+        );
+        return this.store(call.callId, {
+          handoffRequested: false,
+          modelOutput: output({
+            consent_intent_id: consent.consentIntentId,
+            expires_at: consent.expiresAt,
+          }),
+          status: 'succeeded',
+          summary: 'SMS follow-up consent is ready for confirmation.',
+          transferred: false,
+        });
+      }
+      if (call.name === 'confirm_sms_followup_consent' && this.services.followupConsent) {
+        const parsed = confirmSmsFollowupConsentSchema.safeParse(rawArguments);
+        if (!parsed.success)
+          return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const consent = await this.services.followupConsent.confirm(
+          {
+            consentIntentId: parsed.data.consent_intent_id,
+            triggeringInboundMessageId: call.triggeringInboundMessageId ?? null,
+          },
+          this.context,
+        );
+        return this.store(call.callId, {
+          handoffRequested: false,
+          modelOutput: output({ granted: consent.granted }),
+          status: 'succeeded',
+          summary: consent.granted
+            ? 'SMS follow-up consent granted.'
+            : 'SMS follow-up consent not granted.',
+          transferred: false,
+        });
       }
       if (call.name === 'capture_lead' && this.services.leadCapture) {
         const parsed = captureLeadSchema.safeParse(rawArguments);

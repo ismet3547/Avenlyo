@@ -62,6 +62,8 @@ export interface VoiceFunctionTool {
     | 'reschedule_appointment'
     | 'cancel_appointment'
     | 'capture_lead'
+    | 'prepare_sms_followup_consent'
+    | 'confirm_sms_followup_consent'
     | 'request_human_help'
     | 'search_business_knowledge'
     | 'transfer_call'

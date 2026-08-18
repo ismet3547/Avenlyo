@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { followupsRpc } from '@/lib/followups/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { leadsRpc } from '@/lib/leads/service';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -17,11 +18,14 @@ export default async function LeadDetailPage({
 }: {
   readonly params: Promise<{ id: string }>;
 }) {
-  await requireCompletedWorkspace();
+  const workspace = await requireCompletedWorkspace();
   const { id } = await params;
   const auth = await getRequiredAuthContext();
   const lead = auth
     ? (await leadsRpc(auth.supabase)('get_my_lead_detail', { target_lead_id: id })).data?.[0]
+    : null;
+  const followup = auth
+    ? (await followupsRpc(auth.supabase)('get_my_lead_followup', { target_lead_id: id })).data?.[0]
     : null;
   if (!lead)
     return (
@@ -125,6 +129,34 @@ export default async function LeadDetailPage({
               {lead.conversion_appointment_status}
             </p>
           </div>
+        ) : null}
+      </section>
+      <section className="mt-6 rounded-2xl border border-border bg-white p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-semibold text-ink">Follow-up</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {followup ? followup.status.replaceAll('_', ' ') : 'Not eligible'}
+            </p>
+          </div>
+          {workspace.role !== 'member' ? (
+            <Link
+              className="text-sm font-semibold text-primary hover:underline"
+              href="/dashboard/leads/follow-ups"
+            >
+              Settings
+            </Link>
+          ) : null}
+        </div>
+        {followup?.status === 'scheduled' && followup.scheduled_for ? (
+          <p className="mt-4 border-t border-border pt-4 text-sm text-ink">
+            Scheduled for {timestamp(followup.scheduled_for, lead.location_timezone)}
+          </p>
+        ) : null}
+        {followup && (followup.status === 'skipped' || followup.status === 'failed') ? (
+          <p className="mt-4 border-t border-border pt-4 text-sm text-muted-foreground">
+            {followup.skip_reason ?? followup.failure_reason ?? 'No automated follow-up was sent.'}
+          </p>
         ) : null}
       </section>
     </section>

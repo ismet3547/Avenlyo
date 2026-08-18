@@ -34,6 +34,11 @@ export interface VoiceInboundBootstrap {
 }
 
 export interface VoiceStore {
+  confirmFollowupConsent?(input: {
+    readonly consentIntentId: string;
+    readonly externalCallId: string;
+    readonly triggeringInboundMessageId: string | null;
+  }): Promise<{ readonly granted: boolean }>;
   captureLead?(input: {
     readonly customerGoal?: LeadCustomerGoal;
     readonly customerName?: string;
@@ -48,6 +53,10 @@ export interface VoiceStore {
     readonly missingFields: readonly string[];
     readonly state: 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
   }>;
+  prepareFollowupConsent?(input: {
+    readonly externalCallId: string;
+    readonly triggeringInboundMessageId: string | null;
+  }): Promise<{ readonly consentIntentId: string; readonly expiresAt: string }>;
   bootstrapIncomingCall(input: {
     readonly callerE164: string | null;
     readonly dialedE164: string | null;
@@ -151,6 +160,54 @@ export class SupabaseVoiceStore implements VoiceStore {
     });
     if (error || !data?.[0]) throw new Error('Voice lead capture failed.');
     return { missingFields: data[0].missing_fields, state: data[0].state };
+  }
+
+  public async prepareFollowupConsent(input: {
+    readonly externalCallId: string;
+    readonly triggeringInboundMessageId: string | null;
+  }): Promise<{ readonly consentIntentId: string; readonly expiresAt: string }> {
+    if (!input.triggeringInboundMessageId)
+      throw new Error('Voice consent requires a caller transcript.');
+    const rpc = this.client as unknown as {
+      rpc(
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<{
+        data: readonly { consent_intent_id: string; expires_at: string }[] | null;
+        error: { message: string } | null;
+      }>;
+    };
+    const { data, error } = await rpc.rpc('prepare_voice_sms_followup_consent', {
+      target_call_id: input.externalCallId,
+      target_prepared_message_id: input.triggeringInboundMessageId,
+    });
+    if (error || !data?.[0]) throw new Error('Voice follow-up consent is unavailable.');
+    return { consentIntentId: data[0].consent_intent_id, expiresAt: data[0].expires_at };
+  }
+
+  public async confirmFollowupConsent(input: {
+    readonly consentIntentId: string;
+    readonly externalCallId: string;
+    readonly triggeringInboundMessageId: string | null;
+  }): Promise<{ readonly granted: boolean }> {
+    if (!input.triggeringInboundMessageId)
+      throw new Error('Voice consent requires a later caller transcript.');
+    const rpc = this.client as unknown as {
+      rpc(
+        name: string,
+        args: Record<string, unknown>,
+      ): Promise<{
+        data: readonly { granted: boolean }[] | null;
+        error: { message: string } | null;
+      }>;
+    };
+    const { data, error } = await rpc.rpc('confirm_voice_sms_followup_consent', {
+      target_call_id: input.externalCallId,
+      target_consent_intent_id: input.consentIntentId,
+      target_confirmed_message_id: input.triggeringInboundMessageId,
+    });
+    if (error || !data?.[0]) throw new Error('Voice follow-up consent confirmation failed.');
+    return { granted: data[0].granted };
   }
 
   public async bootstrapIncomingCall(input: {
