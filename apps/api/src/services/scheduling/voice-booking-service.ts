@@ -7,8 +7,17 @@ import { AppointmentLifecycleService } from './appointment-lifecycle-service.js'
 import { SchedulingBookingService } from './scheduling-booking-service.js';
 
 interface VoiceTurnRpc {
-  rpc(name: 'get_voice_appointment_lifecycle_turn', args: { readonly target_call_id: string; readonly target_inbound_message_id: string }): Promise<{
-    readonly data: readonly { readonly conversation_id: string; readonly inbound_message_id: string }[] | null;
+  rpc(
+    name: 'get_voice_appointment_lifecycle_turn',
+    args: { readonly target_call_id: string; readonly target_inbound_message_id: string },
+  ): Promise<{
+    readonly data:
+      | readonly {
+          readonly conversation_id: string;
+          readonly inbound_message_id: string;
+          readonly trusted_caller_e164: string;
+        }[]
+      | null;
     readonly error: { readonly message: string } | null;
   }>;
 }
@@ -76,33 +85,82 @@ export class VoiceBookingService implements VoiceSchedulingServices {
     );
   }
 
-  public async getUpcomingAppointments(input: { readonly triggeringInboundMessageId: string | null; readonly toolCallId: string }, context: { readonly callId: string }) {
+  public async getUpcomingAppointments(
+    input: { readonly triggeringInboundMessageId: string | null; readonly toolCallId: string },
+    context: { readonly callId: string },
+  ) {
     void input.toolCallId;
     const turn = await this.lifecycleTurn(context.callId, input.triggeringInboundMessageId);
     return turn ? this.lifecycle.getUpcomingAppointments(turn) : [];
   }
 
-  public async getRescheduleOptions(input: { readonly appointmentReference: string; readonly dates: readonly string[]; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string }, context: { readonly callId: string }) {
+  public async getRescheduleOptions(
+    input: {
+      readonly appointmentReference: string;
+      readonly dates: readonly string[];
+      readonly triggeringInboundMessageId: string | null;
+      readonly toolCallId: string;
+    },
+    context: { readonly callId: string },
+  ) {
     void input.toolCallId;
     const turn = await this.lifecycleTurn(context.callId, input.triggeringInboundMessageId);
-    return turn ? this.lifecycle.getRescheduleOptions({ appointmentReference: input.appointmentReference, dates: input.dates }, turn) : [];
+    return turn
+      ? this.lifecycle.getRescheduleOptions(
+          { appointmentReference: input.appointmentReference, dates: input.dates },
+          turn,
+        )
+      : [];
   }
 
-  public async prepareAppointmentReschedule(input: { readonly candidateId: string; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string }, context: { readonly callId: string }) {
+  public async prepareAppointmentReschedule(
+    input: {
+      readonly candidateId: string;
+      readonly triggeringInboundMessageId: string | null;
+      readonly toolCallId: string;
+    },
+    context: { readonly callId: string },
+  ) {
     void input.toolCallId;
     const turn = await this.lifecycleTurn(context.callId, input.triggeringInboundMessageId);
-    return turn ? this.lifecycle.prepareReschedule({ candidateId: input.candidateId }, turn) : { intent: null, outcome: 'not_found' as const };
+    return turn
+      ? this.lifecycle.prepareReschedule({ candidateId: input.candidateId }, turn)
+      : { intent: null, outcome: 'not_found' as const };
   }
 
-  public async prepareAppointmentCancellation(input: { readonly appointmentReference: string; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string }, context: { readonly callId: string }) {
+  public async prepareAppointmentCancellation(
+    input: {
+      readonly appointmentReference: string;
+      readonly triggeringInboundMessageId: string | null;
+      readonly toolCallId: string;
+    },
+    context: { readonly callId: string },
+  ) {
     void input.toolCallId;
     const turn = await this.lifecycleTurn(context.callId, input.triggeringInboundMessageId);
-    return turn ? this.lifecycle.prepareCancellation({ appointmentReference: input.appointmentReference }, turn) : { intent: null, outcome: 'not_found' as const };
+    return turn
+      ? this.lifecycle.prepareCancellation(
+          { appointmentReference: input.appointmentReference },
+          turn,
+        )
+      : { intent: null, outcome: 'not_found' as const };
   }
 
-  public async executeAppointmentChange(input: { readonly changeIntentId: string; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string }, context: { readonly callId: string }) {
+  public async executeAppointmentChange(
+    input: {
+      readonly changeIntentId: string;
+      readonly triggeringInboundMessageId: string | null;
+      readonly toolCallId: string;
+    },
+    context: { readonly callId: string },
+  ) {
     const turn = await this.lifecycleTurn(context.callId, input.triggeringInboundMessageId);
-    return turn ? this.lifecycle.execute({ changeIntentId: input.changeIntentId, toolCallId: input.toolCallId }, turn) : { outcome: 'confirmation_required' as const };
+    return turn
+      ? this.lifecycle.execute(
+          { changeIntentId: input.changeIntentId, toolCallId: input.toolCallId },
+          turn,
+        )
+      : { outcome: 'confirmation_required' as const };
   }
 
   private async turn(callId: string, triggeringInboundMessageId: string | null) {
@@ -130,6 +188,10 @@ export class VoiceBookingService implements VoiceSchedulingServices {
     });
     const row = data?.[0];
     if (error || !row) return null;
-    return { conversationId: row.conversation_id, triggeringInboundMessageId: row.inbound_message_id };
+    return {
+      conversationId: row.conversation_id,
+      triggeringInboundMessageId: row.inbound_message_id,
+      trustedCallerE164: row.trusted_caller_e164,
+    };
   }
 }

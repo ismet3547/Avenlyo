@@ -30,6 +30,10 @@ import { reconcileEzyVetBooking } from './reconciliation';
 import { array, record, string } from './schemas';
 import type { EzyVetCatalogConnector, EzyVetSite } from './types';
 
+const LIFECYCLE_LOOKUP_PAGE_SIZE = 100;
+const LIFECYCLE_LOOKUP_MAX_PAGES = 4;
+const LIFECYCLE_LOOKUP_WINDOW_MS = 15 * 60 * 1000;
+
 function siteFromPayload(value: unknown): EzyVetSite {
   try {
     const root = record(value);
@@ -104,7 +108,9 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
     return resolveOwnedAnimal(this.client, input.customer, input.petName);
   }
 
-  public async getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
+  public async getAppointmentState(
+    input: AppointmentLifecycleRequest | AppointmentRescheduleRequest,
+  ): Promise<AppointmentLifecycleState> {
     const targetId = input.providerMutationTargetId;
     if (!targetId || !this.numericId(targetId)) return { kind: 'ambiguous' };
     const appointment = await this.readExactLifecycleAppointment(input.appointmentKey, targetId);
@@ -120,14 +126,15 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
     if (input.providerMutationTargetId && this.numericId(input.providerMutationTargetId)) {
       return { kind: 'resolved', targetId: input.providerMutationTargetId };
     }
-    const matches = this.appointments(await this.client.getLifecycleCore('/v2/appointment'))
-      .filter((appointment) => appointment.uid === input.appointmentKey);
+    const matches = await this.findBoundedLifecycleAppointments(input);
     if (matches.length === 0) return { kind: 'not_found' };
     if (matches.length !== 1) return { kind: 'ambiguous' };
     return { kind: 'resolved', targetId: matches[0]!.id };
   }
 
-  public async cancelAppointment(input: AppointmentLifecycleRequest): Promise<AppointmentLifecycleState> {
+  public async cancelAppointment(
+    input: AppointmentLifecycleRequest,
+  ): Promise<AppointmentLifecycleState> {
     const targetId = input.providerMutationTargetId;
     if (!targetId || !this.numericId(targetId)) return { kind: 'ambiguous' };
     await this.client.patchCore(`/v2/appointment/${encodeURIComponent(targetId)}`, {
@@ -140,9 +147,16 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
       : { kind: 'ambiguous' };
   }
 
-  public rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
+  public rescheduleAppointment(
+    input: AppointmentRescheduleRequest,
+  ): Promise<AppointmentLifecycleState> {
     void input;
-    return Promise.reject(new BookingProviderError('invalid_request', 'This provider requires clinic handling for rescheduling.'));
+    return Promise.reject(
+      new BookingProviderError(
+        'invalid_request',
+        'This provider requires clinic handling for rescheduling.',
+      ),
+    );
   }
 
   public async resolveBookingParty(
@@ -176,20 +190,99 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
     return matches.length === 1 ? matches[0]! : null;
   }
 
+  /**
+   * ezyVet's v2.1 calendar read supports a bounded start-time/resource filter and token paging.
+   * We never scan an unbounded appointment history merely to turn the stored UID into the numeric
+   * v2 PATCH identity. A cursor carries the original filter snapshot, so subsequent reads send
+   * only nextToken as required by the provider contract.
+   */
+  private async findBoundedLifecycleAppointments(
+    input: AppointmentLifecycleRequest,
+  ): Promise<readonly { readonly active: boolean; readonly id: string; readonly uid: string }[]> {
+    const originalStart = new Date(input.originalStartAt);
+    if (Number.isNaN(originalStart.getTime()) || !input.resource.key) return [];
+    const lower = new Date(originalStart.getTime() - LIFECYCLE_LOOKUP_WINDOW_MS).toISOString();
+    const upper = new Date(originalStart.getTime() + LIFECYCLE_LOOKUP_WINDOW_MS).toISOString();
+    const matches: Array<{ readonly active: boolean; readonly id: string; readonly uid: string }> =
+      [];
+    let nextToken: string | null = null;
+    for (let page = 0; page < LIFECYCLE_LOOKUP_MAX_PAGES; page += 1) {
+      const response = await this.client.getLifecycleCore(
+        '/v2.1/calendar/appointments',
+        nextToken
+          ? { nextToken }
+          : {
+              'filter[resources.uid][in]': JSON.stringify([input.resource.key]),
+              'filter[start_at][gte]': lower,
+              'filter[start_at][lte]': upper,
+              pageSize: String(LIFECYCLE_LOOKUP_PAGE_SIZE),
+            },
+      );
+      matches.push(
+        ...this.calendarAppointments(response).filter(
+          (appointment) => appointment.uid === input.appointmentKey,
+        ),
+      );
+      nextToken = this.nextToken(response);
+      if (!nextToken) break;
+    }
+    return matches;
+  }
+
   /** ezyVet documents appointment list items as { appointment: { id, uid, active } }. */
-  private appointments(value: unknown): readonly { readonly active: boolean; readonly id: string; readonly uid: string }[] {
-    if (!value || typeof value !== 'object' || !Array.isArray((value as Record<string, unknown>).items)) return [];
+  private appointments(
+    value: unknown,
+  ): readonly { readonly active: boolean; readonly id: string; readonly uid: string }[] {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      !Array.isArray((value as Record<string, unknown>).items)
+    )
+      return [];
     return (value as { readonly items: readonly unknown[] }).items.flatMap((item) => {
       if (!item || typeof item !== 'object') return [];
       const appointment = (item as Record<string, unknown>).appointment;
       if (!appointment || typeof appointment !== 'object') return [];
       const fields = appointment as Record<string, unknown>;
       const id = typeof fields.id === 'number' ? String(fields.id) : fields.id;
-      return typeof id === 'string' && this.numericId(id) && typeof fields.uid === 'string' &&
+      return typeof id === 'string' &&
+        this.numericId(id) &&
+        typeof fields.uid === 'string' &&
         typeof fields.active === 'boolean'
         ? [{ active: fields.active, id, uid: fields.uid }]
         : [];
     });
+  }
+
+  /** The newer, documented calendar list returns appointment records directly in data. */
+  private calendarAppointments(
+    value: unknown,
+  ): readonly { readonly active: boolean; readonly id: string; readonly uid: string }[] {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      !Array.isArray((value as Record<string, unknown>).data)
+    )
+      return [];
+    return (value as { readonly data: readonly unknown[] }).data.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const fields = entry as Record<string, unknown>;
+      const id = typeof fields.id === 'number' ? String(fields.id) : fields.id;
+      return typeof id === 'string' &&
+        this.numericId(id) &&
+        typeof fields.uid === 'string' &&
+        typeof fields.active === 'boolean'
+        ? [{ active: fields.active, id, uid: fields.uid }]
+        : [];
+    });
+  }
+
+  private nextToken(value: unknown): string | null {
+    if (!value || typeof value !== 'object') return null;
+    const meta = (value as Record<string, unknown>).meta;
+    if (!meta || typeof meta !== 'object') return null;
+    const token = (meta as Record<string, unknown>).nextToken;
+    return typeof token === 'string' && token.length > 0 ? token : null;
   }
 
   private numericId(value: string): boolean {

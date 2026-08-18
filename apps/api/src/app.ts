@@ -11,12 +11,6 @@ export function buildApp() {
     logger: env.NODE_ENV !== 'test',
   });
 
-  // OpenAI signs the exact bytes it sends. Keep JSON bodies as a buffer until the public
-  // webhook route has verified its signature; other current API routes do not accept JSON bodies.
-  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) => {
-    done(null, body);
-  });
-
   void app.register(formbody);
 
   void app.register(cors, {

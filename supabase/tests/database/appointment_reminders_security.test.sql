@@ -3,7 +3,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(21);
+select extensions.plan(22);
 
 select extensions.is(
   public.reminder_local_time('2026-08-20 21:00:00+00', 'UTC', '20:00', '08:00'),
@@ -91,8 +91,13 @@ select extensions.throws_ok(
   $$ insert into public.appointment_reminders (organization_id, location_id, appointment_id, reminder_type, scheduled_for)
      values ('e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'e8150000-0000-0000-0000-000000000001', 'appointment_24h', now()) $$,
   '23505',
-  'duplicate key value violates unique constraint "appointment_reminders_appointment_type_key"',
-  'one appointment can have at most one reminder of each type'
+  'duplicate key value violates unique constraint "appointment_reminders_one_actionable_type_key"',
+  'one appointment can have at most one actionable reminder of each type'
+);
+select extensions.lives_ok(
+  $$ insert into public.appointment_reminders (organization_id, location_id, appointment_id, reminder_type, scheduled_for, status)
+     values ('e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'e8150000-0000-0000-0000-000000000001', 'appointment_24h', now() - interval '1 hour', 'sent') $$,
+  'sent reminder history may coexist with the current actionable reminder schedule'
 );
 
 set local role authenticated;

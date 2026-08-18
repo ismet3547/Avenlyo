@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { schedulingRpc } from '@/lib/scheduling/service';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
-import { cancelAppointmentAsStaffAction, rescheduleAppointmentAsStaffAction } from './actions';
+import { AppointmentLifecycleActions } from './appointment-lifecycle-actions';
 
 function date(value: string | null): string {
   return value
@@ -84,21 +84,10 @@ export default async function AppointmentsPage() {
                     <td className="px-4 py-3">
                       {workspace.role !== 'member' && appointment.status === 'confirmed' ? (
                         <>
-                          <form action={cancelAppointmentAsStaffAction}>
-                            <input name="appointmentId" type="hidden" value={appointment.appointment_id} />
-                            <button
-                              className="rounded-md border border-destructive/30 px-3 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/5"
-                              type="submit"
-                            >
-                              Cancel appointment
-                            </button>
-                          </form>
-                          <form action={rescheduleAppointmentAsStaffAction} className="mt-2 grid gap-1">
-                            <input name="appointmentId" type="hidden" value={appointment.appointment_id} />
-                            <input aria-label="New start time in UTC" className="w-40 rounded border border-border px-2 py-1 text-xs" name="startsAt" placeholder="2026-09-01T11:00:00Z" required />
-                            <input aria-label="New end time in UTC" className="w-40 rounded border border-border px-2 py-1 text-xs" name="endsAt" placeholder="2026-09-01T11:30:00Z" required />
-                            <button className="w-fit rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-ink hover:bg-muted" type="submit">Reschedule (UTC)</button>
-                          </form>
+                          <AppointmentLifecycleActions
+                            appointmentId={appointment.appointment_id}
+                            currentTime={date(appointment.starts_at)}
+                          />
                         </>
                       ) : (
                         <span className="text-xs text-muted-foreground">No action available</span>

@@ -1,10 +1,11 @@
 begin;
-select plan(19);
+select plan(21);
 
 select has_table('public', 'appointment_change_intents', 'durable lifecycle intents exist');
 select has_table('public', 'appointment_management_targets', 'opaque appointment references exist');
 select has_table('public', 'scheduling_slot_leases', 'booking and reschedule leases share one namespace');
 select has_column('public', 'appointment_change_intents', 'provider_mutation_target_id', 'the immutable provider mutation target is persisted');
+select has_column('public', 'appointment_change_intents', 'original_external_appointment_id', 'the original provider appointment identity is persisted');
 select has_index('public', 'appointment_change_intents', 'appointment_change_intents_one_active_appointment_key', 'only one active mutation can exist per appointment');
 select extensions.ok(
   has_table_privilege('authenticated', 'public.appointment_change_intents', 'SELECT')
@@ -37,6 +38,11 @@ select extensions.ok(
   has_function_privilege('service_role', 'public.get_voice_appointment_lifecycle_turn(text,uuid)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.get_voice_appointment_lifecycle_turn(text,uuid)', 'EXECUTE'),
   'voice call/transcript identity lookup is service-role-only'
+);
+select extensions.ok(
+  has_function_privilege('service_role', 'public.create_conversation_appointment_management_targets(uuid,uuid,text)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.create_conversation_appointment_management_targets(uuid,uuid,text)', 'EXECUTE'),
+  'only the trusted backend can issue voice appointment references bound to a caller identity'
 );
 select is(public.is_explicit_appointment_change_confirmation('cancel', 'Yes, please cancel.'), true, 'positive cancellation confirmation is accepted');
 select is(public.is_explicit_appointment_change_confirmation('cancel', 'Do not cancel.'), false, 'negative cancellation phrase is rejected');
