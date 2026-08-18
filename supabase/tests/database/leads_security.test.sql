@@ -82,15 +82,12 @@ select extensions.is((select service_category from public.leads where conversati
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is((select state from public.capture_conversation_lead('e1810000-0000-0000-0000-000000000001', 'lead-tool-urgent-conflict', 'grooming', 'urgent', 'appointment', null, '{}', 'needs_human')), 'needs_clarification', 'urgent conflict keeps the clarification result state');
+select extensions.is((select state from public.capture_conversation_lead('e1810000-0000-0000-0000-000000000001', 'lead-tool-routine', 'wellness', 'routine', 'appointment', null, '{}', 'qualified')), 'qualified', 'lower urgency follow-up remains a valid capture');
 select extensions.is((select created from public.request_message_handoff('e1810000-0000-0000-0000-000000000001', 'lead-tool-urgent-conflict:urgent-lead', 'An urgent lead needs a team follow-up.', 'urgent')), true, 'urgent conflicting capture requests one durable message handoff');
 select extensions.is((select created from public.request_message_handoff('e1810000-0000-0000-0000-000000000001', 'lead-tool-urgent-conflict:urgent-lead', 'An urgent lead needs a team follow-up.', 'urgent')), false, 'replayed urgent conflicting capture reuses the durable handoff');
 reset role;
 select extensions.is((select urgency from public.leads where conversation_id = 'e1600000-0000-0000-0000-000000000001'), 'urgent', 'later urgent capture upgrades durable urgency');
 select extensions.is((select count(*)::integer from public.handoffs where conversation_id = 'e1600000-0000-0000-0000-000000000001' and urgency = 'urgent'), 1, 'urgent conflicting capture creates no duplicate durable handoff');
-set local role service_role;
-select set_config('request.jwt.claim.role', 'service_role', true);
-select extensions.is((select state from public.capture_conversation_lead('e1810000-0000-0000-0000-000000000001', 'lead-tool-routine', 'wellness', 'routine', 'appointment', null, '{}', 'qualified')), 'qualified', 'lower urgency follow-up remains a valid capture');
-reset role;
 select extensions.is((select urgency from public.leads where conversation_id = 'e1600000-0000-0000-0000-000000000001'), 'urgent', 'later routine capture cannot downgrade urgency');
 select extensions.is((select count(*)::integer from public.leads where conversation_id = 'e1600000-0000-0000-0000-000000000001' and status in ('new', 'qualified')), 1, 'repeated captures keep one active lead');
 set local role service_role;
