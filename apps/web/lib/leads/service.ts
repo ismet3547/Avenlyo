@@ -16,8 +16,12 @@ export interface LeadListRow {
 }
 
 export interface LeadDetailRow extends LeadListRow {
+  readonly conversation_id: string | null;
   readonly conversion_appointment_id: string | null;
+  readonly conversion_appointment_starts_at: string | null;
+  readonly conversion_appointment_status: string | null;
   readonly details: Record<string, unknown>;
+  readonly location_timezone: string;
   readonly updated_at: string;
 }
 

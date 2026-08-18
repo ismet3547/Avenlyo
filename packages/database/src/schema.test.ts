@@ -21,6 +21,13 @@ const leadsMigration = readFileSync(
   new URL('../../../supabase/migrations/20260822000000_phase_10_leads.sql', import.meta.url),
   'utf8',
 );
+const leadIntegrityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260823000000_phase_10_lead_integrity.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 const leadsSecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/leads_security.test.sql', import.meta.url),
   'utf8',
@@ -633,7 +640,7 @@ describe('lead capture migration definition', () => {
     expect(leadsMigration).toContain('create function public.capture_conversation_lead');
     expect(leadsMigration).toContain('create function public.convert_booking_lead');
     expect(leadsMigration).toContain('leads_one_active_conversation_idx');
-    expect(leadsMigration).toContain('leads_conversion_appointment_fk');
+    expect(leadIntegrityMigration).toContain('leads_conversion_appointment_location_fk');
     expect(leadsMigration).toContain('revoke all on table public.leads');
     expect(leadsMigration).toContain("conversation.ai_mode = 'ai'");
   });
@@ -641,13 +648,28 @@ describe('lead capture migration definition', () => {
   it('ships executable coverage for idempotency, conflicts, direct-write denial, and location scope', () => {
     expect(leadsSecurityTest).toContain('same inbound tool replay is idempotent');
     expect(leadsSecurityTest).toContain(
-      'contradictory service category does not overwrite the lead',
+      'qualified lead conflict takes precedence over qualified state',
     );
     expect(leadsSecurityTest).toContain('authenticated members cannot directly mutate lead state');
     expect(leadsSecurityTest).toContain(
-      'location-scoped member reads leads at their assigned location only',
+      'location-scoped member reads only leads at the assigned location',
     );
-    expect(leadsSecurityTest).toContain('cross-organization appointment references are rejected');
-    expect(leadsSecurityTest).toContain('booking conversion recovery is idempotent');
+    expect(leadsSecurityTest).toContain(
+      'lead cannot reference a conversion appointment from another organization',
+    );
+    expect(leadsSecurityTest).toContain(
+      'booking conversion replay does not duplicate audit history',
+    );
+  });
+
+  it('enforces location-aware references, durable urgency, and conversion guards', () => {
+    expect(leadIntegrityMigration).toContain('leads_contact_location_fk');
+    expect(leadIntegrityMigration).toContain('leads_conversation_location_fk');
+    expect(leadIntegrityMigration).toContain('lead_capture_tool_calls_message_location_fk');
+    expect(leadIntegrityMigration).toContain("intent.status <> 'completed'");
+    expect(leadIntegrityMigration).toContain("appointment.status <> 'confirmed'");
+    expect(leadIntegrityMigration).toContain("call.provider = 'openai-realtime-sip'");
+    expect(leadsSecurityTest).toContain('anonymous voice caller can capture a lead');
+    expect(leadsSecurityTest).toContain('later routine capture cannot downgrade urgency');
   });
 });

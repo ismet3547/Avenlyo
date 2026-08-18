@@ -16,9 +16,20 @@ function timestamp(value: string): string {
   );
 }
 
-export default async function InboxPage() {
+function leadLabel(status: string): string {
+  if (status === 'qualified') return 'Qualified';
+  if (status === 'converted') return 'Converted';
+  return 'Lead';
+}
+
+export default async function InboxPage({
+  searchParams,
+}: {
+  readonly searchParams: Promise<{ readonly conversation?: string }>;
+}) {
   const workspace = await requireCompletedWorkspace();
   const auth = await getRequiredAuthContext();
+  const { conversation: requestedConversationId } = await searchParams;
   const conversations = auth
     ? ((
         await messagingRpc(auth.supabase)('get_my_inbox_conversations', {
@@ -26,7 +37,12 @@ export default async function InboxPage() {
         })
       ).data ?? [])
     : [];
-  const selected = conversations[0] ?? null;
+  const selected =
+    conversations.find(
+      (conversation) => conversation.conversation_id === requestedConversationId,
+    ) ??
+    conversations[0] ??
+    null;
   const leadIndicators = auth
     ? ((
         await leadsRpc(auth.supabase)('get_my_inbox_lead_indicators', {
@@ -76,7 +92,9 @@ export default async function InboxPage() {
                     </span>
                     {leadByConversation.has(conversation.conversation_id) ? (
                       <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
-                        Lead
+                        {leadLabel(
+                          leadByConversation.get(conversation.conversation_id)!.lead_status,
+                        )}
                       </span>
                     ) : null}
                   </div>
