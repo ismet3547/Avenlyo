@@ -233,6 +233,11 @@ select extensions.is(
   0,
   'settings save is bounded and leaves reminder materialization to reconciliation'
 );
+update public.appointment_reminder_settings
+set quiet_hours_start = ((now() at time zone 'UTC')::time + interval '2 hours')::time,
+  quiet_hours_end = ((now() at time zone 'UTC')::time + interval '3 hours')::time
+where organization_id = 'a9100000-0000-0000-0000-000000000001'
+  and location_id = 'a9120000-0000-0000-0000-000000000001';
 select set_config('app.suppress_reminder_refresh', 'true', true);
 update public.appointments set starts_at = now() + interval '23 hours', ends_at = now() + interval '23 hours 30 minutes' where id = 'a9250000-0000-0000-0000-000000000001';
 select set_config('app.suppress_reminder_refresh', 'false', true);
