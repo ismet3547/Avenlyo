@@ -27,6 +27,7 @@ export function providerErrorForStatus(status: number, bookingWrite = false): Bo
   if (status === 403) return new BookingProviderError('authorization_scope');
   if (status === 404) return new BookingProviderError('not_found');
   if (status === 409) return new BookingProviderError(bookingWrite ? 'provider_conflict' : 'slot_unavailable');
+  if (status === 412) return new BookingProviderError('provider_conflict');
   if (status === 429) return new BookingProviderError('rate_limit', undefined, !bookingWrite);
   if (status >= 500) {
     return new BookingProviderError(

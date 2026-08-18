@@ -33,11 +33,17 @@ function event(
 ) {
   return {
     end: request.slot.endAt,
+    etag: '"etag-1"',
     id: googleEventId(bookingIntentId),
     privateProperties: {
       avenlyo_booking_intent_id: bookingIntentId,
       avenlyo_integration_id: 'integration_1',
       ...(overrides.privateProperties ?? {}),
+    },
+    resource: {
+      end: { dateTime: request.slot.endAt },
+      start: { dateTime: request.slot.startAt },
+      summary: 'Consultation',
     },
     start: request.slot.startAt,
     status: overrides.status ?? 'confirmed',
@@ -119,6 +125,22 @@ describe('Google Calendar connector identity', () => {
     await expect(connector.reconcileBooking?.(request)).rejects.toMatchObject({
       category: 'provider_conflict',
     });
+  });
+
+  it('verifies markers then updates exactly once while preserving the event resource', async () => {
+    const before = event();
+    const after = { ...event(), end: '2026-09-01T11:30:00.000Z', start: '2026-09-01T11:00:00.000Z' };
+    const updateEvent = vi.fn().mockResolvedValue(after);
+    const connector = new GoogleCalendarConnector({ getEvent: vi.fn().mockResolvedValue(before), updateEvent } as unknown as GoogleCalendarClient);
+    await expect(connector.rescheduleAppointment({ appointmentKey: before.id, bookingIntentId, integrationId: 'integration_1', originalEndAt: before.end, originalStartAt: before.start, resource: request.resource, targetEndAt: after.end, targetStartAt: after.start, timezone: 'UTC' })).resolves.toEqual({ kind: 'rescheduled', appointmentKey: before.id });
+    expect(updateEvent).toHaveBeenCalledOnce();
+    expect(updateEvent).toHaveBeenCalledWith('calendar_1', before.id, expect.objectContaining({ summary: 'Consultation', start: { dateTime: after.start, timeZone: 'UTC' } }), '"etag-1"');
+  });
+
+  it('does not treat a cancelled event at the requested replacement time as a successful reschedule recovery', async () => {
+    const target = { ...event({ status: 'cancelled' }), end: '2026-09-01T11:30:00.000Z', start: '2026-09-01T11:00:00.000Z' };
+    const connector = new GoogleCalendarConnector({ getEvent: vi.fn().mockResolvedValue(target) } as unknown as GoogleCalendarClient);
+    await expect(connector.getAppointmentState({ appointmentKey: target.id, bookingIntentId, integrationId: 'integration_1', originalEndAt: request.slot.endAt, originalStartAt: request.slot.startAt, resource: request.resource, targetEndAt: target.end, targetStartAt: target.start, timezone: 'UTC' })).resolves.toEqual({ kind: 'ambiguous' });
   });
 
   it.each([

@@ -22,9 +22,6 @@ async function createApp(
   handleIncoming = vi.fn().mockResolvedValue('accepted'),
 ) {
   const app = Fastify();
-  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) => {
-    done(null, body);
-  });
   const runtime: VoiceRuntime = {
     inbound: { handleIncoming },
     shutdown: vi.fn().mockResolvedValue(undefined),

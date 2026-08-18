@@ -27,6 +27,11 @@ export const prepareAppointmentBookingSchema = z
   })
   .strict();
 export const bookAppointmentSchema = z.object({ booking_intent_id: z.string().uuid() }).strict();
+export const upcomingAppointmentsSchema = z.object({}).strict();
+export const rescheduleOptionsSchema = z.object({ appointment_reference: z.string().uuid(), dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(14) }).strict();
+export const prepareAppointmentRescheduleSchema = z.object({ candidate_id: z.string().uuid() }).strict();
+export const prepareAppointmentCancellationSchema = z.object({ appointment_reference: z.string().uuid() }).strict();
+export const appointmentChangeExecutionSchema = z.object({ change_intent_id: z.string().uuid() }).strict();
 
 export const searchBusinessKnowledgeFunction = {
   description:
@@ -96,3 +101,12 @@ export const bookAppointmentFunction = {
   },
   strict: true,
 } as const;
+function lifecycleFunction(name: string, description: string, properties: Record<string, unknown>, required: readonly string[]) {
+  return { description, name, parameters: { additionalProperties: false, properties, required, type: 'object' }, strict: true } as const;
+}
+export const getUpcomingAppointmentsFunction = lifecycleFunction('get_upcoming_appointments', 'List only the caller’s safely authorized upcoming appointments.', {}, []);
+export const getRescheduleOptionsFunction = lifecycleFunction('get_reschedule_options', 'Find safe reschedule options for one opaque appointment reference.', { appointment_reference: { type: 'string' }, dates: { type: 'array', items: { type: 'string' } } }, ['appointment_reference', 'dates']);
+export const prepareAppointmentRescheduleFunction = lifecycleFunction('prepare_appointment_reschedule', 'Prepare one offered reschedule option. This does not change the appointment.', { candidate_id: { type: 'string' } }, ['candidate_id']);
+export const prepareAppointmentCancellationFunction = lifecycleFunction('prepare_appointment_cancellation', 'Prepare cancellation for one opaque appointment reference. This does not cancel it.', { appointment_reference: { type: 'string' } }, ['appointment_reference']);
+export const rescheduleAppointmentFunction = lifecycleFunction('reschedule_appointment', 'Execute a prepared reschedule only after the current customer message explicitly confirms it.', { change_intent_id: { type: 'string' } }, ['change_intent_id']);
+export const cancelAppointmentFunction = lifecycleFunction('cancel_appointment', 'Execute a prepared cancellation only after the current customer message explicitly confirms cancellation.', { change_intent_id: { type: 'string' } }, ['change_intent_id']);

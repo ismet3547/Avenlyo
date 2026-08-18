@@ -6,8 +6,19 @@ import type { AgentFunctionTool } from '../agent/types';
 
 import {
   availableAppointmentsSchema,
+  appointmentChangeExecutionSchema,
   bookAppointmentFunction,
   bookAppointmentSchema,
+  cancelAppointmentFunction,
+  getUpcomingAppointmentsFunction,
+  getRescheduleOptionsFunction,
+  prepareAppointmentCancellationFunction,
+  prepareAppointmentCancellationSchema,
+  prepareAppointmentRescheduleFunction,
+  prepareAppointmentRescheduleSchema,
+  rescheduleAppointmentFunction,
+  rescheduleOptionsSchema,
+  upcomingAppointmentsSchema,
   getAvailableAppointmentsFunction,
   prepareAppointmentBookingFunction,
   prepareAppointmentBookingSchema,
@@ -44,14 +55,22 @@ const bookTool: ToolDefinition<typeof bookAppointmentSchema> = {
   name: 'book_appointment',
   schema: bookAppointmentSchema,
 };
+const upcomingTool: ToolDefinition<typeof upcomingAppointmentsSchema> = { function: getUpcomingAppointmentsFunction, name: 'get_upcoming_appointments', schema: upcomingAppointmentsSchema };
+const rescheduleOptionsTool: ToolDefinition<typeof rescheduleOptionsSchema> = { function: getRescheduleOptionsFunction, name: 'get_reschedule_options', schema: rescheduleOptionsSchema };
+const prepareRescheduleTool: ToolDefinition<typeof prepareAppointmentRescheduleSchema> = { function: prepareAppointmentRescheduleFunction, name: 'prepare_appointment_reschedule', schema: prepareAppointmentRescheduleSchema };
+const prepareCancellationTool: ToolDefinition<typeof prepareAppointmentCancellationSchema> = { function: prepareAppointmentCancellationFunction, name: 'prepare_appointment_cancellation', schema: prepareAppointmentCancellationSchema };
+const rescheduleTool: ToolDefinition<typeof appointmentChangeExecutionSchema> = { function: rescheduleAppointmentFunction, name: 'reschedule_appointment', schema: appointmentChangeExecutionSchema };
+const cancellationTool: ToolDefinition<typeof appointmentChangeExecutionSchema> = { function: cancelAppointmentFunction, name: 'cancel_appointment', schema: appointmentChangeExecutionSchema };
 
 /** Source-controlled registry: no customer, website, or model input can add a tool. */
 export function activeToolDefinitions(
   industry: IndustryPack,
   schedulingEnabled = false,
+  lifecycleEnabled = false,
 ): readonly ToolDefinition<ZodType>[] {
   const base = mayExposeHandoffTool(industry) ? [searchTool, handoffTool] : [searchTool];
-  return schedulingEnabled ? [...base, availabilityTool, prepareTool, bookTool] : base;
+  const scheduling = schedulingEnabled ? [...base, availabilityTool, prepareTool, bookTool] : base;
+  return lifecycleEnabled ? [...scheduling, upcomingTool, rescheduleOptionsTool, prepareRescheduleTool, prepareCancellationTool, rescheduleTool, cancellationTool] : scheduling;
 }
 
 export function activeToolsForIndustry(industry: IndustryPack): readonly AgentFunctionTool[] {

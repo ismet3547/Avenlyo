@@ -51,6 +51,11 @@ export const openAIRealtimeWebhookRoutes: FastifyPluginAsync<OpenAIRealtimeWebho
   app,
   options,
 ) => {
+  // This parser is deliberately encapsulated to the signature-verified webhook plugin. All
+  // authenticated JSON API routes retain Fastify's normal parsed-object request bodies.
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) => {
+    done(null, body);
+  });
   const runtime = options.runtime ?? createVoiceRuntime();
   const verifier =
     options.verifier ??

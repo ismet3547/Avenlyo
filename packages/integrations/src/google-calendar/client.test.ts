@@ -59,3 +59,35 @@ describe('Google Calendar FreeBusy contract', () => {
     });
   });
 });
+
+describe('Google Calendar lifecycle write contract', () => {
+  const event = {
+    end: { dateTime: '2026-09-01T10:30:00.000Z' },
+    etag: '"etag-1"',
+    extendedProperties: { private: { avenlyo_booking_intent_id: 'intent-1', avenlyo_integration_id: 'integration-1' } },
+    id: 'event-1', start: { dateTime: '2026-09-01T10:00:00.000Z' }, status: 'confirmed', summary: 'Consultation',
+  };
+
+  it('uses one PUT with If-Match for a full-resource event update', async () => {
+    const request = vi.fn().mockResolvedValue({ body: event, status: 200 });
+    const client = new GoogleCalendarClient({ accessToken: () => Promise.resolve('token'), transport: { request } });
+    await client.updateEvent('calendar-1', 'event-1', event, '"etag-1"');
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ method: 'PUT', headers: { Authorization: 'Bearer token', 'If-Match': '"etag-1"' } }));
+  });
+
+  it('uses one DELETE with If-Match and never retries it', async () => {
+    const request = vi.fn().mockResolvedValue({ body: null, status: 204 });
+    const client = new GoogleCalendarClient({ accessToken: () => Promise.resolve('token'), transport: { request } });
+    await client.deleteEvent('calendar-1', 'event-1', '"etag-1"');
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ method: 'DELETE', headers: { Authorization: 'Bearer token', 'If-Match': '"etag-1"' } }));
+  });
+
+  it('does not retry a 412 ETag conflict for an event mutation', async () => {
+    const request = vi.fn().mockResolvedValue({ body: {}, status: 412 });
+    const client = new GoogleCalendarClient({ accessToken: () => Promise.resolve('token'), transport: { request } });
+    await expect(client.updateEvent('calendar-1', 'event-1', { end: { dateTime: '2026-09-01T11:00:00Z' }, start: { dateTime: '2026-09-01T10:00:00Z' } }, '"etag-1"')).rejects.toMatchObject({ category: 'provider_conflict' });
+    expect(request).toHaveBeenCalledOnce();
+  });
+});

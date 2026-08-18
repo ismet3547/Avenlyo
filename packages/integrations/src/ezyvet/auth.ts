@@ -3,7 +3,7 @@ import { BookingProviderError, providerErrorForStatus } from '../scheduling/erro
 
 import type { EzyVetCredentials, EzyVetTransport } from './types';
 
-export const EZYVET_MINIMUM_SCOPES = [
+export const EZYVET_BOOKING_SCOPES = [
   'read-systemsetting',
   'read-appointment',
   'read-appointmenttype',
@@ -12,6 +12,18 @@ export const EZYVET_MINIMUM_SCOPES = [
   'read-animal',
   'create-booking',
 ] as const;
+/** Kept as the legacy public name for booking/catalog callers. */
+export const EZYVET_MINIMUM_SCOPES = EZYVET_BOOKING_SCOPES;
+export const EZYVET_LIFECYCLE_WRITE_SCOPES = [
+  ...EZYVET_BOOKING_SCOPES,
+  'write-appointment',
+] as const;
+
+export type EzyVetTokenProfile = 'booking' | 'lifecycle_write';
+
+function scopesFor(profile: EzyVetTokenProfile): readonly string[] {
+  return profile === 'lifecycle_write' ? EZYVET_LIFECYCLE_WRITE_SCOPES : EZYVET_BOOKING_SCOPES;
+}
 
 interface CachedToken {
   readonly expiresAt: number;
@@ -47,7 +59,7 @@ export class EzyVetTokenCache {
   private readonly values = new Map<string, CachedToken>();
 
   public clear(integrationId: string): void {
-    this.values.delete(integrationId);
+    for (const key of this.values.keys()) if (key.startsWith(`${integrationId}:`)) this.values.delete(key);
   }
 
   public async get(
@@ -56,32 +68,36 @@ export class EzyVetTokenCache {
     partnerId: string,
     tokenUrl: string,
     transport: EzyVetTransport,
+    profile: EzyVetTokenProfile = 'booking',
     now = Date.now(),
   ): Promise<string> {
-    const cached = this.values.get(integrationId);
+    const cacheKey = `${integrationId}:${profile}`;
+    const cached = this.values.get(cacheKey);
     if (cached && cached.expiresAt > now + TOKEN_EXPIRY_SAFETY_MS) return cached.value;
 
-    const pending = this.inFlight.get(integrationId);
+    const pending = this.inFlight.get(cacheKey);
     if (pending) return pending;
 
     const issued = this.issue(
-      integrationId,
+      cacheKey,
       credentials,
       partnerId,
       tokenUrl,
       transport,
+      profile,
       now,
-    ).finally(() => this.inFlight.delete(integrationId));
-    this.inFlight.set(integrationId, issued);
+    ).finally(() => this.inFlight.delete(cacheKey));
+    this.inFlight.set(cacheKey, issued);
     return issued;
   }
 
   private async issue(
-    integrationId: string,
+    cacheKey: string,
     credentials: EzyVetCredentials,
     partnerId: string,
     tokenUrl: string,
     transport: EzyVetTransport,
+    profile: EzyVetTokenProfile,
     now: number,
   ): Promise<string> {
     let response;
@@ -92,7 +108,7 @@ export class EzyVetTokenCache {
           client_secret: credentials.clientSecret,
           grant_type: 'client_credentials',
           partner_id: partnerId,
-          scope: EZYVET_MINIMUM_SCOPES.join(' '),
+          scope: scopesFor(profile).join(' '),
           site_uid: credentials.siteUid,
         },
         headers: { 'Content-Type': 'application/json' },
@@ -106,7 +122,7 @@ export class EzyVetTokenCache {
     if (response.status < 200 || response.status >= 300)
       throw providerErrorForStatus(response.status);
     const token = parseToken(response.body);
-    this.values.set(integrationId, {
+    this.values.set(cacheKey, {
       expiresAt: now + token.expires_in * 1_000,
       value: token.access_token,
     });

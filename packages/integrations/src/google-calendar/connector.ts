@@ -3,6 +3,10 @@ import { BookingProviderError } from '../scheduling/errors';
 import type {
   AvailabilityRequest,
   AvailabilitySlot,
+  AppointmentLifecycleRequest,
+  AppointmentLifecycleState,
+  AppointmentMutationTarget,
+  AppointmentRescheduleRequest,
   BookingConnector,
   BookingPartyResolution,
   BookingPartyResolutionRequest,
@@ -58,6 +62,7 @@ function localDayBoundary(dateText: string, timezone: string, endOfDay: boolean)
 
 /** Google is a calendar, not a CRM: a web visitor may book without a verified phone identity. */
 export class GoogleCalendarConnector implements BookingConnector {
+  public readonly appointmentLifecycle = { canCancel: true, canReschedule: true } as const;
   public readonly provider = 'google_calendar' as const;
   public constructor(private readonly client: GoogleCalendarClient) {}
 
@@ -131,6 +136,48 @@ export class GoogleCalendarConnector implements BookingConnector {
     return { appointmentKey: event.id, providerStatus: 'confirmed' };
   }
 
+  public async getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
+    try {
+      const event = await this.client.getEvent(input.resource.key, input.appointmentKey);
+      if ('targetStartAt' in input && event.status === 'confirmed' && this.hasLifecycleMarkers(event, input) && Date.parse(event.start) === Date.parse(input.targetStartAt) && Date.parse(event.end) === Date.parse(input.targetEndAt))
+        return { kind: 'rescheduled', appointmentKey: event.id };
+      if (!this.exactLifecycleEvent(event, input)) return { kind: 'ambiguous' };
+      return event.status === 'cancelled'
+        ? { kind: 'cancelled', appointmentKey: event.id }
+        : { kind: 'active', appointmentKey: event.id };
+    } catch (error) {
+      if (error instanceof BookingProviderError && error.category === 'not_found') return { kind: 'not_found' };
+      throw error;
+    }
+  }
+
+  public async resolveAppointmentMutationTarget(input: AppointmentLifecycleRequest): Promise<AppointmentMutationTarget> {
+    const state = await this.getAppointmentState(input);
+    return state.kind === 'active' || state.kind === 'cancelled'
+      ? { kind: 'resolved', targetId: state.appointmentKey }
+      : state.kind === 'not_found' ? state : { kind: 'ambiguous' };
+  }
+
+  public async cancelAppointment(input: AppointmentLifecycleRequest): Promise<AppointmentLifecycleState> {
+    const event = await this.client.getEvent(input.resource.key, input.appointmentKey);
+    if (!this.exactLifecycleEvent(event, input)) return { kind: 'ambiguous' };
+    if (event.status === 'cancelled') return { kind: 'cancelled', appointmentKey: event.id };
+    await this.client.deleteEvent(input.resource.key, event.id, event.etag);
+    return { kind: 'cancelled', appointmentKey: event.id };
+  }
+
+  public async rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
+    const event = await this.client.getEvent(input.resource.key, input.appointmentKey);
+    if (!this.exactLifecycleEvent(event, input) || event.status === 'cancelled') return { kind: 'ambiguous' };
+    const updated = await this.client.updateEvent(input.resource.key, event.id, {
+      ...event.resource,
+      end: { dateTime: input.targetEndAt, timeZone: input.timezone },
+      start: { dateTime: input.targetStartAt, timeZone: input.timezone },
+    }, event.etag);
+    if (updated.status !== 'confirmed' || !this.exactLifecycleEvent(updated, input, input.targetStartAt, input.targetEndAt)) return { kind: 'ambiguous' };
+    return { kind: 'rescheduled', appointmentKey: updated.id };
+  }
+
   public async reconcileBooking(
     input: BookingReconciliationRequest,
   ): Promise<BookingReconciliationResult> {
@@ -150,5 +197,25 @@ export class GoogleCalendarConnector implements BookingConnector {
         return { kind: 'not_found' };
       throw error;
     }
+  }
+
+  private exactLifecycleEvent(
+    event: { readonly end: string; readonly id: string; readonly privateProperties: Readonly<Record<string, string>>; readonly start: string; readonly status: string },
+    input: AppointmentLifecycleRequest,
+    expectedStart = input.originalStartAt,
+    expectedEnd = input.originalEndAt,
+  ): boolean {
+    return this.hasLifecycleMarkers(event, input) &&
+      Date.parse(event.start) === Date.parse(expectedStart) &&
+      Date.parse(event.end) === Date.parse(expectedEnd);
+  }
+
+  private hasLifecycleMarkers(
+    event: { readonly id: string; readonly privateProperties: Readonly<Record<string, string>> },
+    input: AppointmentLifecycleRequest,
+  ): boolean {
+    return Boolean(input.bookingIntentId) && event.id === input.appointmentKey &&
+      event.privateProperties.avenlyo_booking_intent_id === input.bookingIntentId &&
+      event.privateProperties.avenlyo_integration_id === input.integrationId;
   }
 }

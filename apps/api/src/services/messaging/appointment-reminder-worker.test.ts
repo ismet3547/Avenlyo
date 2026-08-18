@@ -54,10 +54,14 @@ describe('AppointmentReminderWorker', () => {
     const createBooking = vi.fn();
     const { forIntegration, rpc, worker } = workerFor({
       connector: {
+        appointmentLifecycle: { canCancel: true, canReschedule: true },
+        cancelAppointment: vi.fn(),
         createBooking,
+        getAppointmentState: vi.fn(),
         getAvailability: vi.fn(),
         provider: 'ezyvet',
         reconcileBooking,
+        rescheduleAppointment: vi.fn(),
         resolveBookingParty: vi.fn(),
       },
     });
@@ -100,10 +104,14 @@ describe('AppointmentReminderWorker', () => {
     const createBooking = vi.fn();
     const { rpc, worker } = workerFor({
       connector: {
+        appointmentLifecycle: { canCancel: true, canReschedule: true },
+        cancelAppointment: vi.fn(),
         createBooking,
+        getAppointmentState: vi.fn(),
         getAvailability: vi.fn(),
         provider: 'google_calendar',
         reconcileBooking,
+        rescheduleAppointment: vi.fn(),
         resolveBookingParty: vi.fn(),
       },
       context: { ...providerContext, provider: 'google_calendar' },

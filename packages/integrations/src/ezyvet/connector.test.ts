@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FakeEzyVetTransport } from '../testing/fake-ezyvet-transport';
-import { EzyVetTokenCache, EZYVET_MINIMUM_SCOPES } from './auth';
+import { EzyVetTokenCache, EZYVET_LIFECYCLE_WRITE_SCOPES, EZYVET_MINIMUM_SCOPES } from './auth';
 import { EzyVetClient, ezyVetOrigins } from './client';
 import { EzyVetConnector } from './connector';
 import type { EzyVetCredentials } from './types';
@@ -197,6 +197,150 @@ describe('ezyVet connector contracts', () => {
     ).rejects.toMatchObject({
       category: 'invalid_request',
     });
+  });
+
+  it('resolves a stored UID to one numeric Core id, patches only that id, and proves inactive through the documented list read', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({
+      body: {
+        data: [{ active: true, id: 12345, uid: 'appointment_1' }],
+        meta: { nextToken: null },
+      },
+      status: 200,
+    });
+    transport.enqueue({ body: { ok: true }, status: 200 });
+    transport.enqueue({
+      body: { items: [{ appointment: { active: false, id: 12345, uid: 'appointment_1' } }] },
+      status: 200,
+    });
+    const connector = new EzyVetConnector(client(transport));
+    const request = {
+      appointmentKey: 'appointment_1',
+      bookingIntentId: 'intent_1',
+      integrationId: 'integration_1',
+      originalEndAt: '2026-09-01T10:30:00.000Z',
+      originalStartAt: '2026-09-01T10:00:00.000Z',
+      resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null },
+      timezone: 'UTC',
+    } as const;
+    await expect(connector.resolveAppointmentMutationTarget(request)).resolves.toEqual({
+      kind: 'resolved',
+      targetId: '12345',
+    });
+    await expect(
+      connector.cancelAppointment({ ...request, providerMutationTargetId: '12345' }),
+    ).resolves.toEqual({ kind: 'cancelled', appointmentKey: 'appointment_1' });
+    expect(transport.requests[0]?.body).toMatchObject({
+      scope: EZYVET_LIFECYCLE_WRITE_SCOPES.join(' '),
+    });
+    expect(transport.requests[1]).toMatchObject({ method: 'GET' });
+    const lookupUrl = new URL(transport.requests[1]!.url);
+    expect(lookupUrl.pathname).toBe('/v2.1/calendar/appointments');
+    expect(lookupUrl.searchParams.get('filter[resources.uid][in]')).toBe('["resource_1"]');
+    expect(lookupUrl.searchParams.get('pageSize')).toBe('100');
+    expect(transport.requests[2]).toMatchObject({
+      body: { cancel: true, cancellation_reason_text: 'Cancelled by customer through Avenlyo' },
+      headers: expect.objectContaining({ 'Content-Type': 'application/merge-patch+json' }),
+      method: 'PATCH',
+      url: 'https://api.trial.ezyvet.com/v2/appointment/12345',
+    });
+    expect(transport.requests[3]?.url).toBe('https://api.trial.ezyvet.com/v2/appointment?id=12345');
+    expect(transport.requests.filter((entry) => entry.method === 'PATCH')).toHaveLength(1);
+    expect(
+      transport.requests.some((entry) => entry.url.includes('/v2/appointment/appointment_1')),
+    ).toBe(false);
+  });
+
+  it('does not PATCH when UID resolution is ambiguous or cannot prove the cancellation target inactive', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({
+      body: {
+        data: [
+          { active: true, id: 101, uid: 'appointment_1' },
+          { active: true, id: 102, uid: 'appointment_1' },
+        ],
+      },
+      status: 200,
+    });
+    const connector = new EzyVetConnector(client(transport));
+    const request = {
+      appointmentKey: 'appointment_1',
+      bookingIntentId: 'intent_1',
+      integrationId: 'integration_1',
+      originalEndAt: '2026-09-01T10:30:00.000Z',
+      originalStartAt: '2026-09-01T10:00:00.000Z',
+      resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null },
+      timezone: 'UTC',
+    } as const;
+    await expect(connector.resolveAppointmentMutationTarget(request)).resolves.toEqual({
+      kind: 'ambiguous',
+    });
+    expect(transport.requests.filter((entry) => entry.method === 'PATCH')).toHaveLength(0);
+  });
+
+  it('follows the bounded calendar cursor when the exact UID is not on the first page', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({
+      body: {
+        data: [{ active: true, id: 11, uid: 'other_appointment' }],
+        meta: { nextToken: 'next-page' },
+      },
+      status: 200,
+    });
+    transport.enqueue({
+      body: {
+        data: [{ active: true, id: 12345, uid: 'appointment_1' }],
+        meta: { nextToken: null },
+      },
+      status: 200,
+    });
+    const connector = new EzyVetConnector(client(transport));
+    const request = {
+      appointmentKey: 'appointment_1',
+      bookingIntentId: 'intent_1',
+      integrationId: 'integration_1',
+      originalEndAt: '2026-09-01T10:30:00.000Z',
+      originalStartAt: '2026-09-01T10:00:00.000Z',
+      resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null },
+      timezone: 'UTC',
+    } as const;
+    await expect(connector.resolveAppointmentMutationTarget(request)).resolves.toEqual({
+      kind: 'resolved',
+      targetId: '12345',
+    });
+    expect(new URL(transport.requests[2]!.url).searchParams.get('nextToken')).toBe('next-page');
+    expect(new URL(transport.requests[2]!.url).searchParams.get('pageSize')).toBeNull();
+  });
+
+  it('does not PATCH when the bounded lookup has no exact UID or a malformed record', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({
+      body: {
+        data: [
+          { active: true, id: 0, uid: 'appointment_1' },
+          { active: true, id: 42, uid: 'other' },
+        ],
+      },
+      status: 200,
+    });
+    const connector = new EzyVetConnector(client(transport));
+    const request = {
+      appointmentKey: 'appointment_1',
+      bookingIntentId: 'intent_1',
+      integrationId: 'integration_1',
+      originalEndAt: '2026-09-01T10:30:00.000Z',
+      originalStartAt: '2026-09-01T10:00:00.000Z',
+      resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null },
+      timezone: 'UTC',
+    } as const;
+    await expect(connector.resolveAppointmentMutationTarget(request)).resolves.toEqual({
+      kind: 'not_found',
+    });
+    expect(transport.requests.filter((entry) => entry.method === 'PATCH')).toHaveLength(0);
   });
 
   it('parses ezyCAB availability, splits 14 days into two seven-day requests, and deduplicates slots', async () => {

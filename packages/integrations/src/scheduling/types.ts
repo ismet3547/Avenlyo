@@ -99,16 +99,60 @@ export type BookingReconciliationResult =
   | { readonly kind: 'not_found' }
   | { readonly kind: 'ambiguous' };
 
+export interface AppointmentLifecycleCapabilities {
+  readonly canCancel: boolean;
+  readonly canReschedule: boolean;
+}
+
+/** All identities in this request come from a durable, trusted change intent. */
+export interface AppointmentLifecycleRequest {
+  readonly appointmentKey: string;
+  readonly bookingIntentId: string | null;
+  readonly integrationId: string;
+  readonly originalEndAt: string;
+  readonly originalStartAt: string;
+  /**
+   * Provider mutation identity resolved by trusted code before the first write.  ezyVet stores
+   * a stable appointment UID locally but documents a numeric Core appointment id for PATCH.
+   */
+  readonly providerMutationTargetId?: string | null;
+  readonly resource: BookingResource;
+  readonly timezone: string;
+}
+
+export interface AppointmentRescheduleRequest extends AppointmentLifecycleRequest {
+  readonly targetEndAt: string;
+  readonly targetStartAt: string;
+}
+
+export type AppointmentLifecycleState =
+  | { readonly kind: 'active'; readonly appointmentKey: string }
+  | { readonly kind: 'cancelled'; readonly appointmentKey: string }
+  | { readonly kind: 'rescheduled'; readonly appointmentKey: string }
+  | { readonly kind: 'not_found' }
+  | { readonly kind: 'ambiguous' };
+
+export type AppointmentMutationTarget =
+  | { readonly kind: 'resolved'; readonly targetId: string }
+  | { readonly kind: 'not_found' }
+  | { readonly kind: 'ambiguous' };
+
 /**
  * A connector owns all provider-specific identity behaviour. ezyVet resolves an exact
  * Contact/Animal pair; Google Calendar carries trusted local caller context and never invents a
  * Google customer identifier.
  */
 export interface BookingConnector {
+  readonly appointmentLifecycle: AppointmentLifecycleCapabilities;
   readonly provider: BookingProvider;
+  cancelAppointment(input: AppointmentLifecycleRequest): Promise<AppointmentLifecycleState>;
   createBooking(input: CreateBookingRequest): Promise<CreateBookingResult>;
+  getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState>;
   reconcileBooking?(input: BookingReconciliationRequest): Promise<BookingReconciliationResult>;
   getAvailability(input: AvailabilityRequest): Promise<readonly AvailabilitySlot[]>;
+  rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState>;
+  /** Resolves a provider write target exactly once before the first external mutation. */
+  resolveAppointmentMutationTarget?(input: AppointmentLifecycleRequest): Promise<AppointmentMutationTarget>;
   resolveBookingParty(input: BookingPartyResolutionRequest): Promise<BookingPartyResolution>;
 }
 

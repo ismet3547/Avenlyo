@@ -26,7 +26,13 @@ export type ActiveToolName =
   | 'search_business_knowledge'
   | 'get_available_appointments'
   | 'prepare_appointment_booking'
-  | 'book_appointment';
+  | 'book_appointment'
+  | 'get_upcoming_appointments'
+  | 'get_reschedule_options'
+  | 'prepare_appointment_reschedule'
+  | 'reschedule_appointment'
+  | 'prepare_appointment_cancellation'
+  | 'cancel_appointment';
 
 /**
  * Deliberately inactive contracts reserve product vocabulary without authorizing integration,
@@ -104,6 +110,13 @@ export interface AgentToolServices {
     ): Promise<{
       readonly outcome: 'booked' | 'confirmation_required' | 'unavailable' | 'unknown';
     }>;
+  };
+  readonly appointmentLifecycle?: {
+    getUpcomingAppointments(input: { readonly toolCallId: string }, context: AgentExecutionContext): Promise<readonly { readonly appointmentReference: string; readonly endsAt: string; readonly startsAt: string; readonly timezone: string; readonly title: string }[]>;
+    getRescheduleOptions(input: { readonly appointmentReference: string; readonly dates: readonly string[]; readonly toolCallId: string }, context: AgentExecutionContext): Promise<readonly { readonly candidateId: string; readonly endsAt: string; readonly startsAt: string; readonly timezone: string }[]>;
+    prepareReschedule(input: { readonly candidateId: string; readonly toolCallId: string }, context: AgentExecutionContext): Promise<{ readonly intent: { readonly changeIntentId: string; readonly operation: string; readonly startsAt: string | null; readonly timezone: string | null } | null; readonly outcome: 'not_found' | 'ready' }>;
+    prepareCancellation(input: { readonly appointmentReference: string; readonly toolCallId: string }, context: AgentExecutionContext): Promise<{ readonly intent: { readonly changeIntentId: string; readonly operation: string; readonly startsAt: string | null; readonly timezone: string | null } | null; readonly outcome: 'not_found' | 'ready' }>;
+    execute(input: { readonly changeIntentId: string; readonly toolCallId: string }, context: AgentExecutionContext): Promise<{ readonly outcome: 'completed' | 'confirmation_required' | 'handoff_required' | 'unavailable' | 'unknown' }>;
   };
 }
 

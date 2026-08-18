@@ -10,6 +10,7 @@ import { ApiSchedulingConnectorRegistry } from '../scheduling/connector-registry
 import { EzyVetIntegrationService } from '../scheduling/ezyvet-service.js';
 import { GoogleCalendarIntegrationService } from '../scheduling/google-calendar-service.js';
 import { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
+import { AppointmentLifecycleService } from '../scheduling/appointment-lifecycle-service.js';
 
 import { ConversationAgentService } from './conversation-agent.js';
 import { AppointmentReminderWorker } from './appointment-reminder-worker.js';
@@ -47,10 +48,13 @@ export function createMessagingRuntime(): MessagingRuntime | null {
   });
   const scheduling =
     ezyVet || googleCalendar ? new SchedulingBookingService({ connectors, supabase }) : undefined;
+  const appointmentLifecycle =
+    ezyVet || googleCalendar ? new AppointmentLifecycleService({ connectors, supabase }) : undefined;
   const agent = env.OPENAI_API_KEY
     ? new ConversationAgentService({
         apiKey: env.OPENAI_API_KEY,
         model: env.OPENAI_AGENT_MODEL,
+        ...(appointmentLifecycle ? { appointmentLifecycle } : {}),
         ...(scheduling ? { scheduling } : {}),
         supabase,
       })

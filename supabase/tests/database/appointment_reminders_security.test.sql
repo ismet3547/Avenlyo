@@ -3,7 +3,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(21);
+select extensions.plan(22);
 
 select extensions.is(
   public.reminder_local_time('2026-08-20 21:00:00+00', 'UTC', '20:00', '08:00'),
@@ -91,8 +91,13 @@ select extensions.throws_ok(
   $$ insert into public.appointment_reminders (organization_id, location_id, appointment_id, reminder_type, scheduled_for)
      values ('e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'e8150000-0000-0000-0000-000000000001', 'appointment_24h', now()) $$,
   '23505',
-  'duplicate key value violates unique constraint "appointment_reminders_appointment_type_key"',
-  'one appointment can have at most one reminder of each type'
+  'duplicate key value violates unique constraint "appointment_reminders_one_actionable_type_key"',
+  'one appointment can have at most one actionable reminder of each type'
+);
+select extensions.lives_ok(
+  $$ insert into public.appointment_reminders (organization_id, location_id, appointment_id, reminder_type, scheduled_for, status)
+     values ('e8100000-0000-0000-0000-000000000001', 'e8110000-0000-0000-0000-000000000001', 'e8150000-0000-0000-0000-000000000001', 'appointment_24h', now() - interval '1 hour', 'sent') $$,
+  'sent reminder history may coexist with the current actionable reminder schedule'
 );
 
 set local role authenticated;
@@ -168,7 +173,7 @@ select extensions.is(
 reset role;
 select set_config(
   'app.reminder_id',
-  (select id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'),
+  (select id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h' and status = 'processing' and message_id is null),
   true
 );
 set local role service_role;
@@ -184,19 +189,19 @@ select extensions.lives_ok(
 reset role;
 
 select extensions.is(
-  (select count(*)::integer from public.messages where appointment_reminder_id = (select id from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h')),
+  (select count(*)::integer from public.messages where appointment_reminder_id = current_setting('app.reminder_id')::uuid),
   1,
   'a claimed reminder has exactly one outbound message'
 );
 select extensions.is(
-  (select count(*)::integer from public.message_deliveries delivery join public.messages message on message.id = delivery.message_id where message.appointment_reminder_id = (select id from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h')),
+  (select count(*)::integer from public.message_deliveries delivery join public.messages message on message.id = delivery.message_id where message.appointment_reminder_id = current_setting('app.reminder_id')::uuid),
   1,
   'a reminder message has exactly one Twilio delivery record'
 );
 update public.contacts set phone = '+14155550999' where phone = '+14155550811';
 select set_config(
   'app.reminder_message_id',
-  (select message_id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'),
+  (select message_id::text from public.appointment_reminders where id = current_setting('app.reminder_id')::uuid),
   true
 );
 set local role service_role;

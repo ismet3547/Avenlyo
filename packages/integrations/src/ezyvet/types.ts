@@ -12,7 +12,7 @@ export interface EzyVetCredentials {
 export interface EzyVetTransportRequest {
   readonly body?: Readonly<Record<string, unknown>>;
   readonly headers?: Readonly<Record<string, string>>;
-  readonly method: 'GET' | 'POST';
+  readonly method: 'GET' | 'PATCH' | 'POST';
   readonly timeoutMs: number;
   readonly url: string;
 }
