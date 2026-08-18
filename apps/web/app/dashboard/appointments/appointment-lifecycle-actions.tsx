@@ -1,12 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import * as React from 'react';
 
 import { cancelAppointmentAsStaffAction, rescheduleAppointmentAsStaffAction } from './actions';
 
 interface AppointmentLifecycleActionsProps {
   readonly appointmentId: string;
+  readonly canCancel: boolean;
+  readonly canReschedule: boolean;
   readonly currentTime: string | null;
+  readonly provider: string | null;
+  readonly rescheduleUnavailableMessage: string | null;
 }
 
 /**
@@ -15,51 +19,61 @@ interface AppointmentLifecycleActionsProps {
  */
 export function AppointmentLifecycleActions({
   appointmentId,
+  canCancel,
+  canReschedule,
   currentTime,
+  provider,
+  rescheduleUnavailableMessage,
 }: AppointmentLifecycleActionsProps) {
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const [rescheduleOpen, setRescheduleOpen] = useState(false);
-  const [startsAt, setStartsAt] = useState('');
-  const [endsAt, setEndsAt] = useState('');
+  const [cancelOpen, setCancelOpen] = React.useState(false);
+  const [rescheduleOpen, setRescheduleOpen] = React.useState(false);
+  const [startsAt, setStartsAt] = React.useState('');
+  const [endsAt, setEndsAt] = React.useState('');
   const hasTarget = startsAt.trim().length > 0 && endsAt.trim().length > 0;
 
   return (
-    <div className="grid gap-2">
-      <button
-        className="w-fit rounded-md border border-destructive/30 px-3 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/5"
-        onClick={() => setCancelOpen(true)}
-        type="button"
-      >
-        Cancel appointment
-      </button>
-      <div className="grid gap-1">
-        <input
-          name="startsAt"
-          aria-label="New start time in UTC"
-          className="w-40 rounded border border-border px-2 py-1 text-xs"
-          onChange={(event) => setStartsAt(event.target.value)}
-          placeholder="2026-09-01T11:00:00Z"
-          required
-          value={startsAt}
-        />
-        <input
-          name="endsAt"
-          aria-label="New end time in UTC"
-          className="w-40 rounded border border-border px-2 py-1 text-xs"
-          onChange={(event) => setEndsAt(event.target.value)}
-          placeholder="2026-09-01T11:30:00Z"
-          required
-          value={endsAt}
-        />
+    <div className="grid gap-2" data-provider={provider ?? 'unknown'}>
+      {canCancel ? (
         <button
-          className="w-fit rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-ink hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={!hasTarget}
-          onClick={() => setRescheduleOpen(true)}
+          className="w-fit rounded-md border border-destructive/30 px-3 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/5"
+          onClick={() => setCancelOpen(true)}
           type="button"
         >
-          Review reschedule (UTC)
+          Cancel appointment
         </button>
-      </div>
+      ) : null}
+      {canReschedule ? (
+        <div className="grid gap-1">
+          <input
+            name="startsAt"
+            aria-label="New start time in UTC"
+            className="w-40 rounded border border-border px-2 py-1 text-xs"
+            onChange={(event) => setStartsAt(event.target.value)}
+            placeholder="2026-09-01T11:00:00Z"
+            required
+            value={startsAt}
+          />
+          <input
+            name="endsAt"
+            aria-label="New end time in UTC"
+            className="w-40 rounded border border-border px-2 py-1 text-xs"
+            onChange={(event) => setEndsAt(event.target.value)}
+            placeholder="2026-09-01T11:30:00Z"
+            required
+            value={endsAt}
+          />
+          <button
+            className="w-fit rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-ink hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!hasTarget}
+            onClick={() => setRescheduleOpen(true)}
+            type="button"
+          >
+            Review reschedule (UTC)
+          </button>
+        </div>
+      ) : rescheduleUnavailableMessage ? (
+        <p className="text-xs font-medium text-muted-foreground">{rescheduleUnavailableMessage}</p>
+      ) : null}
 
       {cancelOpen ? (
         <div

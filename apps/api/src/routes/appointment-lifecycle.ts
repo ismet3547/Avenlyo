@@ -49,7 +49,7 @@ interface StaffCancellationRpc {
     args: Readonly<Record<string, unknown>>,
   ): Promise<{
     readonly data: readonly { readonly change_intent_id: string }[] | null;
-    readonly error: { readonly message: string } | null;
+    readonly error: { readonly code?: string; readonly message: string } | null;
   }>;
 }
 
@@ -119,12 +119,10 @@ export function createAppointmentLifecycleRoutes(
             .code(result.outcome === 'completed' ? 200 : 409)
             .send({ outcome: result.outcome });
         } catch {
-          return reply
-            .code(503)
-            .send({
-              code: 'SCHEDULING_UNAVAILABLE',
-              message: 'The cancellation could not be completed safely.',
-            });
+          return reply.code(503).send({
+            code: 'SCHEDULING_UNAVAILABLE',
+            message: 'The cancellation could not be completed safely.',
+          });
         }
       },
     );
@@ -157,21 +155,22 @@ export function createAppointmentLifecycleRoutes(
             target_ends_at: parsed.data.endsAt,
           });
           const intent = created.data?.[0]?.change_intent_id;
-          if (created.error || !intent)
+          if (created.error || !intent) {
+            if (created.error?.message === 'Provider reschedule is unsupported')
+              return reply.code(409).send({ outcome: 'handoff_required' });
             return reply
               .code(403)
               .send({ code: 'FORBIDDEN', message: 'This appointment cannot be rescheduled.' });
+          }
           const result = await service.executeStaffReschedule(intent);
           return reply
             .code(result.outcome === 'completed' ? 200 : 409)
             .send({ outcome: result.outcome });
         } catch {
-          return reply
-            .code(503)
-            .send({
-              code: 'SCHEDULING_UNAVAILABLE',
-              message: 'The reschedule could not be completed safely.',
-            });
+          return reply.code(503).send({
+            code: 'SCHEDULING_UNAVAILABLE',
+            message: 'The reschedule could not be completed safely.',
+          });
         }
       },
     );

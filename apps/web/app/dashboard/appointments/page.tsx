@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { schedulingRpc } from '@/lib/scheduling/service';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
+import { appointmentLifecycleCapabilities } from './appointment-lifecycle-capabilities';
 import { AppointmentLifecycleActions } from './appointment-lifecycle-actions';
 
 function date(value: string | null): string {
@@ -75,36 +76,45 @@ export default async function AppointmentsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {appointments.map((appointment) => (
-                  <tr key={appointment.appointment_id}>
-                    <td className="px-4 py-3 font-medium text-ink">{appointment.title}</td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {date(appointment.starts_at)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {workspace.role !== 'member' && appointment.status === 'confirmed' ? (
-                        <>
-                          <AppointmentLifecycleActions
-                            appointmentId={appointment.appointment_id}
-                            currentTime={date(appointment.starts_at)}
-                          />
-                        </>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">No action available</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 capitalize text-ink">{appointment.status}</td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {remindersByAppointment.get(appointment.appointment_id)?.join(' · ') ??
-                        'Not scheduled'}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {appointment.provider === 'ezyvet'
-                        ? `ezyVet · ${appointment.provider_status ?? 'pending'}`
-                        : 'Internal'}
-                    </td>
-                  </tr>
-                ))}
+                {appointments.map((appointment) => {
+                  const capabilities = appointmentLifecycleCapabilities(appointment.provider);
+                  return (
+                    <tr key={appointment.appointment_id}>
+                      <td className="px-4 py-3 font-medium text-ink">{appointment.title}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {date(appointment.starts_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {workspace.role !== 'member' && appointment.status === 'confirmed' ? (
+                          <>
+                            <AppointmentLifecycleActions
+                              appointmentId={appointment.appointment_id}
+                              canCancel={capabilities.canCancel}
+                              canReschedule={capabilities.canReschedule}
+                              currentTime={date(appointment.starts_at)}
+                              provider={appointment.provider}
+                              rescheduleUnavailableMessage={
+                                capabilities.rescheduleUnavailableMessage
+                              }
+                            />
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No action available</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 capitalize text-ink">{appointment.status}</td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {remindersByAppointment.get(appointment.appointment_id)?.join(' · ') ??
+                          'Not scheduled'}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {appointment.provider === 'ezyvet'
+                          ? `ezyVet · ${appointment.provider_status ?? 'pending'}`
+                          : 'Internal'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

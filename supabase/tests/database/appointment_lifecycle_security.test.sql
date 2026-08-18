@@ -1,5 +1,5 @@
 begin;
-select plan(21);
+select plan(22);
 
 select has_table('public', 'appointment_change_intents', 'durable lifecycle intents exist');
 select has_table('public', 'appointment_management_targets', 'opaque appointment references exist');
@@ -33,6 +33,12 @@ select extensions.ok(
   and not has_function_privilege('authenticated', 'public.persist_appointment_change_mutation_target(uuid,text)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.persist_appointment_change_mutation_target(uuid,text)', 'EXECUTE'),
   'only the trusted backend can persist a provider mutation target'
+);
+select extensions.ok(
+  has_function_privilege('service_role', 'public.get_or_resume_staff_appointment_change_intent(uuid,uuid,uuid,text,timestamptz,timestamptz)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.get_or_resume_staff_appointment_change_intent(uuid,uuid,uuid,text,timestamptz,timestamptz)', 'EXECUTE')
+  and not has_function_privilege('anon', 'public.get_or_resume_staff_appointment_change_intent(uuid,uuid,uuid,text,timestamptz,timestamptz)', 'EXECUTE'),
+  'only the trusted backend can get or resume a staff lifecycle intent'
 );
 select extensions.ok(
   has_function_privilege('service_role', 'public.get_voice_appointment_lifecycle_turn(text,uuid)', 'EXECUTE')

@@ -1,7 +1,7 @@
 -- Executable Phase 9 regression coverage for immutable lifecycle identity and reminder history.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(14);
+select extensions.plan(23);
 
 insert into auth.users (id, email) values ('f9010000-0000-0000-0000-000000000001', 'lifecycle-consistency@example.test');
 insert into public.users (id, email) values ('f9010000-0000-0000-0000-000000000001', 'lifecycle-consistency@example.test') on conflict (id) do nothing;
@@ -87,6 +87,90 @@ select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is((select count(*)::integer from public.create_conversation_appointment_management_targets('f9090000-0000-0000-0000-000000000001', 'f9150000-0000-0000-0000-000000000007', (select trusted_caller_e164 from public.get_voice_appointment_lifecycle_turn('current-other-caller', 'f9150000-0000-0000-0000-000000000007')))), 0, 'a current unmatched voice caller cannot expose a historical caller appointment');
 select extensions.is((select count(*)::integer from public.create_conversation_appointment_management_targets('f9090000-0000-0000-0000-000000000001', 'f9150000-0000-0000-0000-000000000007', (select trusted_caller_e164 from public.get_voice_appointment_lifecycle_turn('historical-caller', 'f9150000-0000-0000-0000-000000000007')))), 1, 'the exact current matching voice caller can receive an appointment reference');
 reset role;
+
+-- A staff retry returns the original durable intent. Only targetless executing state may proceed
+-- to a first write; every state that might have reached a provider resumes without a new intent.
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select set_config('app.staff_cancel_intent_id', (
+  select change_intent_id::text
+  from public.create_staff_appointment_cancellation_intent(
+    'f9010000-0000-0000-0000-000000000001',
+    'f9030000-0000-0000-0000-000000000001',
+    'f9130000-0000-0000-0000-000000000001'
+  )
+), true);
+reset role;
+select extensions.ok(
+  exists (
+    select 1
+    from public.appointment_change_intents intent
+    where intent.id = current_setting('app.staff_cancel_intent_id')::uuid
+      and intent.status = 'executing'
+      and intent.provider_mutation_target_id is null
+  ),
+  'a staff intent with no durable mutation target is safe to resume as the first write'
+);
+set local role service_role;
+select extensions.is(
+  (select change_intent_id::text from public.create_staff_appointment_cancellation_intent('f9010000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9130000-0000-0000-0000-000000000001')),
+  current_setting('app.staff_cancel_intent_id'),
+  'a targetless executing staff retry returns the existing intent rather than creating a second one'
+);
+select public.persist_appointment_change_mutation_target(current_setting('app.staff_cancel_intent_id')::uuid, 'event-original');
+reset role;
+select extensions.is(
+  (select provider_mutation_target_id from public.appointment_change_intents where id = current_setting('app.staff_cancel_intent_id')::uuid),
+  'event-original',
+  'the staff mutation target is durable before any provider write'
+);
+set local role service_role;
+select extensions.is(
+  (select change_intent_id::text from public.create_staff_appointment_cancellation_intent('f9010000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9130000-0000-0000-0000-000000000001')),
+  current_setting('app.staff_cancel_intent_id'),
+  'a target-bearing executing staff retry resumes the original reconciliation intent'
+);
+reset role;
+update public.appointment_change_intents set status = 'provider_state_unknown' where id = current_setting('app.staff_cancel_intent_id')::uuid;
+set local role service_role;
+select extensions.is(
+  (select change_intent_id::text from public.create_staff_appointment_cancellation_intent('f9010000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9130000-0000-0000-0000-000000000001')),
+  current_setting('app.staff_cancel_intent_id'),
+  'a provider-state-unknown staff retry preserves the one recovery intent'
+);
+reset role;
+update public.appointment_change_intents set status = 'provider_success_pending_persistence' where id = current_setting('app.staff_cancel_intent_id')::uuid;
+set local role service_role;
+select extensions.is(
+  (select change_intent_id::text from public.create_staff_appointment_cancellation_intent('f9010000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9130000-0000-0000-0000-000000000001')),
+  current_setting('app.staff_cancel_intent_id'),
+  'a provider-success-pending staff retry returns the intent for local completion only'
+);
+reset role;
+update public.appointment_change_intents set status = 'completed' where id = current_setting('app.staff_cancel_intent_id')::uuid;
+set local role service_role;
+select extensions.is(
+  (select change_intent_id::text from public.create_staff_appointment_cancellation_intent('f9010000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9130000-0000-0000-0000-000000000001')),
+  current_setting('app.staff_cancel_intent_id'),
+  'a completed staff cancellation retry is idempotent'
+);
+reset role;
+update public.appointment_change_intents set status = 'expired' where id = current_setting('app.staff_cancel_intent_id')::uuid;
+update public.appointments set provider = 'ezyvet', integration_id = 'f9050000-0000-0000-0000-000000000002', scheduling_resource_id = 'f9070000-0000-0000-0000-000000000003' where id = 'f9130000-0000-0000-0000-000000000001';
+set local role service_role;
+select extensions.throws_ok(
+  $$ select * from public.create_staff_appointment_reschedule_intent('f9010000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9130000-0000-0000-0000-000000000001', now() + interval '6 days', now() + interval '6 days 30 minutes') $$,
+  '22023',
+  'Provider reschedule is unsupported',
+  'direct ezyVet staff reschedule is rejected before a provider mutation target exists'
+);
+reset role;
+select extensions.is(
+  (select count(*)::integer from public.appointment_change_intents where appointment_id = 'f9130000-0000-0000-0000-000000000001' and actor_category = 'staff' and operation = 'reschedule'),
+  0,
+  'direct ezyVet staff reschedule creates no durable reschedule intent'
+);
+update public.appointments set provider = 'google_calendar', integration_id = 'f9050000-0000-0000-0000-000000000001', scheduling_resource_id = 'f9070000-0000-0000-0000-000000000001' where id = 'f9130000-0000-0000-0000-000000000001';
 
 -- A sent reminder keeps its message link across both lifecycle completions; unsent reminders are
 -- the only rows the cancellation/reschedule cleanup may invalidate.

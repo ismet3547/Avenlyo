@@ -379,149 +379,123 @@ export class AppointmentLifecycleService {
 
   /** Owner/admin path after the API has created a staff-attributed durable cancellation intent. */
   public async executeStaffCancellation(changeIntentId: string) {
-    const execution = await this.execution(changeIntentId);
-    if (execution.operation !== 'cancel' || !bool(execution, 'current_write_eligible')) {
-      await this.fail(changeIntentId, 'failed', 'configuration_changed');
-      return { outcome: 'unavailable' as const };
-    }
-    const connector = await this.input.connectors.forIntegration(
-      provider(requiredText(execution, 'provider')),
-      requiredText(execution, 'integration_id'),
-    );
-    if (!connector.appointmentLifecycle.canCancel || !connector.resolveAppointmentMutationTarget) {
-      await this.fail(changeIntentId, 'handoff_required', 'provider_cancel_unsupported');
-      return { outcome: 'handoff_required' as const };
-    }
-    const lifecycle: AppointmentLifecycleRequest = {
-      appointmentKey: requiredText(execution, 'external_appointment_id'),
-      bookingIntentId: text(execution, 'booking_intent_id'),
-      integrationId: requiredText(execution, 'integration_id'),
-      originalEndAt: requiredText(execution, 'original_ends_at'),
-      originalStartAt: requiredText(execution, 'original_starts_at'),
-      providerMutationTargetId: text(execution, 'provider_mutation_target_id'),
-      resource: {
-        key: requiredText(execution, 'original_resource_uid'),
-        name: requiredText(execution, 'original_resource_name'),
-        schedulingScopeKey: null,
-      },
-      timezone: requiredText(execution, 'timezone'),
-    };
-    let recoveryLifecycle = lifecycle;
-    try {
-      const resolved = await connector.resolveAppointmentMutationTarget(lifecycle);
-      if (resolved.kind !== 'resolved') {
-        await this.fail(changeIntentId, 'handoff_required', 'provider_target_ambiguous');
-        return { outcome: 'handoff_required' as const };
-      }
-      await this.persistMutationTarget(changeIntentId, resolved.targetId);
-      recoveryLifecycle = { ...lifecycle, providerMutationTargetId: resolved.targetId };
-      const result = await connector.cancelAppointment(recoveryLifecycle);
-      if (result.kind !== 'cancelled') return this.providerResultUnknown(changeIntentId);
-      await this.rpc.rpc('record_appointment_change_provider_success', {
-        target_change_intent_id: changeIntentId,
-        target_provider_state: 'confirmed',
-      });
-      return this.complete(changeIntentId);
-    } catch (error) {
-      if (
-        error instanceof BookingProviderError &&
-        ['network', 'timeout', 'provider_state_unknown', 'provider_conflict'].includes(
-          error.category,
-        )
-      ) {
-        return this.recover(changeIntentId, execution, connector, recoveryLifecycle);
-      }
-      await this.fail(
-        changeIntentId,
-        'failed',
-        error instanceof BookingProviderError ? error.category : 'internal',
-      );
-      return { outcome: 'unknown' as const };
-    }
+    return this.executeStaffIntent(changeIntentId, 'cancel');
   }
 
   /** Staff chooses a UTC time explicitly; the provider availability read still has final authority. */
   public async executeStaffReschedule(changeIntentId: string) {
+    return this.executeStaffIntent(changeIntentId, 'reschedule');
+  }
+
+  /**
+   * The staff API retries one durable intent. Once a mutation target exists, the provider may
+   * already have observed a write, so recovery is read-only and can never fall back to a write.
+   */
+  private async executeStaffIntent(
+    changeIntentId: string,
+    expectedOperation: 'cancel' | 'reschedule',
+  ) {
     const execution = await this.execution(changeIntentId);
-    if (execution.operation !== 'reschedule' || !bool(execution, 'current_write_eligible')) {
-      await this.fail(changeIntentId, 'failed', 'configuration_changed');
+    if (requiredText(execution, 'operation') !== expectedOperation) {
       return { outcome: 'unavailable' as const };
     }
+    const intentStatus = requiredText(execution, 'intent_status');
+    if (intentStatus === 'completed') return { outcome: 'completed' as const };
+    if (intentStatus === 'provider_success_pending_persistence')
+      return this.complete(changeIntentId);
+    if (intentStatus === 'handoff_required') return { outcome: 'handoff_required' as const };
+
     const connector = await this.input.connectors.forIntegration(
       provider(requiredText(execution, 'provider')),
       requiredText(execution, 'integration_id'),
     );
+    const lifecycle = this.lifecycle(execution);
     if (
-      !connector.appointmentLifecycle.canReschedule ||
-      !connector.resolveAppointmentMutationTarget
+      intentStatus === 'provider_state_unknown' ||
+      (intentStatus === 'executing' && lifecycle.providerMutationTargetId !== null)
     ) {
-      await this.fail(changeIntentId, 'handoff_required', 'provider_reschedule_unsupported');
-      return { outcome: 'handoff_required' as const };
+      return this.recover(changeIntentId, execution, connector, lifecycle);
     }
-    const lifecycle: AppointmentLifecycleRequest = {
-      appointmentKey: requiredText(execution, 'external_appointment_id'),
-      bookingIntentId: text(execution, 'booking_intent_id'),
-      integrationId: requiredText(execution, 'integration_id'),
-      originalEndAt: requiredText(execution, 'original_ends_at'),
-      originalStartAt: requiredText(execution, 'original_starts_at'),
-      providerMutationTargetId: text(execution, 'provider_mutation_target_id'),
-      resource: {
-        key: requiredText(execution, 'original_resource_uid'),
-        name: requiredText(execution, 'original_resource_name'),
-        schedulingScopeKey: null,
-      },
-      timezone: requiredText(execution, 'timezone'),
-    };
+    if (intentStatus !== 'executing' || !bool(execution, 'current_write_eligible')) {
+      await this.fail(changeIntentId, 'failed', 'configuration_changed');
+      return { outcome: 'unavailable' as const };
+    }
     let recoveryLifecycle = lifecycle;
-    const targetStartAt = requiredText(execution, 'target_starts_at');
-    const targetEndAt = requiredText(execution, 'target_ends_at');
     try {
-      const lease = await this.rpc.rpc('claim_appointment_change_slot_lease', {
-        target_change_intent_id: changeIntentId,
-      });
-      if (lease.error) {
-        await this.fail(changeIntentId, 'failed', 'slot_unavailable');
-        return { outcome: 'unavailable' as const };
+      if (expectedOperation === 'cancel') {
+        if (
+          !connector.appointmentLifecycle.canCancel ||
+          !connector.resolveAppointmentMutationTarget
+        ) {
+          await this.fail(changeIntentId, 'handoff_required', 'provider_cancel_unsupported');
+          return { outcome: 'handoff_required' as const };
+        }
+        const resolved = await connector.resolveAppointmentMutationTarget(lifecycle);
+        if (resolved.kind !== 'resolved') {
+          await this.fail(changeIntentId, 'handoff_required', 'provider_target_ambiguous');
+          return { outcome: 'handoff_required' as const };
+        }
+        await this.persistMutationTarget(changeIntentId, resolved.targetId);
+        recoveryLifecycle = { ...lifecycle, providerMutationTargetId: resolved.targetId };
+        const result = await connector.cancelAppointment(recoveryLifecycle);
+        if (result.kind !== 'cancelled') return this.providerResultUnknown(changeIntentId);
+      } else {
+        if (
+          !connector.appointmentLifecycle.canReschedule ||
+          !connector.resolveAppointmentMutationTarget
+        ) {
+          await this.fail(changeIntentId, 'handoff_required', 'provider_reschedule_unsupported');
+          return { outcome: 'handoff_required' as const };
+        }
+        const targetStartAt = requiredText(execution, 'target_starts_at');
+        const targetEndAt = requiredText(execution, 'target_ends_at');
+        const lease = await this.rpc.rpc('claim_appointment_change_slot_lease', {
+          target_change_intent_id: changeIntentId,
+        });
+        if (lease.error) {
+          await this.fail(changeIntentId, 'failed', 'slot_unavailable');
+          return { outcome: 'unavailable' as const };
+        }
+        const appointmentType: BookingAppointmentType = {
+          defaultDurationMinutes: Number(execution.default_duration_minutes),
+          key: requiredText(execution, 'appointment_type_uid'),
+          name: requiredText(execution, 'appointment_type_name'),
+        };
+        const available = await connector.getAvailability({
+          appointmentType,
+          dates: [localDate(targetStartAt, lifecycle.timezone)],
+          resources: [lifecycle.resource],
+          timezone: lifecycle.timezone,
+          availabilityPolicy: {
+            businessHours: businessHours(execution.business_hours),
+            minimumLeadMinutes: Number(execution.minimum_lead_minutes),
+          },
+        });
+        if (
+          !available.some(
+            (slot) =>
+              slot.resourceKey === lifecycle.resource.key &&
+              slot.startAt === targetStartAt &&
+              slot.endAt === targetEndAt,
+          )
+        ) {
+          await this.fail(changeIntentId, 'failed', 'slot_unavailable');
+          return { outcome: 'unavailable' as const };
+        }
+        const resolved = await connector.resolveAppointmentMutationTarget(lifecycle);
+        if (resolved.kind !== 'resolved') {
+          await this.fail(changeIntentId, 'handoff_required', 'provider_target_ambiguous');
+          return { outcome: 'handoff_required' as const };
+        }
+        await this.persistMutationTarget(changeIntentId, resolved.targetId);
+        recoveryLifecycle = { ...lifecycle, providerMutationTargetId: resolved.targetId };
+        const result = await connector.rescheduleAppointment({
+          ...recoveryLifecycle,
+          targetEndAt,
+          targetStartAt,
+        });
+        if (result.kind !== 'rescheduled') return this.providerResultUnknown(changeIntentId);
       }
-      const appointmentType: BookingAppointmentType = {
-        defaultDurationMinutes: Number(execution.default_duration_minutes),
-        key: requiredText(execution, 'appointment_type_uid'),
-        name: requiredText(execution, 'appointment_type_name'),
-      };
-      const available = await connector.getAvailability({
-        appointmentType,
-        dates: [localDate(targetStartAt, lifecycle.timezone)],
-        resources: [lifecycle.resource],
-        timezone: lifecycle.timezone,
-        availabilityPolicy: {
-          businessHours: businessHours(execution.business_hours),
-          minimumLeadMinutes: Number(execution.minimum_lead_minutes),
-        },
-      });
-      if (
-        !available.some(
-          (slot) =>
-            slot.resourceKey === lifecycle.resource.key &&
-            slot.startAt === targetStartAt &&
-            slot.endAt === targetEndAt,
-        )
-      ) {
-        await this.fail(changeIntentId, 'failed', 'slot_unavailable');
-        return { outcome: 'unavailable' as const };
-      }
-      const resolved = await connector.resolveAppointmentMutationTarget(lifecycle);
-      if (resolved.kind !== 'resolved') {
-        await this.fail(changeIntentId, 'handoff_required', 'provider_target_ambiguous');
-        return { outcome: 'handoff_required' as const };
-      }
-      await this.persistMutationTarget(changeIntentId, resolved.targetId);
-      recoveryLifecycle = { ...lifecycle, providerMutationTargetId: resolved.targetId };
-      const result = await connector.rescheduleAppointment({
-        ...recoveryLifecycle,
-        targetEndAt,
-        targetStartAt,
-      });
-      if (result.kind !== 'rescheduled') return this.providerResultUnknown(changeIntentId);
       await this.rpc.rpc('record_appointment_change_provider_success', {
         target_change_intent_id: changeIntentId,
         target_provider_state: 'confirmed',
@@ -590,6 +564,22 @@ export class AppointmentLifecycleService {
     const row = rows(result.data)[0];
     if (result.error || !row) throw new Error('Appointment execution context is unavailable.');
     return row;
+  }
+  private lifecycle(execution: Row): AppointmentLifecycleRequest {
+    return {
+      appointmentKey: requiredText(execution, 'external_appointment_id'),
+      bookingIntentId: text(execution, 'booking_intent_id'),
+      integrationId: requiredText(execution, 'integration_id'),
+      originalEndAt: requiredText(execution, 'original_ends_at'),
+      originalStartAt: requiredText(execution, 'original_starts_at'),
+      providerMutationTargetId: text(execution, 'provider_mutation_target_id'),
+      resource: {
+        key: requiredText(execution, 'original_resource_uid'),
+        name: requiredText(execution, 'original_resource_name'),
+        schedulingScopeKey: null,
+      },
+      timezone: requiredText(execution, 'timezone'),
+    };
   }
   private async complete(intentId: string) {
     const result = await this.rpc.rpc('complete_appointment_change_intent', {

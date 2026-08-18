@@ -9,14 +9,20 @@ import {
 const locationId = '11111111-1111-4111-8111-111111111111';
 const appointmentId = '22222222-2222-4222-8222-222222222222';
 
-async function createApp(options?: { readonly rpcError?: boolean }) {
+async function createApp(options?: {
+  readonly lifecycleOutcome?: 'completed' | 'handoff_required';
+  readonly rpcError?: boolean;
+  readonly rpcErrorMessage?: string;
+}) {
   const rpc = vi.fn().mockResolvedValue({
     data: options?.rpcError ? null : [{ change_intent_id: '33333333-3333-4333-8333-333333333333' }],
-    error: options?.rpcError ? { message: 'forbidden' } : null,
+    error: options?.rpcError ? { message: options.rpcErrorMessage ?? 'forbidden' } : null,
   });
   const lifecycle = {
     executeStaffCancellation: vi.fn().mockResolvedValue({ outcome: 'completed' }),
-    executeStaffReschedule: vi.fn().mockResolvedValue({ outcome: 'completed' }),
+    executeStaffReschedule: vi
+      .fn()
+      .mockResolvedValue({ outcome: options?.lifecycleOutcome ?? 'completed' }),
   };
   const dependencies: AppointmentLifecycleRouteDependencies = {
     createLifecycleService: () => lifecycle,
@@ -107,5 +113,25 @@ describe('appointment lifecycle staff routes', () => {
     });
     expect(denied.statusCode).toBe(403);
     expect(crossLocation.lifecycle.executeStaffReschedule).not.toHaveBeenCalled();
+  });
+
+  it('returns a safe unsupported outcome before an ezyVet staff reschedule intent is executed', async () => {
+    const { app, lifecycle, rpc } = await createApp({
+      rpcError: true,
+      rpcErrorMessage: 'Provider reschedule is unsupported',
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      headers: { authorization: 'Bearer valid-token', 'content-type': 'application/json' },
+      method: 'POST',
+      payload: { endsAt: '2026-09-01T10:30:00Z', startsAt: '2026-09-01T10:00:00Z' },
+      url: `/v1/scheduling/appointments/${locationId}/${appointmentId}/reschedule`,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ outcome: 'handoff_required' });
+    expect(rpc).toHaveBeenCalledOnce();
+    expect(lifecycle.executeStaffReschedule).not.toHaveBeenCalled();
   });
 });
