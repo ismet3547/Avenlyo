@@ -137,6 +137,12 @@ describe('Google Calendar connector identity', () => {
     expect(updateEvent).toHaveBeenCalledWith('calendar_1', before.id, expect.objectContaining({ summary: 'Consultation', start: { dateTime: after.start, timeZone: 'UTC' } }), '"etag-1"');
   });
 
+  it('does not treat a cancelled event at the requested replacement time as a successful reschedule recovery', async () => {
+    const target = { ...event({ status: 'cancelled' }), end: '2026-09-01T11:30:00.000Z', start: '2026-09-01T11:00:00.000Z' };
+    const connector = new GoogleCalendarConnector({ getEvent: vi.fn().mockResolvedValue(target) } as unknown as GoogleCalendarClient);
+    await expect(connector.getAppointmentState({ appointmentKey: target.id, bookingIntentId, integrationId: 'integration_1', originalEndAt: request.slot.endAt, originalStartAt: request.slot.startAt, resource: request.resource, targetEndAt: target.end, targetStartAt: target.start, timezone: 'UTC' })).resolves.toEqual({ kind: 'ambiguous' });
+  });
+
   it.each([
     ['timeout', new BookingProviderError('timeout')],
     ['network reset', new BookingProviderError('network')],

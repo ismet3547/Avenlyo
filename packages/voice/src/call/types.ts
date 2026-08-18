@@ -55,6 +55,12 @@ export interface VoiceFunctionTool {
   readonly name:
     | 'get_available_appointments'
     | 'prepare_appointment_booking'
+    | 'get_upcoming_appointments'
+    | 'get_reschedule_options'
+    | 'prepare_appointment_reschedule'
+    | 'prepare_appointment_cancellation'
+    | 'reschedule_appointment'
+    | 'cancel_appointment'
     | 'request_human_help'
     | 'search_business_knowledge'
     | 'transfer_call'
@@ -140,6 +146,26 @@ export interface VoiceSchedulingServices {
     },
     context: VoiceCallContext,
   ): Promise<{ readonly outcome: 'booked' | 'confirmation_required' | 'unavailable' | 'unknown' }>;
+  getUpcomingAppointments?(
+    input: { readonly triggeringInboundMessageId: string | null; readonly toolCallId: string },
+    context: VoiceCallContext,
+  ): Promise<readonly { readonly appointmentReference: string; readonly endsAt: string; readonly startsAt: string; readonly timezone: string; readonly title: string }[]>;
+  getRescheduleOptions?(
+    input: { readonly appointmentReference: string; readonly dates: readonly string[]; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string },
+    context: VoiceCallContext,
+  ): Promise<readonly { readonly candidateId: string; readonly endsAt: string; readonly startsAt: string; readonly timezone: string }[]>;
+  prepareAppointmentReschedule?(
+    input: { readonly candidateId: string; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string },
+    context: VoiceCallContext,
+  ): Promise<{ readonly intent: { readonly changeIntentId: string; readonly operation: string; readonly startsAt: string | null; readonly timezone: string | null } | null; readonly outcome: 'not_found' | 'ready' }>;
+  prepareAppointmentCancellation?(
+    input: { readonly appointmentReference: string; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string },
+    context: VoiceCallContext,
+  ): Promise<{ readonly intent: { readonly changeIntentId: string; readonly operation: string; readonly startsAt: string | null; readonly timezone: string | null } | null; readonly outcome: 'not_found' | 'ready' }>;
+  executeAppointmentChange?(
+    input: { readonly changeIntentId: string; readonly triggeringInboundMessageId: string | null; readonly toolCallId: string },
+    context: VoiceCallContext,
+  ): Promise<{ readonly outcome: 'completed' | 'confirmation_required' | 'handoff_required' | 'unavailable' | 'unknown' }>;
 }
 
 export interface VoiceToolExecution {

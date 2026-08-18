@@ -3,6 +3,7 @@ import type {
   AvailabilitySlot,
   AppointmentLifecycleRequest,
   AppointmentLifecycleState,
+  AppointmentMutationTarget,
   AppointmentRescheduleRequest,
   BookingConnector,
   BookingReconciliationRequest,
@@ -104,25 +105,39 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
   }
 
   public async getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
-    try {
-      const result = await this.client.getCore(`/v2/appointment/${encodeURIComponent(input.appointmentKey)}`);
-      const active = this.appointmentActive(result);
-      if (active === null) return { kind: 'ambiguous' };
-      return active
-        ? { kind: 'active', appointmentKey: input.appointmentKey }
-        : { kind: 'cancelled', appointmentKey: input.appointmentKey };
-    } catch (error) {
-      if (error instanceof BookingProviderError && error.category === 'not_found') return { kind: 'not_found' };
-      throw error;
+    const targetId = input.providerMutationTargetId;
+    if (!targetId || !this.numericId(targetId)) return { kind: 'ambiguous' };
+    const appointment = await this.readExactLifecycleAppointment(input.appointmentKey, targetId);
+    if (!appointment) return { kind: 'not_found' };
+    return appointment.active
+      ? { kind: 'active', appointmentKey: input.appointmentKey }
+      : { kind: 'cancelled', appointmentKey: input.appointmentKey };
+  }
+
+  public async resolveAppointmentMutationTarget(
+    input: AppointmentLifecycleRequest,
+  ): Promise<AppointmentMutationTarget> {
+    if (input.providerMutationTargetId && this.numericId(input.providerMutationTargetId)) {
+      return { kind: 'resolved', targetId: input.providerMutationTargetId };
     }
+    const matches = this.appointments(await this.client.getLifecycleCore('/v2/appointment'))
+      .filter((appointment) => appointment.uid === input.appointmentKey);
+    if (matches.length === 0) return { kind: 'not_found' };
+    if (matches.length !== 1) return { kind: 'ambiguous' };
+    return { kind: 'resolved', targetId: matches[0]!.id };
   }
 
   public async cancelAppointment(input: AppointmentLifecycleRequest): Promise<AppointmentLifecycleState> {
-    await this.client.patchCore(`/v2/appointment/${encodeURIComponent(input.appointmentKey)}`, {
+    const targetId = input.providerMutationTargetId;
+    if (!targetId || !this.numericId(targetId)) return { kind: 'ambiguous' };
+    await this.client.patchCore(`/v2/appointment/${encodeURIComponent(targetId)}`, {
       cancel: true,
       cancellation_reason_text: 'Cancelled by customer through Avenlyo',
     });
-    return { kind: 'cancelled', appointmentKey: input.appointmentKey };
+    const appointment = await this.readExactLifecycleAppointment(input.appointmentKey, targetId);
+    return appointment && !appointment.active
+      ? { kind: 'cancelled', appointmentKey: input.appointmentKey }
+      : { kind: 'ambiguous' };
   }
 
   public rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
@@ -154,12 +169,30 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
     };
   }
 
-  private appointmentActive(value: unknown): boolean | null {
-    if (!value || typeof value !== 'object') return null;
-    const root = value as Record<string, unknown>;
-    const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : root;
-    if (typeof data.active === 'boolean') return data.active;
-    if (typeof data.cancelled === 'boolean') return !data.cancelled;
-    return null;
+  private async readExactLifecycleAppointment(uid: string, id: string) {
+    const matches = this.appointments(
+      await this.client.getLifecycleCore('/v2/appointment', { id }),
+    ).filter((appointment) => appointment.id === id && appointment.uid === uid);
+    return matches.length === 1 ? matches[0]! : null;
+  }
+
+  /** ezyVet documents appointment list items as { appointment: { id, uid, active } }. */
+  private appointments(value: unknown): readonly { readonly active: boolean; readonly id: string; readonly uid: string }[] {
+    if (!value || typeof value !== 'object' || !Array.isArray((value as Record<string, unknown>).items)) return [];
+    return (value as { readonly items: readonly unknown[] }).items.flatMap((item) => {
+      if (!item || typeof item !== 'object') return [];
+      const appointment = (item as Record<string, unknown>).appointment;
+      if (!appointment || typeof appointment !== 'object') return [];
+      const fields = appointment as Record<string, unknown>;
+      const id = typeof fields.id === 'number' ? String(fields.id) : fields.id;
+      return typeof id === 'string' && this.numericId(id) && typeof fields.uid === 'string' &&
+        typeof fields.active === 'boolean'
+        ? [{ active: fields.active, id, uid: fields.uid }]
+        : [];
+    });
+  }
+
+  private numericId(value: string): boolean {
+    return /^[1-9][0-9]*$/.test(value);
   }
 }

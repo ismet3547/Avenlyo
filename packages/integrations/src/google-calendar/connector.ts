@@ -5,6 +5,7 @@ import type {
   AvailabilitySlot,
   AppointmentLifecycleRequest,
   AppointmentLifecycleState,
+  AppointmentMutationTarget,
   AppointmentRescheduleRequest,
   BookingConnector,
   BookingPartyResolution,
@@ -138,7 +139,7 @@ export class GoogleCalendarConnector implements BookingConnector {
   public async getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
     try {
       const event = await this.client.getEvent(input.resource.key, input.appointmentKey);
-      if ('targetStartAt' in input && this.hasLifecycleMarkers(event, input) && Date.parse(event.start) === Date.parse(input.targetStartAt) && Date.parse(event.end) === Date.parse(input.targetEndAt))
+      if ('targetStartAt' in input && event.status === 'confirmed' && this.hasLifecycleMarkers(event, input) && Date.parse(event.start) === Date.parse(input.targetStartAt) && Date.parse(event.end) === Date.parse(input.targetEndAt))
         return { kind: 'rescheduled', appointmentKey: event.id };
       if (!this.exactLifecycleEvent(event, input)) return { kind: 'ambiguous' };
       return event.status === 'cancelled'
@@ -148,6 +149,13 @@ export class GoogleCalendarConnector implements BookingConnector {
       if (error instanceof BookingProviderError && error.category === 'not_found') return { kind: 'not_found' };
       throw error;
     }
+  }
+
+  public async resolveAppointmentMutationTarget(input: AppointmentLifecycleRequest): Promise<AppointmentMutationTarget> {
+    const state = await this.getAppointmentState(input);
+    return state.kind === 'active' || state.kind === 'cancelled'
+      ? { kind: 'resolved', targetId: state.appointmentKey }
+      : state.kind === 'not_found' ? state : { kind: 'ambiguous' };
   }
 
   public async cancelAppointment(input: AppointmentLifecycleRequest): Promise<AppointmentLifecycleState> {
@@ -166,7 +174,7 @@ export class GoogleCalendarConnector implements BookingConnector {
       end: { dateTime: input.targetEndAt, timeZone: input.timezone },
       start: { dateTime: input.targetStartAt, timeZone: input.timezone },
     }, event.etag);
-    if (!this.exactLifecycleEvent(updated, input, input.targetStartAt, input.targetEndAt)) return { kind: 'ambiguous' };
+    if (updated.status !== 'confirmed' || !this.exactLifecycleEvent(updated, input, input.targetStartAt, input.targetEndAt)) return { kind: 'ambiguous' };
     return { kind: 'rescheduled', appointmentKey: updated.id };
   }
 

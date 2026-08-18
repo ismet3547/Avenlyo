@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { schedulingRpc } from '@/lib/scheduling/service';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
+import { cancelAppointmentAsStaffAction, rescheduleAppointmentAsStaffAction } from './actions';
 
 function date(value: string | null): string {
   return value
@@ -49,8 +50,9 @@ export default async function AppointmentsPage() {
         Scheduled appointments
       </h1>
       <p className="mt-3 text-sm leading-6 text-muted-foreground">
-        Confirmed local records from approved scheduling connectors. Rescheduling and cancellation
-        are not available in this phase.
+        Confirmed local records from approved scheduling connectors. Owners and admins can safely
+        cancel a future appointment after confirming the action; all changes use the durable
+        provider lifecycle path.
       </p>
       <Link
         className="mt-4 inline-flex text-sm font-semibold text-primary hover:underline"
@@ -66,6 +68,7 @@ export default async function AppointmentsPage() {
                 <tr>
                   <th className="px-4 py-3">Appointment</th>
                   <th className="px-4 py-3">Starts</th>
+                  <th className="px-4 py-3">Actions</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Reminders</th>
                   <th className="px-4 py-3">Provider</th>
@@ -77,6 +80,29 @@ export default async function AppointmentsPage() {
                     <td className="px-4 py-3 font-medium text-ink">{appointment.title}</td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {date(appointment.starts_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {workspace.role !== 'member' && appointment.status === 'confirmed' ? (
+                        <>
+                          <form action={cancelAppointmentAsStaffAction}>
+                            <input name="appointmentId" type="hidden" value={appointment.appointment_id} />
+                            <button
+                              className="rounded-md border border-destructive/30 px-3 py-1.5 text-xs font-semibold text-destructive hover:bg-destructive/5"
+                              type="submit"
+                            >
+                              Cancel appointment
+                            </button>
+                          </form>
+                          <form action={rescheduleAppointmentAsStaffAction} className="mt-2 grid gap-1">
+                            <input name="appointmentId" type="hidden" value={appointment.appointment_id} />
+                            <input aria-label="New start time in UTC" className="w-40 rounded border border-border px-2 py-1 text-xs" name="startsAt" placeholder="2026-09-01T11:00:00Z" required />
+                            <input aria-label="New end time in UTC" className="w-40 rounded border border-border px-2 py-1 text-xs" name="endsAt" placeholder="2026-09-01T11:30:00Z" required />
+                            <button className="w-fit rounded-md border border-border px-3 py-1.5 text-xs font-semibold text-ink hover:bg-muted" type="submit">Reschedule (UTC)</button>
+                          </form>
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No action available</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 capitalize text-ink">{appointment.status}</td>
                     <td className="px-4 py-3 text-muted-foreground">

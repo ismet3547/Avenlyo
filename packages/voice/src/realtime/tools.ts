@@ -35,6 +35,13 @@ export const prepareAppointmentBookingSchema = z
   })
   .strict();
 export const bookAppointmentSchema = z.object({ booking_intent_id: z.string().uuid() }).strict();
+export const appointmentReferenceSchema = z.object({ appointment_reference: z.string().uuid() }).strict();
+export const rescheduleOptionsSchema = z.object({
+  appointment_reference: z.string().uuid(),
+  dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(14),
+}).strict();
+export const appointmentCandidateSchema = z.object({ candidate_id: z.string().uuid() }).strict();
+export const appointmentIntentSchema = z.object({ change_intent_id: z.string().uuid() }).strict();
 
 export const transferCallFunction: VoiceFunctionTool = {
   description:
@@ -96,6 +103,17 @@ const bookAppointmentFunction: VoiceFunctionTool = {
   strict: true,
 };
 
+function lifecycleFunction(name: Extract<VoiceFunctionTool['name'], 'get_upcoming_appointments' | 'get_reschedule_options' | 'prepare_appointment_reschedule' | 'prepare_appointment_cancellation' | 'reschedule_appointment' | 'cancel_appointment'>, description: string, properties: Readonly<Record<string, unknown>>, required: readonly string[] = []): VoiceFunctionTool {
+  return { description, name, parameters: { additionalProperties: false, properties, required, type: 'object' }, strict: true };
+}
+
+const getUpcomingAppointmentsFunction = lifecycleFunction('get_upcoming_appointments', 'List only the caller\'s verified upcoming appointments for this exact active call.', {});
+const getRescheduleOptionsFunction = lifecycleFunction('get_reschedule_options', 'Find replacement slots for one verified appointment. This does not change it.', { appointment_reference: { type: 'string' }, dates: { items: { type: 'string' }, type: 'array' } }, ['appointment_reference', 'dates']);
+const prepareAppointmentRescheduleFunction = lifecycleFunction('prepare_appointment_reschedule', 'Prepare one offered replacement time. Ask for an explicit yes before executing.', { candidate_id: { type: 'string' } }, ['candidate_id']);
+const prepareAppointmentCancellationFunction = lifecycleFunction('prepare_appointment_cancellation', 'Prepare cancellation for one verified appointment. Ask for an explicit cancellation confirmation before executing.', { appointment_reference: { type: 'string' } }, ['appointment_reference']);
+const rescheduleAppointmentFunction = lifecycleFunction('reschedule_appointment', 'Execute only a prepared reschedule after the caller\'s current exact transcript explicitly confirms it.', { change_intent_id: { type: 'string' } }, ['change_intent_id']);
+const cancelAppointmentFunction = lifecycleFunction('cancel_appointment', 'Execute only a prepared cancellation after the caller\'s current exact transcript explicitly confirms it.', { change_intent_id: { type: 'string' } }, ['change_intent_id']);
+
 function baseTool(
   tool: typeof searchBusinessKnowledgeFunction | typeof requestHumanHelpFunction,
 ): VoiceFunctionTool {
@@ -119,6 +137,12 @@ export function activeVoiceTools(input: {
       getAvailableAppointmentsFunction,
       prepareAppointmentBookingFunction,
       bookAppointmentFunction,
+      getUpcomingAppointmentsFunction,
+      getRescheduleOptionsFunction,
+      prepareAppointmentRescheduleFunction,
+      prepareAppointmentCancellationFunction,
+      rescheduleAppointmentFunction,
+      cancelAppointmentFunction,
     );
   }
   return tools;
@@ -360,6 +384,34 @@ export class VoiceToolExecutor {
           summary: `Booking outcome: ${booked.outcome}.`,
           transferred: false,
         });
+      }
+      if (this.schedulingEnabled && this.services.scheduling?.getUpcomingAppointments && call.name === 'get_upcoming_appointments') {
+        if (call.schedulingBlocked) return this.store(call.callId, rejected('Scheduling is blocked for this call.'));
+        if (!z.object({}).strict().safeParse(rawArguments).success) return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const appointments = await this.services.scheduling.getUpcomingAppointments({ triggeringInboundMessageId: call.triggeringInboundMessageId ?? null, toolCallId: call.callId }, this.context);
+        return this.store(call.callId, { handoffRequested: false, modelOutput: output({ appointments }), status: 'succeeded', summary: `${appointments.length} upcoming appointment(s) found.`, transferred: false });
+      }
+      if (this.schedulingEnabled && this.services.scheduling?.getRescheduleOptions && call.name === 'get_reschedule_options') {
+        if (call.schedulingBlocked) return this.store(call.callId, rejected('Scheduling is blocked for this call.'));
+        const parsed = rescheduleOptionsSchema.safeParse(rawArguments);
+        if (!parsed.success) return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const candidates = await this.services.scheduling.getRescheduleOptions({ appointmentReference: parsed.data.appointment_reference, dates: parsed.data.dates, triggeringInboundMessageId: call.triggeringInboundMessageId ?? null, toolCallId: call.callId }, this.context);
+        return this.store(call.callId, { handoffRequested: false, modelOutput: output({ candidates }), status: 'succeeded', summary: `${candidates.length} reschedule option(s) found.`, transferred: false });
+      }
+      if (this.schedulingEnabled && this.services.scheduling?.prepareAppointmentReschedule && this.services.scheduling.prepareAppointmentCancellation && (call.name === 'prepare_appointment_reschedule' || call.name === 'prepare_appointment_cancellation')) {
+        if (call.schedulingBlocked) return this.store(call.callId, rejected('Scheduling is blocked for this call.'));
+        const prepared = call.name === 'prepare_appointment_reschedule'
+          ? await (async () => { const parsed = appointmentCandidateSchema.safeParse(rawArguments); return parsed.success ? this.services.scheduling!.prepareAppointmentReschedule!({ candidateId: parsed.data.candidate_id, triggeringInboundMessageId: call.triggeringInboundMessageId ?? null, toolCallId: call.callId }, this.context) : null; })()
+          : await (async () => { const parsed = appointmentReferenceSchema.safeParse(rawArguments); return parsed.success ? this.services.scheduling!.prepareAppointmentCancellation!({ appointmentReference: parsed.data.appointment_reference, triggeringInboundMessageId: call.triggeringInboundMessageId ?? null, toolCallId: call.callId }, this.context) : null; })();
+        if (!prepared) return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        return this.store(call.callId, { handoffRequested: false, modelOutput: output(prepared), status: prepared.outcome === 'ready' ? 'succeeded' : 'failed', summary: prepared.outcome === 'ready' ? 'Appointment change is ready for explicit confirmation.' : 'Appointment change could not be prepared.', transferred: false });
+      }
+      if (this.schedulingEnabled && this.services.scheduling?.executeAppointmentChange && (call.name === 'reschedule_appointment' || call.name === 'cancel_appointment')) {
+        if (call.schedulingBlocked) return this.store(call.callId, rejected('Scheduling is blocked for this call.'));
+        const parsed = appointmentIntentSchema.safeParse(rawArguments);
+        if (!parsed.success) return this.store(call.callId, rejected('Tool arguments did not pass validation.'));
+        const result = await this.services.scheduling.executeAppointmentChange({ changeIntentId: parsed.data.change_intent_id, triggeringInboundMessageId: call.triggeringInboundMessageId ?? null, toolCallId: call.callId }, this.context);
+        return this.store(call.callId, { handoffRequested: result.outcome === 'handoff_required' || result.outcome === 'unknown', modelOutput: output(result), status: result.outcome === 'completed' ? 'succeeded' : 'failed', summary: `Appointment change outcome: ${result.outcome}.`, transferred: false });
       }
       return this.store(call.callId, rejected('Unavailable tool requested.'));
     } catch {

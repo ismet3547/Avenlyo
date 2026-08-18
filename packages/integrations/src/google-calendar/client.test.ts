@@ -83,4 +83,11 @@ describe('Google Calendar lifecycle write contract', () => {
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ method: 'DELETE', headers: { Authorization: 'Bearer token', 'If-Match': '"etag-1"' } }));
   });
+
+  it('does not retry a 412 ETag conflict for an event mutation', async () => {
+    const request = vi.fn().mockResolvedValue({ body: {}, status: 412 });
+    const client = new GoogleCalendarClient({ accessToken: () => Promise.resolve('token'), transport: { request } });
+    await expect(client.updateEvent('calendar-1', 'event-1', { end: { dateTime: '2026-09-01T11:00:00Z' }, start: { dateTime: '2026-09-01T10:00:00Z' } }, '"etag-1"')).rejects.toMatchObject({ category: 'provider_conflict' });
+    expect(request).toHaveBeenCalledOnce();
+  });
 });

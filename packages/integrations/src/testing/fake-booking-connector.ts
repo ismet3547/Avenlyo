@@ -3,6 +3,7 @@ import type {
   AvailabilitySlot,
   AppointmentLifecycleRequest,
   AppointmentLifecycleState,
+  AppointmentMutationTarget,
   AppointmentRescheduleRequest,
   BookingConnector,
   CreateBookingRequest,
@@ -39,6 +40,10 @@ export class FakeBookingConnector implements BookingConnector {
 
   public getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
     return Promise.resolve({ kind: 'active', appointmentKey: input.appointmentKey });
+  }
+
+  public resolveAppointmentMutationTarget(input: AppointmentLifecycleRequest): Promise<AppointmentMutationTarget> {
+    return Promise.resolve({ kind: 'resolved', targetId: input.providerMutationTargetId ?? input.appointmentKey });
   }
 
   public rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {

@@ -111,6 +111,11 @@ export interface AppointmentLifecycleRequest {
   readonly integrationId: string;
   readonly originalEndAt: string;
   readonly originalStartAt: string;
+  /**
+   * Provider mutation identity resolved by trusted code before the first write.  ezyVet stores
+   * a stable appointment UID locally but documents a numeric Core appointment id for PATCH.
+   */
+  readonly providerMutationTargetId?: string | null;
   readonly resource: BookingResource;
   readonly timezone: string;
 }
@@ -124,6 +129,11 @@ export type AppointmentLifecycleState =
   | { readonly kind: 'active'; readonly appointmentKey: string }
   | { readonly kind: 'cancelled'; readonly appointmentKey: string }
   | { readonly kind: 'rescheduled'; readonly appointmentKey: string }
+  | { readonly kind: 'not_found' }
+  | { readonly kind: 'ambiguous' };
+
+export type AppointmentMutationTarget =
+  | { readonly kind: 'resolved'; readonly targetId: string }
   | { readonly kind: 'not_found' }
   | { readonly kind: 'ambiguous' };
 
@@ -141,6 +151,8 @@ export interface BookingConnector {
   reconcileBooking?(input: BookingReconciliationRequest): Promise<BookingReconciliationResult>;
   getAvailability(input: AvailabilityRequest): Promise<readonly AvailabilitySlot[]>;
   rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState>;
+  /** Resolves a provider write target exactly once before the first external mutation. */
+  resolveAppointmentMutationTarget?(input: AppointmentLifecycleRequest): Promise<AppointmentMutationTarget>;
   resolveBookingParty(input: BookingPartyResolutionRequest): Promise<BookingPartyResolution>;
 }
 

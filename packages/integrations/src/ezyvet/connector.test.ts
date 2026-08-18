@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FakeEzyVetTransport } from '../testing/fake-ezyvet-transport';
-import { EzyVetTokenCache, EZYVET_MINIMUM_SCOPES } from './auth';
+import { EzyVetTokenCache, EZYVET_LIFECYCLE_WRITE_SCOPES, EZYVET_MINIMUM_SCOPES } from './auth';
 import { EzyVetClient, ezyVetOrigins } from './client';
 import { EzyVetConnector } from './connector';
 import type { EzyVetCredentials } from './types';
@@ -199,14 +199,35 @@ describe('ezyVet connector contracts', () => {
     });
   });
 
-  it('uses the documented single appointment merge-patch for cancellation', async () => {
+  it('resolves a stored UID to one numeric Core id, patches only that id, and proves inactive through the documented list read', async () => {
     const transport = new FakeEzyVetTransport();
     transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
-    transport.enqueue({ body: { data: { active: false } }, status: 200 });
+    transport.enqueue({ body: { items: [{ appointment: { active: true, id: 12345, uid: 'appointment_1' } }] }, status: 200 });
+    transport.enqueue({ body: { ok: true }, status: 200 });
+    transport.enqueue({ body: { items: [{ appointment: { active: false, id: 12345, uid: 'appointment_1' } }] }, status: 200 });
     const connector = new EzyVetConnector(client(transport));
-    await connector.cancelAppointment({ appointmentKey: 'appointment_1', bookingIntentId: 'intent_1', integrationId: 'integration_1', originalEndAt: '2026-09-01T10:30:00.000Z', originalStartAt: '2026-09-01T10:00:00.000Z', resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null }, timezone: 'UTC' });
-    expect(transport.requests[1]).toMatchObject({ body: { cancel: true, cancellation_reason_text: 'Cancelled by customer through Avenlyo' }, headers: expect.objectContaining({ 'Content-Type': 'application/merge-patch+json' }), method: 'PATCH', url: 'https://api.trial.ezyvet.com/v2/appointment/appointment_1' });
+    const request = { appointmentKey: 'appointment_1', bookingIntentId: 'intent_1', integrationId: 'integration_1', originalEndAt: '2026-09-01T10:30:00.000Z', originalStartAt: '2026-09-01T10:00:00.000Z', resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null }, timezone: 'UTC' } as const;
+    await expect(connector.resolveAppointmentMutationTarget(request)).resolves.toEqual({ kind: 'resolved', targetId: '12345' });
+    await expect(connector.cancelAppointment({ ...request, providerMutationTargetId: '12345' })).resolves.toEqual({ kind: 'cancelled', appointmentKey: 'appointment_1' });
+    expect(transport.requests[0]?.body).toMatchObject({ scope: EZYVET_LIFECYCLE_WRITE_SCOPES.join(' ') });
+    expect(transport.requests[1]).toMatchObject({ method: 'GET', url: 'https://api.trial.ezyvet.com/v2/appointment' });
+    expect(transport.requests[2]).toMatchObject({ body: { cancel: true, cancellation_reason_text: 'Cancelled by customer through Avenlyo' }, headers: expect.objectContaining({ 'Content-Type': 'application/merge-patch+json' }), method: 'PATCH', url: 'https://api.trial.ezyvet.com/v2/appointment/12345' });
+    expect(transport.requests[3]?.url).toBe('https://api.trial.ezyvet.com/v2/appointment?id=12345');
     expect(transport.requests.filter((entry) => entry.method === 'PATCH')).toHaveLength(1);
+    expect(transport.requests.some((entry) => entry.url.includes('/v2/appointment/appointment_1'))).toBe(false);
+  });
+
+  it('does not PATCH when UID resolution is ambiguous or cannot prove the cancellation target inactive', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({ body: { items: [
+      { appointment: { active: true, id: 101, uid: 'appointment_1' } },
+      { appointment: { active: true, id: 102, uid: 'appointment_1' } },
+    ] }, status: 200 });
+    const connector = new EzyVetConnector(client(transport));
+    const request = { appointmentKey: 'appointment_1', bookingIntentId: 'intent_1', integrationId: 'integration_1', originalEndAt: '2026-09-01T10:30:00.000Z', originalStartAt: '2026-09-01T10:00:00.000Z', resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null }, timezone: 'UTC' } as const;
+    await expect(connector.resolveAppointmentMutationTarget(request)).resolves.toEqual({ kind: 'ambiguous' });
+    expect(transport.requests.filter((entry) => entry.method === 'PATCH')).toHaveLength(0);
   });
 
   it('parses ezyCAB availability, splits 14 days into two seven-day requests, and deduplicates slots', async () => {
