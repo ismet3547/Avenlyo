@@ -83,6 +83,7 @@ select extensions.lives_ok($$ select public.upsert_my_lead_followup_settings('f1
 reset role;
 
 create temporary table pg_temp.voice_state (intent_id uuid);
+grant select, insert on table pg_temp.voice_state to service_role;
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 insert into pg_temp.voice_state select consent_intent_id from public.prepare_voice_sms_followup_consent('followup-call-a', 'f1800000-0000-0000-0000-000000000002');
