@@ -22,8 +22,8 @@ insert into auth.users (id, email) values
 insert into public.organizations (id, name, slug, created_by, primary_industry_id) values
   ('f1000000-0000-0000-0000-000000000001', 'Follow-up Org', 'followup-org', 'f0000000-0000-0000-0000-000000000001', 'veterinary');
 insert into public.locations (id, organization_id, name, timezone, business_hours) values
-  ('f1100000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000001', 'Main clinic', 'UTC', '{"monday":{"open":"09:00","close":"17:00","closed":false}}'),
-  ('f1200000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000001', 'Other clinic', 'UTC', '{"monday":{"open":"09:00","close":"17:00","closed":false}}');
+  ('f1100000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000001', 'Main clinic', 'UTC', '{"monday":{"open":"00:00","close":"23:59","closed":false},"tuesday":{"open":"00:00","close":"23:59","closed":false},"wednesday":{"open":"00:00","close":"23:59","closed":false},"thursday":{"open":"00:00","close":"23:59","closed":false},"friday":{"open":"00:00","close":"23:59","closed":false},"saturday":{"open":"00:00","close":"23:59","closed":false},"sunday":{"open":"00:00","close":"23:59","closed":false}}'),
+  ('f1200000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000001', 'Other clinic', 'UTC', '{"monday":{"open":"00:00","close":"23:59","closed":false},"tuesday":{"open":"00:00","close":"23:59","closed":false},"wednesday":{"open":"00:00","close":"23:59","closed":false},"thursday":{"open":"00:00","close":"23:59","closed":false},"friday":{"open":"00:00","close":"23:59","closed":false},"saturday":{"open":"00:00","close":"23:59","closed":false},"sunday":{"open":"00:00","close":"23:59","closed":false}}');
 insert into public.organization_members (id, organization_id, user_id, role) values
   ('f1300000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000001', 'f0000000-0000-0000-0000-000000000001', 'owner'),
   ('f1300000-0000-0000-0000-000000000002', 'f1000000-0000-0000-0000-000000000001', 'f0000000-0000-0000-0000-000000000002', 'member');
