@@ -12,6 +12,7 @@ import { GoogleCalendarIntegrationService } from '../scheduling/google-calendar-
 import { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
 
 import { ConversationAgentService } from './conversation-agent.js';
+import { AppointmentReminderWorker } from './appointment-reminder-worker.js';
 import { TwilioSdkOutboundClient } from './twilio.js';
 import { MessageProcessingWorker } from './worker.js';
 
@@ -40,16 +41,12 @@ export function createMessagingRuntime(): MessagingRuntime | null {
           supabase,
         })
       : undefined;
+  const connectors = new ApiSchedulingConnectorRegistry({
+    ...(ezyVet ? { ezyVet } : {}),
+    ...(googleCalendar ? { googleCalendar } : {}),
+  });
   const scheduling =
-    ezyVet || googleCalendar
-      ? new SchedulingBookingService({
-          connectors: new ApiSchedulingConnectorRegistry({
-            ...(ezyVet ? { ezyVet } : {}),
-            ...(googleCalendar ? { googleCalendar } : {}),
-          }),
-          supabase,
-        })
-      : undefined;
+    ezyVet || googleCalendar ? new SchedulingBookingService({ connectors, supabase }) : undefined;
   const agent = env.OPENAI_API_KEY
     ? new ConversationAgentService({
         apiKey: env.OPENAI_API_KEY,
@@ -75,5 +72,14 @@ export function createMessagingRuntime(): MessagingRuntime | null {
     supabase,
     ...(twilio ? { twilio } : {}),
   });
-  return { start: () => worker.start(), stop: () => worker.stop() };
+  const reminders = twilio ? new AppointmentReminderWorker({ connectors, supabase }) : undefined;
+  return {
+    start: () => {
+      worker.start();
+      reminders?.start();
+    },
+    stop: async () => {
+      await Promise.all([worker.stop(), reminders?.stop()]);
+    },
+  };
 }

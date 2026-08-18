@@ -113,6 +113,48 @@ const schedulingReliabilitySecurityTest = readFileSync(
   new URL('../../../supabase/tests/database/scheduling_reliability.test.sql', import.meta.url),
   'utf8',
 );
+const appointmentReminderMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260818000000_phase_8_appointment_reminders.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderSecurityTest = readFileSync(
+  new URL(
+    '../../../supabase/tests/database/appointment_reminders_security.test.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderReliabilityMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260818100000_phase_8_reminder_reliability_hardening.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderReliabilityTest = readFileSync(
+  new URL(
+    '../../../supabase/tests/database/appointment_reminder_reliability.test.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderDeliveryConsistencyMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260818110000_phase_8_reminder_delivery_consistency.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderDeliveryConsistencyTest = readFileSync(
+  new URL(
+    '../../../supabase/tests/database/appointment_reminder_delivery_consistency.test.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -458,5 +500,67 @@ describe('Google Calendar scheduling migration definition', () => {
     expect(schedulingReliabilitySecurityTest).toContain(
       'service role receives no direct integration credential table grant',
     );
+  });
+});
+
+describe('appointment reminder migration definition', () => {
+  it('keeps reminder state durable, immutable per appointment type, and off direct client writes', () => {
+    expect(appointmentReminderMigration).toContain('create table public.appointment_reminders');
+    expect(appointmentReminderMigration).toContain('appointment_reminders_appointment_type_key');
+    expect(appointmentReminderMigration).toContain('messages_appointment_reminder_key');
+    expect(appointmentReminderMigration).toContain('trusted_sms_recipient_e164');
+    expect(appointmentReminderMigration).toContain(
+      'revoke all on table public.appointment_reminder_settings, public.appointment_reminders',
+    );
+  });
+
+  it('uses service-only durable claims and never turns reminder revalidation into a provider write', () => {
+    expect(appointmentReminderMigration).toContain('for update skip locked');
+    expect(appointmentReminderMigration).toContain("interval '5 minutes'");
+    expect(appointmentReminderMigration).toContain('require_messaging_service_role');
+    expect(appointmentReminderMigration).toContain('appointment_reminders_refresh_trigger');
+    expect(appointmentReminderMigration).not.toContain('createBooking');
+  });
+
+  it('has executable pgTAP coverage for quiet hours, tenant scope, claims, and immutable delivery identity', () => {
+    expect(appointmentReminderSecurityTest).toContain('overnight quiet hours move');
+    expect(appointmentReminderSecurityTest).toContain('location-scoped member cannot read another location reminders');
+    expect(appointmentReminderSecurityTest).toContain('authenticated member cannot directly mutate reminder state');
+    expect(appointmentReminderSecurityTest).toContain('service worker atomically claims the due 24-hour reminder');
+    expect(appointmentReminderSecurityTest).toContain('immutable booking-time recipient after contact phone changes');
+  });
+
+  it('hardens rollout, earlier quiet-hour scheduling, delivery truth, and bounded reconciliation', () => {
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'normalize_completed_booking_appointments_internal',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'appointments_trusted_sms_recipient_immutable',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain('delivery_pending');
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'sync_appointment_reminder_delivery_status',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'reconcile_appointment_reminder_schedules',
+    );
+    expect(appointmentReminderReliabilityMigration).toContain('for update of appointment skip locked');
+    expect(appointmentReminderReliabilityMigration).not.toContain('createBooking');
+    expect(appointmentReminderReliabilityTest).toContain('spring-forward adjustment chooses');
+    expect(appointmentReminderReliabilityTest).toContain('STOP before submission authorizes zero Twilio sends');
+    expect(appointmentReminderReliabilityTest).toContain('bounded reconciliation creates 24-hour and 2-hour reminders exactly once');
+  });
+
+  it('projects post-send delivery failures and revalidates reminder policy before SMS submission', () => {
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain("reminder.status in ('processing', 'delivery_pending', 'sent')");
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain('reminder.schedule_version is distinct from settings.schedule_version');
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain('expected_scheduled_for is distinct from reminder.scheduled_for');
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain('for update of appointment skip locked');
+    expect(appointmentReminderDeliveryConsistencyMigration).not.toContain('createBooking');
+    expect(appointmentReminderReliabilityTest).toContain('sent then undelivered delivery projects the reminder to failed');
+    expect(appointmentReminderReliabilityTest).toContain('transition graph rejects delivered to undelivered');
+    expect(appointmentReminderDeliveryConsistencyTest).toContain('disabling 2-hour reminders after materialization authorizes zero provider sends');
+    expect(appointmentReminderDeliveryConsistencyTest).toContain('a no-op reminder settings save does not change the schedule version');
+    expect(appointmentReminderDeliveryConsistencyTest).toContain('terminal provider skips do not occupy the first bounded reconciliation batch');
   });
 });

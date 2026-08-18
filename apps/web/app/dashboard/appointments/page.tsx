@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { schedulingRpc } from '@/lib/scheduling/service';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -21,6 +23,23 @@ export default async function AppointmentsPage() {
           })
         ).data ?? [])
       : [];
+  const reminders =
+    auth && workspace.locationId
+      ? ((
+          await schedulingRpc(auth.supabase)('get_my_appointment_reminders', {
+            target_location_id: workspace.locationId,
+          })
+        ).data ?? [])
+      : [];
+  const remindersByAppointment = new Map<string, string[]>();
+  for (const reminder of reminders) {
+    const timing = reminder.reminder_type === 'appointment_24h' ? '24h' : '2h';
+    const state = reminder.status === 'sent' ? 'queued for delivery' : reminder.status;
+    remindersByAppointment.set(reminder.appointment_id, [
+      ...(remindersByAppointment.get(reminder.appointment_id) ?? []),
+      `${timing}: ${state}`,
+    ]);
+  }
   return (
     <section className="max-w-5xl">
       <p className="font-utility text-xs font-semibold uppercase tracking-[0.18em] text-primary">
@@ -33,6 +52,12 @@ export default async function AppointmentsPage() {
         Confirmed local records from approved scheduling connectors. Rescheduling and cancellation
         are not available in this phase.
       </p>
+      <Link
+        className="mt-4 inline-flex text-sm font-semibold text-primary hover:underline"
+        href="/dashboard/appointments/reminders"
+      >
+        Manage appointment reminders
+      </Link>
       <section className="mt-8 overflow-hidden rounded-2xl border border-border bg-white shadow-sm">
         {appointments.length ? (
           <div className="overflow-x-auto">
@@ -42,6 +67,7 @@ export default async function AppointmentsPage() {
                   <th className="px-4 py-3">Appointment</th>
                   <th className="px-4 py-3">Starts</th>
                   <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Reminders</th>
                   <th className="px-4 py-3">Provider</th>
                 </tr>
               </thead>
@@ -53,6 +79,10 @@ export default async function AppointmentsPage() {
                       {date(appointment.starts_at)}
                     </td>
                     <td className="px-4 py-3 capitalize text-ink">{appointment.status}</td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {remindersByAppointment.get(appointment.appointment_id)?.join(' · ') ??
+                        'Not scheduled'}
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {appointment.provider === 'ezyvet'
                         ? `ezyVet · ${appointment.provider_status ?? 'pending'}`
