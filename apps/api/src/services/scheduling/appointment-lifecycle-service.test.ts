@@ -266,19 +266,21 @@ describe('AppointmentLifecycleService staff recovery', () => {
     },
   );
 
-  it('returns a completed staff retry without opening a connector', async () => {
-    const { connectors, service } = staffServiceFor({
-      operation: 'cancel',
-      status: 'completed',
-      targetId: 'provider-target-1',
-    });
+  it.each<StaffOperation>(['cancel', 'reschedule'])(
+    'returns a completed %s retry without opening a connector or issuing a second provider mutation',
+    async (operation) => {
+      const { connector, connectors, service } = staffServiceFor({
+        operation,
+        status: 'completed',
+        targetId: 'provider-target-1',
+      });
 
-    await expect(service.executeStaffCancellation('change-1')).resolves.toEqual({
-      outcome: 'completed',
-    });
+      await expect(executeStaff(service, operation)).resolves.toEqual({ outcome: 'completed' });
 
-    expect(connectors.forIntegration).not.toHaveBeenCalled();
-  });
+      expect(connectors.forIntegration).not.toHaveBeenCalled();
+      expect(providerWriteCount(connector)).toBe(0);
+    },
+  );
 
   it('rejects an ezyVet staff reschedule without resolving or mutating a provider target', async () => {
     const { connector, service } = staffServiceFor({
