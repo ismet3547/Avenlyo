@@ -17,6 +17,15 @@ const onboardingSecurityTest = readFileSync(
   'utf8',
 );
 
+const leadsMigration = readFileSync(
+  new URL('../../../supabase/migrations/20260822000000_phase_10_leads.sql', import.meta.url),
+  'utf8',
+);
+const leadsSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/leads_security.test.sql', import.meta.url),
+  'utf8',
+);
+
 const knowledgeMigration = readFileSync(
   new URL('../../../supabase/migrations/20260816020000_phase_2_knowledge.sql', import.meta.url),
   'utf8',
@@ -456,14 +465,16 @@ describe('Google Calendar scheduling migration definition', () => {
 
   it('makes OAuth state and refresh credentials backend-only', () => {
     expect(googleCalendarMigration).toContain('create table public.oauth_connection_states');
-    expect(googleCalendarMigration).toContain("expires_at > created_at");
+    expect(googleCalendarMigration).toContain('expires_at > created_at');
     expect(googleCalendarMigration).toContain('consume_google_oauth_state');
     expect(googleCalendarMigration).toContain('vault.update_secret');
     expect(googleCalendarMigration).toContain('get_google_calendar_execution_credentials');
   });
 
   it('uses mapping-scoped resources and exclusion slot leases', () => {
-    expect(googleCalendarMigration).toContain('create table public.scheduling_appointment_type_resources');
+    expect(googleCalendarMigration).toContain(
+      'create table public.scheduling_appointment_type_resources',
+    );
     expect(googleCalendarMigration).toContain('scheduling_type_resource_resource_fk');
     expect(googleCalendarMigration).toContain('create table public.booking_slot_leases');
     expect(googleCalendarMigration).toContain('booking_slot_leases_no_overlap');
@@ -471,21 +482,39 @@ describe('Google Calendar scheduling migration definition', () => {
   });
 
   it('has executable tenant and backend-only pgTAP coverage', () => {
-    expect(googleCalendarSecurityTest).toContain('type-resource mapping rejects a cross-tenant resource');
+    expect(googleCalendarSecurityTest).toContain(
+      'type-resource mapping rejects a cross-tenant resource',
+    );
     expect(googleCalendarSecurityTest).toContain('member cannot read OAuth state');
     expect(googleCalendarSecurityTest).toContain('consumed OAuth state cannot be reused');
-    expect(googleCalendarSecurityTest).toContain('overlapping leases for the same resource are rejected');
+    expect(googleCalendarSecurityTest).toContain(
+      'overlapping leases for the same resource are rejected',
+    );
   });
 
   it('separates mutable new-write policy from durable provider recovery', () => {
     expect(schedulingReliabilityMigration).toContain('provider_booking_status');
-    expect(schedulingReliabilityMigration).toContain("intent.status = 'provider_success_pending_persistence'");
-    expect(schedulingReliabilityMigration).toContain("settings.active_integration_id = intent.integration_id");
-    expect(schedulingReliabilityMigration).toContain("intent.status = 'booking' and integration.status = 'connected'");
-    expect(schedulingReliabilityMigration).toContain('drop function public.complete_voice_booking_intent(uuid, text, text)');
-    expect(schedulingReliabilitySecurityTest).toContain('provider success persists after Google is disconnected');
-    expect(schedulingReliabilitySecurityTest).toContain('removed Google type-resource mapping blocks a first provider write');
-    expect(schedulingReliabilitySecurityTest).toContain('disabled ezyVet resource blocks a first provider write');
+    expect(schedulingReliabilityMigration).toContain(
+      "intent.status = 'provider_success_pending_persistence'",
+    );
+    expect(schedulingReliabilityMigration).toContain(
+      'settings.active_integration_id = intent.integration_id',
+    );
+    expect(schedulingReliabilityMigration).toContain(
+      "intent.status = 'booking' and integration.status = 'connected'",
+    );
+    expect(schedulingReliabilityMigration).toContain(
+      'drop function public.complete_voice_booking_intent(uuid, text, text)',
+    );
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'provider success persists after Google is disconnected',
+    );
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'removed Google type-resource mapping blocks a first provider write',
+    );
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'disabled ezyVet resource blocks a first provider write',
+    );
   });
 
   it('keeps ezyVet credentials recovery-only after a disconnect', () => {
@@ -496,7 +525,9 @@ describe('Google Calendar scheduling migration definition', () => {
     expect(schedulingReliabilitySecurityTest).toContain(
       'service role retrieves vaulted ezyVet credentials after disconnect for recovery',
     );
-    expect(schedulingReliabilitySecurityTest).toContain('a fresh ezyVet write is blocked after disconnect');
+    expect(schedulingReliabilitySecurityTest).toContain(
+      'a fresh ezyVet write is blocked after disconnect',
+    );
     expect(schedulingReliabilitySecurityTest).toContain(
       'service role receives no direct integration credential table grant',
     );
@@ -524,10 +555,18 @@ describe('appointment reminder migration definition', () => {
 
   it('has executable pgTAP coverage for quiet hours, tenant scope, claims, and immutable delivery identity', () => {
     expect(appointmentReminderSecurityTest).toContain('overnight quiet hours move');
-    expect(appointmentReminderSecurityTest).toContain('location-scoped member cannot read another location reminders');
-    expect(appointmentReminderSecurityTest).toContain('authenticated member cannot directly mutate reminder state');
-    expect(appointmentReminderSecurityTest).toContain('service worker atomically claims the due 24-hour reminder');
-    expect(appointmentReminderSecurityTest).toContain('immutable booking-time recipient after contact phone changes');
+    expect(appointmentReminderSecurityTest).toContain(
+      'location-scoped member cannot read another location reminders',
+    );
+    expect(appointmentReminderSecurityTest).toContain(
+      'authenticated member cannot directly mutate reminder state',
+    );
+    expect(appointmentReminderSecurityTest).toContain(
+      'service worker atomically claims the due 24-hour reminder',
+    );
+    expect(appointmentReminderSecurityTest).toContain(
+      'immutable booking-time recipient after contact phone changes',
+    );
   });
 
   it('hardens rollout, earlier quiet-hour scheduling, delivery truth, and bounded reconciliation', () => {
@@ -544,23 +583,71 @@ describe('appointment reminder migration definition', () => {
     expect(appointmentReminderReliabilityMigration).toContain(
       'reconcile_appointment_reminder_schedules',
     );
-    expect(appointmentReminderReliabilityMigration).toContain('for update of appointment skip locked');
+    expect(appointmentReminderReliabilityMigration).toContain(
+      'for update of appointment skip locked',
+    );
     expect(appointmentReminderReliabilityMigration).not.toContain('createBooking');
     expect(appointmentReminderReliabilityTest).toContain('spring-forward adjustment chooses');
-    expect(appointmentReminderReliabilityTest).toContain('STOP before submission authorizes zero Twilio sends');
-    expect(appointmentReminderReliabilityTest).toContain('bounded reconciliation creates 24-hour and 2-hour reminders exactly once');
+    expect(appointmentReminderReliabilityTest).toContain(
+      'STOP before submission authorizes zero Twilio sends',
+    );
+    expect(appointmentReminderReliabilityTest).toContain(
+      'bounded reconciliation creates 24-hour and 2-hour reminders exactly once',
+    );
   });
 
   it('projects post-send delivery failures and revalidates reminder policy before SMS submission', () => {
-    expect(appointmentReminderDeliveryConsistencyMigration).toContain("reminder.status in ('processing', 'delivery_pending', 'sent')");
-    expect(appointmentReminderDeliveryConsistencyMigration).toContain('reminder.schedule_version is distinct from settings.schedule_version');
-    expect(appointmentReminderDeliveryConsistencyMigration).toContain('expected_scheduled_for is distinct from reminder.scheduled_for');
-    expect(appointmentReminderDeliveryConsistencyMigration).toContain('for update of appointment skip locked');
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain(
+      "reminder.status in ('processing', 'delivery_pending', 'sent')",
+    );
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain(
+      'reminder.schedule_version is distinct from settings.schedule_version',
+    );
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain(
+      'expected_scheduled_for is distinct from reminder.scheduled_for',
+    );
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain(
+      'for update of appointment skip locked',
+    );
     expect(appointmentReminderDeliveryConsistencyMigration).not.toContain('createBooking');
-    expect(appointmentReminderReliabilityTest).toContain('sent then undelivered delivery projects the reminder to failed');
-    expect(appointmentReminderReliabilityTest).toContain('transition graph rejects delivered to undelivered');
-    expect(appointmentReminderDeliveryConsistencyTest).toContain('disabling 2-hour reminders after materialization authorizes zero provider sends');
-    expect(appointmentReminderDeliveryConsistencyTest).toContain('a no-op reminder settings save does not change the schedule version');
-    expect(appointmentReminderDeliveryConsistencyTest).toContain('terminal provider skips do not occupy the first bounded reconciliation batch');
+    expect(appointmentReminderReliabilityTest).toContain(
+      'sent then undelivered delivery projects the reminder to failed',
+    );
+    expect(appointmentReminderReliabilityTest).toContain(
+      'transition graph rejects delivered to undelivered',
+    );
+    expect(appointmentReminderDeliveryConsistencyTest).toContain(
+      'disabling 2-hour reminders after materialization authorizes zero provider sends',
+    );
+    expect(appointmentReminderDeliveryConsistencyTest).toContain(
+      'a no-op reminder settings save does not change the schedule version',
+    );
+    expect(appointmentReminderDeliveryConsistencyTest).toContain(
+      'terminal provider skips do not occupy the first bounded reconciliation batch',
+    );
+  });
+});
+
+describe('lead capture migration definition', () => {
+  it('keeps lead mutation behind service-only capture and conversion functions', () => {
+    expect(leadsMigration).toContain('create function public.capture_conversation_lead');
+    expect(leadsMigration).toContain('create function public.convert_booking_lead');
+    expect(leadsMigration).toContain('leads_one_active_conversation_idx');
+    expect(leadsMigration).toContain('leads_conversion_appointment_fk');
+    expect(leadsMigration).toContain('revoke all on table public.leads');
+    expect(leadsMigration).toContain("conversation.ai_mode = 'ai'");
+  });
+
+  it('ships executable coverage for idempotency, conflicts, direct-write denial, and location scope', () => {
+    expect(leadsSecurityTest).toContain('same inbound tool replay is idempotent');
+    expect(leadsSecurityTest).toContain(
+      'contradictory service category does not overwrite the lead',
+    );
+    expect(leadsSecurityTest).toContain('authenticated members cannot directly mutate lead state');
+    expect(leadsSecurityTest).toContain(
+      'location-scoped member reads leads at their assigned location only',
+    );
+    expect(leadsSecurityTest).toContain('cross-organization appointment references are rejected');
+    expect(leadsSecurityTest).toContain('booking conversion recovery is idempotent');
   });
 });

@@ -8,6 +8,7 @@ import {
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
 import { messagingRpc } from '@/lib/messaging/service';
+import { leadsRpc } from '@/lib/leads/service';
 
 function timestamp(value: string): string {
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(
@@ -26,6 +27,16 @@ export default async function InboxPage() {
       ).data ?? [])
     : [];
   const selected = conversations[0] ?? null;
+  const leadIndicators = auth
+    ? ((
+        await leadsRpc(auth.supabase)('get_my_inbox_lead_indicators', {
+          target_location_id: workspace.locationId,
+        })
+      ).data ?? [])
+    : [];
+  const leadByConversation = new Map(
+    leadIndicators.map((lead) => [lead.conversation_id, lead] as const),
+  );
   const messages =
     auth && selected
       ? ((
@@ -63,6 +74,11 @@ export default async function InboxPage() {
                     <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {conversation.channel_type}
                     </span>
+                    {leadByConversation.has(conversation.conversation_id) ? (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                        Lead
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-1 truncate text-xs text-muted-foreground">
                     {conversation.latest_body ?? 'No text message'}

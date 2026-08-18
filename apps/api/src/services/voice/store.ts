@@ -1,5 +1,11 @@
 import type { Database } from '@avenlyo/database';
 import type { KnowledgeSource } from '@avenlyo/ai';
+import {
+  validateLeadCapture,
+  type IndustryPack,
+  type LeadCustomerGoal,
+  type LeadUrgency,
+} from '@avenlyo/industries';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { VoiceEndReason, VoiceCallStatus } from '@avenlyo/voice';
@@ -28,6 +34,20 @@ export interface VoiceInboundBootstrap {
 }
 
 export interface VoiceStore {
+  captureLead?(input: {
+    readonly customerGoal?: LeadCustomerGoal;
+    readonly customerName?: string;
+    readonly details: Readonly<Record<string, string>>;
+    readonly externalCallId: string;
+    readonly industry: IndustryPack;
+    readonly serviceCategory?: string;
+    readonly toolCallId: string;
+    readonly triggeringInboundMessageId: string | null;
+    readonly urgency: LeadUrgency;
+  }): Promise<{
+    readonly missingFields: readonly string[];
+    readonly state: 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+  }>;
   bootstrapIncomingCall(input: {
     readonly callerE164: string | null;
     readonly dialedE164: string | null;
@@ -79,6 +99,59 @@ function toNullableRecord(value: unknown): Record<string, unknown> | null {
 /** Explicit mapping keeps privileged RPC arguments out of Fastify routes and model inputs. */
 export class SupabaseVoiceStore implements VoiceStore {
   public constructor(private readonly client: SupabaseClient<Database>) {}
+
+  public async captureLead(input: {
+    readonly customerGoal?: LeadCustomerGoal;
+    readonly customerName?: string;
+    readonly details: Readonly<Record<string, string>>;
+    readonly externalCallId: string;
+    readonly industry: IndustryPack;
+    readonly serviceCategory?: string;
+    readonly toolCallId: string;
+    readonly triggeringInboundMessageId: string | null;
+    readonly urgency: LeadUrgency;
+  }): Promise<{
+    readonly missingFields: readonly string[];
+    readonly state: 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+  }> {
+    if (!input.triggeringInboundMessageId)
+      throw new Error('Lead capture requires a caller transcript.');
+    const facts = validateLeadCapture(input.industry, {
+      ...(input.customerGoal ? { customerGoal: input.customerGoal } : {}),
+      ...(input.customerName ? { customerName: input.customerName } : {}),
+      details: input.details,
+      ...(input.serviceCategory ? { serviceCategory: input.serviceCategory } : {}),
+      urgency: input.urgency,
+    });
+    const rpc = this.client as unknown as {
+      rpc(
+        name: 'capture_conversation_lead',
+        args: Record<string, unknown>,
+      ): Promise<{
+        data:
+          | readonly {
+              readonly missing_fields: readonly string[];
+              readonly state:
+                'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+            }[]
+          | null;
+        error: { readonly message: string } | null;
+      }>;
+    };
+    const { data, error } = await rpc.rpc('capture_conversation_lead', {
+      target_customer_goal: facts.facts.customerGoal ?? null,
+      target_customer_name: facts.facts.customerName ?? null,
+      target_details: facts.facts.details,
+      target_inbound_message_id: input.triggeringInboundMessageId,
+      target_qualification: facts.qualification,
+      target_service_category: facts.facts.serviceCategory ?? null,
+      target_tool_call_id: input.toolCallId,
+      target_urgency: facts.facts.urgency,
+      target_voice_call_id: input.externalCallId,
+    });
+    if (error || !data?.[0]) throw new Error('Voice lead capture failed.');
+    return { missingFields: data[0].missing_fields, state: data[0].state };
+  }
 
   public async bootstrapIncomingCall(input: {
     readonly callerE164: string | null;

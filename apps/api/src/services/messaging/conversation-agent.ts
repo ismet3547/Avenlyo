@@ -12,6 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
 import type { AppointmentLifecycleService } from '../scheduling/appointment-lifecycle-service.js';
+import { LeadCaptureService } from '../leads/lead-capture-service.js';
 
 interface HistoryValue {
   readonly author_type?: unknown;
@@ -41,6 +42,7 @@ function historyFromJson(value: Json): readonly AgentConversationMessage[] {
 export class ConversationAgentService {
   private readonly embeddings: OpenAIEmbeddingProvider;
   private readonly provider: OpenAIResponsesProvider;
+  private readonly leadCapture: LeadCaptureService;
 
   public constructor(
     private readonly input: {
@@ -53,6 +55,7 @@ export class ConversationAgentService {
   ) {
     this.embeddings = new OpenAIEmbeddingProvider({ apiKey: input.apiKey });
     this.provider = new OpenAIResponsesProvider({ apiKey: input.apiKey, model: input.model });
+    this.leadCapture = new LeadCaptureService(input.supabase);
   }
 
   public async replyTo(
@@ -69,6 +72,15 @@ export class ConversationAgentService {
     const userMessage = history.at(-1)?.content;
     if (!userMessage) throw new Error('Inbound message body is unavailable.');
     const executor = new ControlledToolExecutor(industry, {
+      leadCapture: {
+        capture: (tool, executionContext) =>
+          this.leadCapture.capture({
+            ...tool,
+            industry,
+            inboundMessageId: executionContext.triggeringInboundMessageId ?? null,
+            voiceCallId: null,
+          }),
+      },
       requestHumanHelp: async (tool, executionContext) => {
         const { data: handoff, error: handoffError } = await this.input.supabase.rpc(
           'request_message_handoff',
@@ -136,13 +148,44 @@ export class ConversationAgentService {
           }
         : {}),
       ...(this.input.appointmentLifecycle
-        ? { appointmentLifecycle: {
-            getUpcomingAppointments: (_tool, executionContext) => this.input.appointmentLifecycle!.getUpcomingAppointments({ conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
-            getRescheduleOptions: (tool, executionContext) => this.input.appointmentLifecycle!.getRescheduleOptions({ appointmentReference: tool.appointmentReference, dates: tool.dates }, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
-            prepareReschedule: (tool, executionContext) => this.input.appointmentLifecycle!.prepareReschedule({ candidateId: tool.candidateId }, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
-            prepareCancellation: (tool, executionContext) => this.input.appointmentLifecycle!.prepareCancellation({ appointmentReference: tool.appointmentReference }, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
-            execute: (tool, executionContext) => this.input.appointmentLifecycle!.execute(tool, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
-          } }
+        ? {
+            appointmentLifecycle: {
+              getUpcomingAppointments: (_tool, executionContext) =>
+                this.input.appointmentLifecycle!.getUpcomingAppointments({
+                  conversationId: executionContext.conversationId,
+                  triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null,
+                }),
+              getRescheduleOptions: (tool, executionContext) =>
+                this.input.appointmentLifecycle!.getRescheduleOptions(
+                  { appointmentReference: tool.appointmentReference, dates: tool.dates },
+                  {
+                    conversationId: executionContext.conversationId,
+                    triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null,
+                  },
+                ),
+              prepareReschedule: (tool, executionContext) =>
+                this.input.appointmentLifecycle!.prepareReschedule(
+                  { candidateId: tool.candidateId },
+                  {
+                    conversationId: executionContext.conversationId,
+                    triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null,
+                  },
+                ),
+              prepareCancellation: (tool, executionContext) =>
+                this.input.appointmentLifecycle!.prepareCancellation(
+                  { appointmentReference: tool.appointmentReference },
+                  {
+                    conversationId: executionContext.conversationId,
+                    triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null,
+                  },
+                ),
+              execute: (tool, executionContext) =>
+                this.input.appointmentLifecycle!.execute(tool, {
+                  conversationId: executionContext.conversationId,
+                  triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null,
+                }),
+            },
+          }
         : {}),
     });
     const runtime = new AgentRuntime(this.provider, executor, this.input.model);

@@ -44,6 +44,18 @@ export class VoiceSidebandRuntime {
     this.executor = new VoiceToolExecutor(
       options.context,
       {
+        ...(options.store.captureLead
+          ? {
+              leadCapture: {
+                capture: (input, context) =>
+                  options.store.captureLead!({
+                    ...input,
+                    externalCallId: context.callId,
+                    industry: context.industry,
+                  }),
+              },
+            }
+          : {}),
         requestHumanHelp: async (input) => ({
           created: await options.store.requestHandoff({
             externalCallId: options.context.callId,

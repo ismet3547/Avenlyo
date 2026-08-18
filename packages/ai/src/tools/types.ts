@@ -22,6 +22,7 @@ export const futureToolNames = [
 
 export type FutureToolName = (typeof futureToolNames)[number];
 export type ActiveToolName =
+  | 'capture_lead'
   | 'request_human_help'
   | 'search_business_knowledge'
   | 'get_available_appointments'
@@ -56,6 +57,23 @@ export const futureToolContracts: readonly FutureToolContract[] = [
 ];
 
 export interface AgentToolServices {
+  readonly leadCapture?: {
+    capture(
+      input: {
+        readonly customerGoal?: 'appointment' | 'estimate' | 'information' | 'service';
+        readonly customerName?: string;
+        readonly details: Readonly<Record<string, string>>;
+        readonly serviceCategory?: string;
+        readonly toolCallId: string;
+        readonly urgency: 'routine' | 'soon' | 'urgent' | 'unknown';
+      },
+      context: AgentExecutionContext,
+    ): Promise<{
+      readonly state:
+        'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+      readonly missingFields: readonly string[];
+    }>;
+  };
   requestHumanHelp(
     input: {
       readonly reason: string;
@@ -112,11 +130,64 @@ export interface AgentToolServices {
     }>;
   };
   readonly appointmentLifecycle?: {
-    getUpcomingAppointments(input: { readonly toolCallId: string }, context: AgentExecutionContext): Promise<readonly { readonly appointmentReference: string; readonly endsAt: string; readonly startsAt: string; readonly timezone: string; readonly title: string }[]>;
-    getRescheduleOptions(input: { readonly appointmentReference: string; readonly dates: readonly string[]; readonly toolCallId: string }, context: AgentExecutionContext): Promise<readonly { readonly candidateId: string; readonly endsAt: string; readonly startsAt: string; readonly timezone: string }[]>;
-    prepareReschedule(input: { readonly candidateId: string; readonly toolCallId: string }, context: AgentExecutionContext): Promise<{ readonly intent: { readonly changeIntentId: string; readonly operation: string; readonly startsAt: string | null; readonly timezone: string | null } | null; readonly outcome: 'not_found' | 'ready' }>;
-    prepareCancellation(input: { readonly appointmentReference: string; readonly toolCallId: string }, context: AgentExecutionContext): Promise<{ readonly intent: { readonly changeIntentId: string; readonly operation: string; readonly startsAt: string | null; readonly timezone: string | null } | null; readonly outcome: 'not_found' | 'ready' }>;
-    execute(input: { readonly changeIntentId: string; readonly toolCallId: string }, context: AgentExecutionContext): Promise<{ readonly outcome: 'completed' | 'confirmation_required' | 'handoff_required' | 'unavailable' | 'unknown' }>;
+    getUpcomingAppointments(
+      input: { readonly toolCallId: string },
+      context: AgentExecutionContext,
+    ): Promise<
+      readonly {
+        readonly appointmentReference: string;
+        readonly endsAt: string;
+        readonly startsAt: string;
+        readonly timezone: string;
+        readonly title: string;
+      }[]
+    >;
+    getRescheduleOptions(
+      input: {
+        readonly appointmentReference: string;
+        readonly dates: readonly string[];
+        readonly toolCallId: string;
+      },
+      context: AgentExecutionContext,
+    ): Promise<
+      readonly {
+        readonly candidateId: string;
+        readonly endsAt: string;
+        readonly startsAt: string;
+        readonly timezone: string;
+      }[]
+    >;
+    prepareReschedule(
+      input: { readonly candidateId: string; readonly toolCallId: string },
+      context: AgentExecutionContext,
+    ): Promise<{
+      readonly intent: {
+        readonly changeIntentId: string;
+        readonly operation: string;
+        readonly startsAt: string | null;
+        readonly timezone: string | null;
+      } | null;
+      readonly outcome: 'not_found' | 'ready';
+    }>;
+    prepareCancellation(
+      input: { readonly appointmentReference: string; readonly toolCallId: string },
+      context: AgentExecutionContext,
+    ): Promise<{
+      readonly intent: {
+        readonly changeIntentId: string;
+        readonly operation: string;
+        readonly startsAt: string | null;
+        readonly timezone: string | null;
+      } | null;
+      readonly outcome: 'not_found' | 'ready';
+    }>;
+    execute(
+      input: { readonly changeIntentId: string; readonly toolCallId: string },
+      context: AgentExecutionContext,
+    ): Promise<{
+      readonly outcome:
+        'completed' | 'confirmation_required' | 'handoff_required' | 'unavailable' | 'unknown';
+    }>;
   };
 }
 

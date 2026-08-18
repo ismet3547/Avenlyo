@@ -44,6 +44,8 @@ export {
   availableAppointmentsSchema,
   bookAppointmentFunction,
   bookAppointmentSchema,
+  captureLeadFunction,
+  captureLeadSchema,
   getAvailableAppointmentsFunction,
   prepareAppointmentBookingFunction,
   prepareAppointmentBookingSchema,
