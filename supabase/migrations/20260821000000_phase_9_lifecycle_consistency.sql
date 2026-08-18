@@ -249,14 +249,14 @@ begin
   if intent.operation = 'cancel' then
     update public.appointments set status = 'cancelled', provider_status = 'cancelled', updated_at = now() where id = intent.appointment_id;
     update public.message_deliveries delivery set status = 'suppressed', error_code = 'appointment_cancelled', updated_at = now()
-      from public.messages message where message.id = delivery.message_id and message.appointment_reminder_id is not null and message.appointment_reminder_id in (select id from public.appointment_reminders where appointment_id = intent.appointment_id) and delivery.status = 'queued';
-    update public.appointment_reminders set status = 'skipped', last_error_code = 'appointment_cancelled', claimed_at = null, claimed_by = null, updated_at = now()
-      where appointment_id = intent.appointment_id and status in ('scheduled','processing','delivery_pending');
+      from public.messages message where message.id = delivery.message_id and message.appointment_reminder_id is not null and message.appointment_reminder_id in (select reminder.id from public.appointment_reminders reminder where reminder.appointment_id = intent.appointment_id) and delivery.status = 'queued';
+    update public.appointment_reminders reminder set status = 'skipped', last_error_code = 'appointment_cancelled', claimed_at = null, claimed_by = null, updated_at = now()
+      where reminder.appointment_id = intent.appointment_id and reminder.status in ('scheduled','processing','delivery_pending');
   else
     update public.message_deliveries delivery set status = 'suppressed', error_code = 'appointment_rescheduled', updated_at = now()
-      from public.messages message where message.id = delivery.message_id and message.appointment_reminder_id is not null and message.appointment_reminder_id in (select id from public.appointment_reminders where appointment_id = intent.appointment_id) and delivery.status = 'queued';
-    update public.appointment_reminders set status = 'skipped', last_error_code = 'appointment_rescheduled', claimed_at = null, claimed_by = null, updated_at = now()
-      where appointment_id = intent.appointment_id and status in ('scheduled','processing','delivery_pending');
+      from public.messages message where message.id = delivery.message_id and message.appointment_reminder_id is not null and message.appointment_reminder_id in (select reminder.id from public.appointment_reminders reminder where reminder.appointment_id = intent.appointment_id) and delivery.status = 'queued';
+    update public.appointment_reminders reminder set status = 'skipped', last_error_code = 'appointment_rescheduled', claimed_at = null, claimed_by = null, updated_at = now()
+      where reminder.appointment_id = intent.appointment_id and reminder.status in ('scheduled','processing','delivery_pending');
     update public.appointments set starts_at = intent.target_starts_at, ends_at = intent.target_ends_at, scheduling_resource_id = intent.target_resource_id, provider_status = 'confirmed', updated_at = now() where id = intent.appointment_id;
     perform public.refresh_appointment_reminders_internal(intent.appointment_id);
   end if;
