@@ -18,10 +18,10 @@ insert into public.location_scheduling_settings (organization_id, location_id, a
 values ('f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000001');
 insert into public.scheduling_appointment_types (id, organization_id, location_id, integration_id, provider, catalog_source, external_uid, name, default_duration_minutes, active, bookable)
 values ('f9060000-0000-0000-0000-000000000001', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000001', 'google_calendar', 'avenlyo', 'lifecycle-type', 'Lifecycle visit', 30, true, true);
-insert into public.scheduling_resources (id, organization_id, location_id, integration_id, provider, external_uid, name, active, bookable) values
-  ('f9070000-0000-0000-0000-000000000001', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000001', 'google_calendar', 'calendar-a', 'Calendar A', true, true),
-  ('f9070000-0000-0000-0000-000000000002', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000001', 'google_calendar', 'calendar-b', 'Calendar B', true, true),
-  ('f9070000-0000-0000-0000-000000000003', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000002', 'ezyvet', 'ezyvet-a', 'ezyVet A', true, true);
+insert into public.scheduling_resources (id, organization_id, location_id, integration_id, provider, external_uid, external_ownership_id, name, active, bookable) values
+  ('f9070000-0000-0000-0000-000000000001', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000001', 'google_calendar', 'calendar-a', null, 'Calendar A', true, true),
+  ('f9070000-0000-0000-0000-000000000002', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000001', 'google_calendar', 'calendar-b', null, 'Calendar B', true, true),
+  ('f9070000-0000-0000-0000-000000000003', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'f9050000-0000-0000-0000-000000000002', 'ezyvet', 'ezyvet-a', 'ezyvet-owner-a', 'ezyVet A', true, true);
 insert into public.channels (id, organization_id, location_id, channel_type, display_name)
 values ('f9080000-0000-0000-0000-000000000001', 'f9020000-0000-0000-0000-000000000001', 'f9030000-0000-0000-0000-000000000001', 'phone', 'Lifecycle phone');
 insert into public.conversations (id, organization_id, location_id, channel_id)
