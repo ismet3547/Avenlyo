@@ -131,15 +131,20 @@ begin
     where appointment.id = intent.appointment_id and appointment.status = 'confirmed' and appointment.starts_at > now()
       and integration.status = 'connected' and appointment_type.active and appointment_type.bookable
       and original_resource.active and original_resource.bookable
-      and (intent.operation = 'cancel' or ((target_candidate.id is not null and target_candidate.status = 'consumed'
-        and target_candidate.expires_at > now()) or (intent.actor_category = 'staff' and target_candidate.id is null
-        and intent.target_starts_at > now() and intent.target_ends_at > intent.target_starts_at)) and target_resource.active and target_resource.bookable
-        and (integration.provider <> 'google_calendar' or target_resource.id = original_resource.id)
-        and (integration.provider = 'ezyvet' or exists (
-          select 1 from public.scheduling_appointment_type_resources mapping where mapping.organization_id = intent.organization_id
-            and mapping.location_id = intent.location_id and mapping.integration_id = intent.integration_id
-            and mapping.appointment_type_id = appointment_type.id and mapping.resource_id = target_resource.id
-        ))))
+      and (
+        intent.operation = 'cancel'
+        or (
+          ((target_candidate.id is not null and target_candidate.status = 'consumed' and target_candidate.expires_at > now())
+            or (intent.actor_category = 'staff' and target_candidate.id is null and intent.target_starts_at > now() and intent.target_ends_at > intent.target_starts_at))
+          and target_resource.active and target_resource.bookable
+          and (integration.provider <> 'google_calendar' or target_resource.id = original_resource.id)
+          and (integration.provider = 'ezyvet' or exists (
+            select 1 from public.scheduling_appointment_type_resources mapping where mapping.organization_id = intent.organization_id
+              and mapping.location_id = intent.location_id and mapping.integration_id = intent.integration_id
+              and mapping.appointment_type_id = appointment_type.id and mapping.resource_id = target_resource.id
+          ))
+        )
+      )
   ) into eligible;
   if not eligible then
     update public.appointment_change_intents set status = 'failed', failure_category = 'configuration_changed', updated_at = now() where id = intent.id;
@@ -188,16 +193,27 @@ returns table (
     original_resource.external_uid, original_resource.name, target_resource.external_uid, target_resource.name,
     appointment_type.external_uid, appointment_type.name, appointment_type.default_duration_minutes, location.timezone,
     location.business_hours, settings.minimum_lead_minutes, candidate.expires_at, intent.status,
-    coalesce(intent.status = 'executing' and appointment.status = 'confirmed' and appointment.starts_at > now()
+    coalesce(
+      intent.status = 'executing' and appointment.status = 'confirmed' and appointment.starts_at > now()
       and integration.status = 'connected' and settings.active_integration_id = intent.integration_id
       and appointment_type.active and appointment_type.bookable and original_resource.active and original_resource.bookable
-      and (intent.operation = 'cancel' or (((candidate.status = 'consumed' and candidate.expires_at > now())
-        or (intent.actor_category = 'staff' and candidate.id is null and intent.target_starts_at > now() and intent.target_ends_at > intent.target_starts_at))
-        and target_resource.active and target_resource.bookable and (integration.provider <> 'google_calendar' or target_resource.id = original_resource.id)
-        and (integration.provider = 'ezyvet' or exists (select 1 from public.scheduling_appointment_type_resources mapping
-          where mapping.organization_id = intent.organization_id and mapping.location_id = intent.location_id
-            and mapping.integration_id = intent.integration_id and mapping.appointment_type_id = appointment_type.id
-            and mapping.resource_id = target_resource.id)))), false)
+      and (
+        intent.operation = 'cancel'
+        or (
+          ((candidate.status = 'consumed' and candidate.expires_at > now())
+            or (intent.actor_category = 'staff' and candidate.id is null and intent.target_starts_at > now() and intent.target_ends_at > intent.target_starts_at))
+          and target_resource.active and target_resource.bookable
+          and (integration.provider <> 'google_calendar' or target_resource.id = original_resource.id)
+          and (integration.provider = 'ezyvet' or exists (
+            select 1 from public.scheduling_appointment_type_resources mapping
+            where mapping.organization_id = intent.organization_id and mapping.location_id = intent.location_id
+              and mapping.integration_id = intent.integration_id and mapping.appointment_type_id = appointment_type.id
+              and mapping.resource_id = target_resource.id
+          ))
+        )
+      ),
+      false
+    )
   from public.appointment_change_intents intent
   join public.appointments appointment on appointment.organization_id = intent.organization_id and appointment.id = intent.appointment_id
   join public.booking_intents booking on booking.organization_id = intent.organization_id and booking.id = intent.booking_intent_id
