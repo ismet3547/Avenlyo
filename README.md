@@ -537,8 +537,18 @@ message. Appointments without that verified recipient are safely skipped. Existi
 sender opt-out policy is checked again before materializing and before submitting SMS. Materializing
 a message produces `delivery_pending`, not `sent`: the existing Phase 7 Twilio delivery state
 machine is authoritative. Only `sent`/`delivered` marks a reminder sent; suppression skips it, and
-failed, undelivered, or unknown delivery outcomes mark it failed. No delivery transition retries a
-provider submission blindly.
+failed, undelivered, or unknown delivery outcomes mark it failed. This includes a legitimate
+Phase 7 sent-to-undelivered callback; a terminal `delivered` callback cannot later be changed
+to undelivered by the delivery transition graph. No delivery transition retries a provider
+submission blindly.
+
+Immediately before the single Phase 7 queued-to-submitting authorization, the database checks
+the exact 24-hour/2-hour toggle, current schedule version, current appointment time, quiet-hour
+calculation, active sender, and opt-out state. A materialized reminder is suppressed rather than
+sent if any of these changed. A no-op settings save leaves the schedule version unchanged. Bounded
+reconciliation considers only scheduled rows and recoverable configuration skips as policy-stale,
+so terminal provider, delivery, opt-out, and elapsed-window outcomes cannot starve later eligible
+appointments.
 
 For Google Calendar and ezyVet appointments, the worker performs only the existing bounded
 read/reconciliation path immediately before creating the local reminder message. A disconnected,

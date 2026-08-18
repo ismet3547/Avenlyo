@@ -141,6 +141,20 @@ const appointmentReminderReliabilityTest = readFileSync(
   ),
   'utf8',
 );
+const appointmentReminderDeliveryConsistencyMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260818110000_phase_8_reminder_delivery_consistency.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const appointmentReminderDeliveryConsistencyTest = readFileSync(
+  new URL(
+    '../../../supabase/tests/database/appointment_reminder_delivery_consistency.test.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -535,5 +549,18 @@ describe('appointment reminder migration definition', () => {
     expect(appointmentReminderReliabilityTest).toContain('spring-forward adjustment chooses');
     expect(appointmentReminderReliabilityTest).toContain('STOP before submission authorizes zero Twilio sends');
     expect(appointmentReminderReliabilityTest).toContain('bounded reconciliation creates 24-hour and 2-hour reminders exactly once');
+  });
+
+  it('projects post-send delivery failures and revalidates reminder policy before SMS submission', () => {
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain("reminder.status in ('processing', 'delivery_pending', 'sent')");
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain('reminder.schedule_version is distinct from settings.schedule_version');
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain('expected_scheduled_for is distinct from reminder.scheduled_for');
+    expect(appointmentReminderDeliveryConsistencyMigration).toContain('for update of appointment skip locked');
+    expect(appointmentReminderDeliveryConsistencyMigration).not.toContain('createBooking');
+    expect(appointmentReminderReliabilityTest).toContain('sent then undelivered delivery projects the reminder to failed');
+    expect(appointmentReminderReliabilityTest).toContain('transition graph rejects delivered to undelivered');
+    expect(appointmentReminderDeliveryConsistencyTest).toContain('disabling 2-hour reminders after materialization authorizes zero provider sends');
+    expect(appointmentReminderDeliveryConsistencyTest).toContain('a no-op reminder settings save does not change the schedule version');
+    expect(appointmentReminderDeliveryConsistencyTest).toContain('terminal provider skips do not occupy the first bounded reconciliation batch');
   });
 });

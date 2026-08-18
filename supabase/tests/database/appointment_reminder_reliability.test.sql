@@ -3,7 +3,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(36);
+select extensions.plan(44);
 
 select extensions.is(
   public.reminder_local_time('2026-08-20 21:00:00+00', 'UTC', '20:00', '08:00'),
@@ -114,19 +114,92 @@ select extensions.is(
   'delivery_pending',
   'message materialization is delivery pending rather than sent'
 );
-update public.message_deliveries set status = 'submitted'
-where message_id = (select message_id from public.appointment_reminders where id = current_setting('app.reminder_one')::uuid);
+select set_config('app.message_one', (select message_id::text from public.appointment_reminders where id = current_setting('app.reminder_one')::uuid), true);
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select count(*)::integer from public.claim_sms_delivery_submission(current_setting('app.message_one')::uuid)),
+  1,
+  'the queued reminder delivery receives the Phase 7 single-send authorization'
+);
+select public.record_sms_delivery_submission(
+  current_setting('app.message_one')::uuid,
+  'SM11111111111111111111111111111111',
+  'queued'
+);
+reset role;
 select extensions.is(
   (select status from public.appointment_reminders where id = current_setting('app.reminder_one')::uuid),
   'delivery_pending',
   'Twilio acceptance remains delivery pending'
 );
-update public.message_deliveries set status = 'sent'
-where message_id = (select message_id from public.appointment_reminders where id = current_setting('app.reminder_one')::uuid);
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select public.record_twilio_message_status('SM11111111111111111111111111111111', 'sent');
+reset role;
 select extensions.is(
   (select status from public.appointment_reminders where id = current_setting('app.reminder_one')::uuid),
   'sent',
   'a sent delivery callback is the only success transition'
+);
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select public.record_twilio_message_status('SM11111111111111111111111111111111', 'undelivered', '30003');
+reset role;
+select extensions.is(
+  (select status from public.message_deliveries where message_id = current_setting('app.message_one')::uuid),
+  'undelivered',
+  'Phase 7 permits the legitimate sent to undelivered delivery transition'
+);
+select extensions.is(
+  (select status from public.appointment_reminders where id = current_setting('app.reminder_one')::uuid),
+  'failed',
+  'a sent then undelivered delivery projects the reminder to failed'
+);
+select extensions.is(
+  (select last_error_code from public.appointment_reminders where id = current_setting('app.reminder_one')::uuid),
+  'delivery_failed',
+  'an undelivered callback stores the normalized reminder failure reason'
+);
+select extensions.ok(
+  exists (
+    select 1 from public.action_logs
+    where entity_id = current_setting('app.reminder_one')::uuid and action = 'appointment.reminder.failed'
+  ),
+  'the sent to undelivered transition records a failed reminder audit event'
+);
+
+insert into public.appointments (id, organization_id, location_id, title, status, starts_at, ends_at, trusted_sms_recipient_e164)
+values ('a9150000-0000-0000-0000-000000000007', 'a9100000-0000-0000-0000-000000000001', 'a9110000-0000-0000-0000-000000000001', 'Delivered terminal', 'confirmed', now() + interval '23 hours', now() + interval '23 hours 30 minutes', '+14155550129');
+update public.appointment_reminders set status = 'processing', revalidation_status = 'not_required'
+where appointment_id = 'a9150000-0000-0000-0000-000000000007' and reminder_type = 'appointment_24h';
+select set_config('app.reminder_delivered', (select id::text from public.appointment_reminders where appointment_id = 'a9150000-0000-0000-0000-000000000007' and reminder_type = 'appointment_24h'), true);
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select * from public.create_appointment_reminder_message(current_setting('app.reminder_delivered')::uuid);
+reset role;
+select set_config('app.message_delivered', (select message_id::text from public.appointment_reminders where id = current_setting('app.reminder_delivered')::uuid), true);
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select * from public.claim_sms_delivery_submission(current_setting('app.message_delivered')::uuid);
+select public.record_sms_delivery_submission(current_setting('app.message_delivered')::uuid, 'SM22222222222222222222222222222222', 'sent');
+select public.record_twilio_message_status('SM22222222222222222222222222222222', 'delivered');
+select public.record_twilio_message_status('SM22222222222222222222222222222222', 'undelivered', '30003');
+reset role;
+select extensions.is(
+  (select status from public.message_deliveries where message_id = current_setting('app.message_delivered')::uuid),
+  'delivered',
+  'the Phase 7 transition graph rejects delivered to undelivered'
+);
+select extensions.is(
+  (select status from public.appointment_reminders where id = current_setting('app.reminder_delivered')::uuid),
+  'sent',
+  'a sent then delivered reminder remains sent'
+);
+select extensions.is(
+  (select last_error_code from public.appointment_reminders where id = current_setting('app.reminder_delivered')::uuid),
+  null::text,
+  'a delivered reminder is not overwritten with a delivery failure'
 );
 
 insert into public.appointments (id, organization_id, location_id, title, status, starts_at, ends_at, trusted_sms_recipient_e164)
