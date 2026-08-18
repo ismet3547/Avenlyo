@@ -247,11 +247,13 @@ begin
   select * into intent from public.appointment_change_intents where id = target_change_intent_id for update;
   if intent.id is null or intent.status <> 'provider_success_pending_persistence' then raise exception using errcode = '42501', message = 'Appointment change has not recorded provider success'; end if;
   if intent.operation = 'cancel' then
-    update public.appointments set status = 'cancelled', provider_status = 'cancelled', updated_at = now() where id = intent.appointment_id;
+    -- Invalidate actionable reminder work before the appointment-status trigger runs. That
+    -- preserves the durable cancellation reason and leaves sent history untouched.
     update public.message_deliveries delivery set status = 'suppressed', error_code = 'appointment_cancelled', updated_at = now()
       from public.messages message where message.id = delivery.message_id and message.appointment_reminder_id is not null and message.appointment_reminder_id in (select reminder.id from public.appointment_reminders reminder where reminder.appointment_id = intent.appointment_id) and delivery.status = 'queued';
     update public.appointment_reminders reminder set status = 'skipped', last_error_code = 'appointment_cancelled', claimed_at = null, claimed_by = null, updated_at = now()
       where reminder.appointment_id = intent.appointment_id and reminder.status in ('scheduled','processing','delivery_pending');
+    update public.appointments set status = 'cancelled', provider_status = 'cancelled', updated_at = now() where id = intent.appointment_id;
   else
     update public.message_deliveries delivery set status = 'suppressed', error_code = 'appointment_rescheduled', updated_at = now()
       from public.messages message where message.id = delivery.message_id and message.appointment_reminder_id is not null and message.appointment_reminder_id in (select reminder.id from public.appointment_reminders reminder where reminder.appointment_id = intent.appointment_id) and delivery.status = 'queued';
