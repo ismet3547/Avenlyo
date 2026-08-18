@@ -11,6 +11,19 @@ export const requestHumanHelpSchema = z
   })
   .strict();
 
+/** Model-provided lead data intentionally excludes identity, tenancy, status, and identifiers. */
+export const captureLeadSchema = z
+  .object({
+    customerGoal: z.enum(['appointment', 'estimate', 'information', 'service']).optional(),
+    customerName: z.string().trim().min(1).max(120).optional(),
+    details: z
+      .record(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), z.string().trim().min(1).max(500))
+      .refine((value) => Object.keys(value).length <= 12, 'Too many detail fields.'),
+    serviceCategory: z.string().trim().min(1).max(80).optional(),
+    urgency: z.enum(['routine', 'soon', 'urgent', 'unknown']),
+  })
+  .strict();
+
 export const availableAppointmentsSchema = z
   .object({
     appointment_type: z.string().trim().min(1).max(160),
@@ -28,10 +41,24 @@ export const prepareAppointmentBookingSchema = z
   .strict();
 export const bookAppointmentSchema = z.object({ booking_intent_id: z.string().uuid() }).strict();
 export const upcomingAppointmentsSchema = z.object({}).strict();
-export const rescheduleOptionsSchema = z.object({ appointment_reference: z.string().uuid(), dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(14) }).strict();
-export const prepareAppointmentRescheduleSchema = z.object({ candidate_id: z.string().uuid() }).strict();
-export const prepareAppointmentCancellationSchema = z.object({ appointment_reference: z.string().uuid() }).strict();
-export const appointmentChangeExecutionSchema = z.object({ change_intent_id: z.string().uuid() }).strict();
+export const rescheduleOptionsSchema = z
+  .object({
+    appointment_reference: z.string().uuid(),
+    dates: z
+      .array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/))
+      .min(1)
+      .max(14),
+  })
+  .strict();
+export const prepareAppointmentRescheduleSchema = z
+  .object({ candidate_id: z.string().uuid() })
+  .strict();
+export const prepareAppointmentCancellationSchema = z
+  .object({ appointment_reference: z.string().uuid() })
+  .strict();
+export const appointmentChangeExecutionSchema = z
+  .object({ change_intent_id: z.string().uuid() })
+  .strict();
 
 export const searchBusinessKnowledgeFunction = {
   description:
@@ -59,6 +86,25 @@ export const requestHumanHelpFunction = {
       urgency: { enum: ['normal', 'urgent'], type: 'string' },
     },
     required: ['reason', 'urgency'],
+    type: 'object',
+  },
+  strict: true,
+} as const;
+
+export const captureLeadFunction = {
+  description:
+    'Capture a customer lead from the current customer turn when they express a service interest. Supply only observed business facts; never invent details or include identifiers.',
+  name: 'capture_lead',
+  parameters: {
+    additionalProperties: false,
+    properties: {
+      customerGoal: { enum: ['appointment', 'estimate', 'information', 'service'], type: 'string' },
+      customerName: { type: 'string' },
+      details: { additionalProperties: { type: 'string' }, type: 'object' },
+      serviceCategory: { type: 'string' },
+      urgency: { enum: ['routine', 'soon', 'urgent', 'unknown'], type: 'string' },
+    },
+    required: ['details', 'urgency'],
     type: 'object',
   },
   strict: true,
@@ -101,12 +147,55 @@ export const bookAppointmentFunction = {
   },
   strict: true,
 } as const;
-function lifecycleFunction(name: string, description: string, properties: Record<string, unknown>, required: readonly string[]) {
-  return { description, name, parameters: { additionalProperties: false, properties, required, type: 'object' }, strict: true } as const;
+function lifecycleFunction(
+  name: string,
+  description: string,
+  properties: Record<string, unknown>,
+  required: readonly string[],
+) {
+  return {
+    description,
+    name,
+    parameters: { additionalProperties: false, properties, required, type: 'object' },
+    strict: true,
+  } as const;
 }
-export const getUpcomingAppointmentsFunction = lifecycleFunction('get_upcoming_appointments', 'List only the caller’s safely authorized upcoming appointments.', {}, []);
-export const getRescheduleOptionsFunction = lifecycleFunction('get_reschedule_options', 'Find safe reschedule options for one opaque appointment reference.', { appointment_reference: { type: 'string' }, dates: { type: 'array', items: { type: 'string' } } }, ['appointment_reference', 'dates']);
-export const prepareAppointmentRescheduleFunction = lifecycleFunction('prepare_appointment_reschedule', 'Prepare one offered reschedule option. This does not change the appointment.', { candidate_id: { type: 'string' } }, ['candidate_id']);
-export const prepareAppointmentCancellationFunction = lifecycleFunction('prepare_appointment_cancellation', 'Prepare cancellation for one opaque appointment reference. This does not cancel it.', { appointment_reference: { type: 'string' } }, ['appointment_reference']);
-export const rescheduleAppointmentFunction = lifecycleFunction('reschedule_appointment', 'Execute a prepared reschedule only after the current customer message explicitly confirms it.', { change_intent_id: { type: 'string' } }, ['change_intent_id']);
-export const cancelAppointmentFunction = lifecycleFunction('cancel_appointment', 'Execute a prepared cancellation only after the current customer message explicitly confirms cancellation.', { change_intent_id: { type: 'string' } }, ['change_intent_id']);
+export const getUpcomingAppointmentsFunction = lifecycleFunction(
+  'get_upcoming_appointments',
+  'List only the caller’s safely authorized upcoming appointments.',
+  {},
+  [],
+);
+export const getRescheduleOptionsFunction = lifecycleFunction(
+  'get_reschedule_options',
+  'Find safe reschedule options for one opaque appointment reference.',
+  {
+    appointment_reference: { type: 'string' },
+    dates: { type: 'array', items: { type: 'string' } },
+  },
+  ['appointment_reference', 'dates'],
+);
+export const prepareAppointmentRescheduleFunction = lifecycleFunction(
+  'prepare_appointment_reschedule',
+  'Prepare one offered reschedule option. This does not change the appointment.',
+  { candidate_id: { type: 'string' } },
+  ['candidate_id'],
+);
+export const prepareAppointmentCancellationFunction = lifecycleFunction(
+  'prepare_appointment_cancellation',
+  'Prepare cancellation for one opaque appointment reference. This does not cancel it.',
+  { appointment_reference: { type: 'string' } },
+  ['appointment_reference'],
+);
+export const rescheduleAppointmentFunction = lifecycleFunction(
+  'reschedule_appointment',
+  'Execute a prepared reschedule only after the current customer message explicitly confirms it.',
+  { change_intent_id: { type: 'string' } },
+  ['change_intent_id'],
+);
+export const cancelAppointmentFunction = lifecycleFunction(
+  'cancel_appointment',
+  'Execute a prepared cancellation only after the current customer message explicitly confirms cancellation.',
+  { change_intent_id: { type: 'string' } },
+  ['change_intent_id'],
+);

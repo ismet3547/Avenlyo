@@ -18,6 +18,18 @@ export interface BookingCapabilities {
   appointmentTypes: readonly string[];
 }
 
+export type LeadUrgency = 'routine' | 'soon' | 'urgent' | 'unknown';
+export type LeadCustomerGoal = 'appointment' | 'estimate' | 'information' | 'service';
+
+/** Declarative lead facts keep industry requirements out of transports and persistence. */
+export interface LeadQualification {
+  readonly serviceCategories: readonly string[];
+  readonly requiredFields: readonly string[];
+  readonly optionalFields: readonly string[];
+  readonly sensitiveFields: readonly string[];
+  readonly urgencyPolicy: { readonly urgentRequiresHumanReview: boolean };
+}
+
 /**
  * A declarative domain boundary for AI Front Office behaviour. Runtime implementations consume
  * packs; they should not spread industry conditionals across routes or services.
@@ -30,4 +42,5 @@ export interface IndustryPack {
   allowedActions: readonly AgentAction[];
   escalationRules: readonly EscalationRule[];
   bookingCapabilities: BookingCapabilities;
+  leadQualification: LeadQualification;
 }

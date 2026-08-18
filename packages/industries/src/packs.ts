@@ -19,6 +19,13 @@ export const veterinaryPack: IndustryPack = {
     supportsAppointments: true,
     appointmentTypes: ['consultation'],
   },
+  leadQualification: {
+    serviceCategories: ['wellness', 'vaccination', 'sick_visit', 'grooming', 'other'],
+    requiredFields: [],
+    optionalFields: ['pet_name', 'species'],
+    sensitiveFields: [],
+    urgencyPolicy: { urgentRequiresHumanReview: true },
+  },
 };
 
 export const autoRepairPack: IndustryPack = {
@@ -39,6 +46,13 @@ export const autoRepairPack: IndustryPack = {
     supportsAppointments: true,
     appointmentTypes: ['service-visit'],
   },
+  leadQualification: {
+    serviceCategories: ['maintenance', 'repair', 'inspection', 'diagnostic', 'other'],
+    requiredFields: [],
+    optionalFields: ['vehicle_make', 'vehicle_model', 'vehicle_year'],
+    sensitiveFields: [],
+    urgencyPolicy: { urgentRequiresHumanReview: true },
+  },
 };
 
 export const medspaPack: IndustryPack = {
@@ -58,6 +72,21 @@ export const medspaPack: IndustryPack = {
   bookingCapabilities: {
     supportsAppointments: true,
     appointmentTypes: ['consultation'],
+  },
+  leadQualification: {
+    serviceCategories: [
+      'consultation',
+      'facial',
+      'injectables_interest',
+      'laser_or_energy',
+      'skin_treatment',
+      'body_contouring',
+      'other',
+    ],
+    requiredFields: [],
+    optionalFields: [],
+    sensitiveFields: ['medical_history', 'contraindications'],
+    urgencyPolicy: { urgentRequiresHumanReview: true },
   },
 };
 
