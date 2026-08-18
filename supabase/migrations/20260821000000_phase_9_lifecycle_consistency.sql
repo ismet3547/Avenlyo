@@ -135,10 +135,10 @@ begin
         or (channel.channel_type = 'phone' and target_trusted_caller_e164 is not null
           and target_trusted_caller_e164 = coalesce(appointment.trusted_sms_recipient_e164, booking.trusted_transport_phone_e164)))
   ), saved as (
-    insert into public.appointment_management_targets (organization_id, location_id, conversation_id, appointment_id, inbound_message_id, expires_at)
+    insert into public.appointment_management_targets as management_target (organization_id, location_id, conversation_id, appointment_id, inbound_message_id, expires_at)
     select conversation_row.organization_id, conversation_row.location_id, conversation_row.id, eligible.id, inbound.id, now() + interval '10 minutes' from eligible
     on conflict (organization_id, conversation_id, appointment_id, inbound_message_id) do update set expires_at = excluded.expires_at, updated_at = now()
-    returning id, appointment_id, expires_at
+    returning management_target.id, management_target.appointment_id, management_target.expires_at
   )
   select saved.id, eligible.title, eligible.starts_at, eligible.ends_at, eligible.timezone, saved.expires_at from saved join eligible on eligible.id = saved.appointment_id;
 end;
