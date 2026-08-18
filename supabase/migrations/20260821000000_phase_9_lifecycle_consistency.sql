@@ -69,8 +69,9 @@ begin
       continue;
     end if;
 
-    -- Reopen only a non-materialized, policy-recoverable row. A sent or materialized reminder
-    -- stays historical, and a fresh schedule is inserted instead.
+    -- Refresh the current unsent schedule, or reopen a non-materialized policy-recoverable
+    -- skip. A sent or materialized reminder stays historical, and a fresh schedule is inserted
+    -- instead.
     update public.appointment_reminders set
       scheduled_for = reminder_time,
       trusted_sms_recipient_e164 = coalesce(trusted_sms_recipient_e164, appointment_row.trusted_sms_recipient_e164),
@@ -80,8 +81,14 @@ begin
     where id = (
       select reminder.id from public.appointment_reminders reminder
       where reminder.appointment_id = appointment_row.id and reminder.reminder_type = schedule.reminder_type
-        and reminder.message_id is null and reminder.status = 'skipped'
-        and reminder.last_error_code in ('sms_disabled', 'reminder_disabled', 'quiet_hours_outside_send_window', 'no_trusted_recipient')
+        and reminder.message_id is null
+        and (
+          reminder.status = 'scheduled'
+          or (
+            reminder.status = 'skipped'
+            and reminder.last_error_code in ('sms_disabled', 'reminder_disabled', 'quiet_hours_outside_send_window', 'no_trusted_recipient')
+          )
+        )
       order by reminder.created_at desc limit 1 for update
     );
     get diagnostics reopened_count = row_count;

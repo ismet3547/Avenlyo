@@ -173,7 +173,7 @@ select extensions.is(
 reset role;
 select set_config(
   'app.reminder_id',
-  (select id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'),
+  (select id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h' and status = 'processing' and message_id is null),
   true
 );
 set local role service_role;
@@ -189,19 +189,19 @@ select extensions.lives_ok(
 reset role;
 
 select extensions.is(
-  (select count(*)::integer from public.messages where appointment_reminder_id = (select id from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h')),
+  (select count(*)::integer from public.messages where appointment_reminder_id = current_setting('app.reminder_id')::uuid),
   1,
   'a claimed reminder has exactly one outbound message'
 );
 select extensions.is(
-  (select count(*)::integer from public.message_deliveries delivery join public.messages message on message.id = delivery.message_id where message.appointment_reminder_id = (select id from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h')),
+  (select count(*)::integer from public.message_deliveries delivery join public.messages message on message.id = delivery.message_id where message.appointment_reminder_id = current_setting('app.reminder_id')::uuid),
   1,
   'a reminder message has exactly one Twilio delivery record'
 );
 update public.contacts set phone = '+14155550999' where phone = '+14155550811';
 select set_config(
   'app.reminder_message_id',
-  (select message_id::text from public.appointment_reminders where appointment_id = 'e8150000-0000-0000-0000-000000000001' and reminder_type = 'appointment_24h'),
+  (select message_id::text from public.appointment_reminders where id = current_setting('app.reminder_id')::uuid),
   true
 );
 set local role service_role;
