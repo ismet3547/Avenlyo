@@ -126,10 +126,14 @@ reset role;
 
 -- Make the claim assertion independent of the wall clock while keeping the
 -- reminder-generation assertions above in the normal quiet-hours path.
-update public.appointment_reminders
-set scheduled_for = now() - interval '1 minute'
-where appointment_id = 'e8150000-0000-0000-0000-000000000001'
-  and reminder_type = 'appointment_24h';
+update public.appointment_reminders reminder
+set scheduled_for = (
+  select appointment.starts_at - interval '24 hours'
+  from public.appointments appointment
+  where appointment.id = reminder.appointment_id
+)
+where reminder.appointment_id = 'e8150000-0000-0000-0000-000000000001'
+  and reminder.reminder_type = 'appointment_24h';
 
 insert into public.appointments (id, organization_id, location_id, title, status, starts_at, ends_at, trusted_sms_recipient_e164)
 values

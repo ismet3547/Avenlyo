@@ -222,6 +222,16 @@ reset role;
 select extensions.is((select status from public.message_deliveries where message_id = current_setting('app.policy_message_noop')::uuid), 'submitting', 'a no-op settings save leaves the valid reminder in the authorized submitting state');
 
 -- More than a worker batch of terminal stale skips cannot monopolize bounded reconciliation.
+-- The policy-delivery fixtures above intentionally leave their opposite reminder type unsent. Mark
+-- those setup-only rows terminal before testing the isolated reconciliation location below.
+update public.appointment_reminders reminder
+set status = 'skipped', last_error_code = 'provider_unavailable',
+  schedule_version = (
+    select settings.schedule_version from public.appointment_reminder_settings settings
+    where settings.location_id = reminder.location_id
+  )
+where reminder.location_id = 'a9730000-0000-0000-0000-000000000001'
+  and reminder.message_id is null;
 insert into public.locations (id, organization_id, name, timezone)
 values ('a9760000-0000-0000-0000-000000000001', 'a9710000-0000-0000-0000-000000000001', 'Reconciliation progress', 'UTC');
 insert into public.phone_numbers (id, organization_id, location_id, phone_number, status, sms_enabled)
