@@ -199,6 +199,16 @@ describe('ezyVet connector contracts', () => {
     });
   });
 
+  it('uses the documented single appointment merge-patch for cancellation', async () => {
+    const transport = new FakeEzyVetTransport();
+    transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });
+    transport.enqueue({ body: { data: { active: false } }, status: 200 });
+    const connector = new EzyVetConnector(client(transport));
+    await connector.cancelAppointment({ appointmentKey: 'appointment_1', bookingIntentId: 'intent_1', integrationId: 'integration_1', originalEndAt: '2026-09-01T10:30:00.000Z', originalStartAt: '2026-09-01T10:00:00.000Z', resource: { key: 'resource_1', name: 'Dr Ray', schedulingScopeKey: null }, timezone: 'UTC' });
+    expect(transport.requests[1]).toMatchObject({ body: { cancel: true, cancellation_reason_text: 'Cancelled by customer through Avenlyo' }, headers: expect.objectContaining({ 'Content-Type': 'application/merge-patch+json' }), method: 'PATCH', url: 'https://api.trial.ezyvet.com/v2/appointment/appointment_1' });
+    expect(transport.requests.filter((entry) => entry.method === 'PATCH')).toHaveLength(1);
+  });
+
   it('parses ezyCAB availability, splits 14 days into two seven-day requests, and deduplicates slots', async () => {
     const transport = new FakeEzyVetTransport();
     transport.enqueue({ body: { access_token: 'token_1', expires_in: 3_600 }, status: 200 });

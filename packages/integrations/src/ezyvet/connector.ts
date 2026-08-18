@@ -1,6 +1,9 @@
 import type {
   AvailabilityRequest,
   AvailabilitySlot,
+  AppointmentLifecycleRequest,
+  AppointmentLifecycleState,
+  AppointmentRescheduleRequest,
   BookingConnector,
   BookingReconciliationRequest,
   BookingReconciliationResult,
@@ -14,6 +17,7 @@ import type {
   SubjectResolution,
   SubjectResolutionRequest,
 } from '../scheduling/types';
+import { BookingProviderError } from '../scheduling/errors';
 
 import { loadAvailability } from './availability';
 import { resolveOwnedAnimal } from './animals';
@@ -55,6 +59,7 @@ function validTimeZone(value: string): boolean {
 }
 
 export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector {
+  public readonly appointmentLifecycle = { canCancel: true, canReschedule: false } as const;
   public readonly provider = 'ezyvet' as const;
 
   public constructor(private readonly client: EzyVetClient) {}
@@ -98,6 +103,33 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
     return resolveOwnedAnimal(this.client, input.customer, input.petName);
   }
 
+  public async getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
+    try {
+      const result = await this.client.getCore(`/v2/appointment/${encodeURIComponent(input.appointmentKey)}`);
+      const active = this.appointmentActive(result);
+      if (active === null) return { kind: 'ambiguous' };
+      return active
+        ? { kind: 'active', appointmentKey: input.appointmentKey }
+        : { kind: 'cancelled', appointmentKey: input.appointmentKey };
+    } catch (error) {
+      if (error instanceof BookingProviderError && error.category === 'not_found') return { kind: 'not_found' };
+      throw error;
+    }
+  }
+
+  public async cancelAppointment(input: AppointmentLifecycleRequest): Promise<AppointmentLifecycleState> {
+    await this.client.patchCore(`/v2/appointment/${encodeURIComponent(input.appointmentKey)}`, {
+      cancel: true,
+      cancellation_reason_text: 'Cancelled by customer through Avenlyo',
+    });
+    return { kind: 'cancelled', appointmentKey: input.appointmentKey };
+  }
+
+  public rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState> {
+    void input;
+    return Promise.reject(new BookingProviderError('invalid_request', 'This provider requires clinic handling for rescheduling.'));
+  }
+
   public async resolveBookingParty(
     input: BookingPartyResolutionRequest,
   ): Promise<BookingPartyResolution> {
@@ -120,5 +152,14 @@ export class EzyVetConnector implements BookingConnector, EzyVetCatalogConnector
         subject: { displayName: subject.subject.displayName, providerKey: subject.subject.key },
       },
     };
+  }
+
+  private appointmentActive(value: unknown): boolean | null {
+    if (!value || typeof value !== 'object') return null;
+    const root = value as Record<string, unknown>;
+    const data = root.data && typeof root.data === 'object' ? root.data as Record<string, unknown> : root;
+    if (typeof data.active === 'boolean') return data.active;
+    if (typeof data.cancelled === 'boolean') return !data.cancelled;
+    return null;
   }
 }

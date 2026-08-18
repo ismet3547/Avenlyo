@@ -99,16 +99,48 @@ export type BookingReconciliationResult =
   | { readonly kind: 'not_found' }
   | { readonly kind: 'ambiguous' };
 
+export interface AppointmentLifecycleCapabilities {
+  readonly canCancel: boolean;
+  readonly canReschedule: boolean;
+}
+
+/** All identities in this request come from a durable, trusted change intent. */
+export interface AppointmentLifecycleRequest {
+  readonly appointmentKey: string;
+  readonly bookingIntentId: string | null;
+  readonly integrationId: string;
+  readonly originalEndAt: string;
+  readonly originalStartAt: string;
+  readonly resource: BookingResource;
+  readonly timezone: string;
+}
+
+export interface AppointmentRescheduleRequest extends AppointmentLifecycleRequest {
+  readonly targetEndAt: string;
+  readonly targetStartAt: string;
+}
+
+export type AppointmentLifecycleState =
+  | { readonly kind: 'active'; readonly appointmentKey: string }
+  | { readonly kind: 'cancelled'; readonly appointmentKey: string }
+  | { readonly kind: 'rescheduled'; readonly appointmentKey: string }
+  | { readonly kind: 'not_found' }
+  | { readonly kind: 'ambiguous' };
+
 /**
  * A connector owns all provider-specific identity behaviour. ezyVet resolves an exact
  * Contact/Animal pair; Google Calendar carries trusted local caller context and never invents a
  * Google customer identifier.
  */
 export interface BookingConnector {
+  readonly appointmentLifecycle: AppointmentLifecycleCapabilities;
   readonly provider: BookingProvider;
+  cancelAppointment(input: AppointmentLifecycleRequest): Promise<AppointmentLifecycleState>;
   createBooking(input: CreateBookingRequest): Promise<CreateBookingResult>;
+  getAppointmentState(input: AppointmentLifecycleRequest | AppointmentRescheduleRequest): Promise<AppointmentLifecycleState>;
   reconcileBooking?(input: BookingReconciliationRequest): Promise<BookingReconciliationResult>;
   getAvailability(input: AvailabilityRequest): Promise<readonly AvailabilitySlot[]>;
+  rescheduleAppointment(input: AppointmentRescheduleRequest): Promise<AppointmentLifecycleState>;
   resolveBookingParty(input: BookingPartyResolutionRequest): Promise<BookingPartyResolution>;
 }
 

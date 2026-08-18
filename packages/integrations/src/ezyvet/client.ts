@@ -37,7 +37,7 @@ export class FetchEzyVetTransport implements EzyVetTransport {
   public async request(input: {
     readonly body?: Readonly<Record<string, unknown>>;
     readonly headers?: Readonly<Record<string, string>>;
-    readonly method: 'GET' | 'POST';
+    readonly method: 'GET' | 'PATCH' | 'POST';
     readonly timeoutMs: number;
     readonly url: string;
   }) {
@@ -116,13 +116,19 @@ export class EzyVetClient {
     return this.request('POST', this.ezyCabOrigin(), path, body, {}, false);
   }
 
+  /** Appointment PATCH is a one-shot merge patch; lifecycle recovery performs an explicit read. */
+  public async patchCore(path: string, body: Readonly<Record<string, unknown>>) {
+    return this.request('PATCH', ezyVetOrigins(this.input.credentials.environment).coreApiOrigin, path, body, {}, false, 'application/merge-patch+json');
+  }
+
   private async request(
-    method: 'GET' | 'POST',
+    method: 'GET' | 'PATCH' | 'POST',
     origin: string,
     path: string,
     body: Readonly<Record<string, unknown>> | undefined,
     params: Readonly<Record<string, string | readonly string[]>>,
     canRetry: boolean,
+    contentType = 'application/json',
   ): Promise<unknown> {
     const endpoint = new URL(path, origin);
     for (const [name, value] of Object.entries(params)) {
@@ -147,7 +153,7 @@ export class EzyVetClient {
           ...(body ? { body } : {}),
           headers: {
             Authorization: `Bearer ${token}`,
-            ...(body ? { 'Content-Type': 'application/json' } : {}),
+            ...(body ? { 'Content-Type': contentType } : {}),
           },
           method,
           timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
@@ -168,7 +174,7 @@ export class EzyVetClient {
         this.clearToken();
         continue;
       }
-      const error = providerErrorForStatus(response.status, method === 'POST');
+      const error = providerErrorForStatus(response.status, method !== 'GET');
       if (canRetry && error.retryable && attempt + 1 < attempts) {
         await this.backoff(attempt);
         continue;

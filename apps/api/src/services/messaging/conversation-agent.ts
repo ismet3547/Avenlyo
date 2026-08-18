@@ -11,6 +11,7 @@ import { OpenAIEmbeddingProvider } from '@avenlyo/knowledge';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
+import type { AppointmentLifecycleService } from '../scheduling/appointment-lifecycle-service.js';
 
 interface HistoryValue {
   readonly author_type?: unknown;
@@ -45,6 +46,7 @@ export class ConversationAgentService {
     private readonly input: {
       readonly apiKey: string;
       readonly model: string;
+      readonly appointmentLifecycle?: AppointmentLifecycleService;
       readonly scheduling?: SchedulingBookingService;
       readonly supabase: SupabaseClient<Database>;
     },
@@ -132,6 +134,15 @@ export class ConversationAgentService {
                   : Promise.resolve({ outcome: 'unavailable' as const }),
             },
           }
+        : {}),
+      ...(this.input.appointmentLifecycle
+        ? { appointmentLifecycle: {
+            getUpcomingAppointments: (_tool, executionContext) => this.input.appointmentLifecycle!.getUpcomingAppointments({ conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
+            getRescheduleOptions: (tool, executionContext) => this.input.appointmentLifecycle!.getRescheduleOptions({ appointmentReference: tool.appointmentReference, dates: tool.dates }, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
+            prepareReschedule: (tool, executionContext) => this.input.appointmentLifecycle!.prepareReschedule({ candidateId: tool.candidateId }, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
+            prepareCancellation: (tool, executionContext) => this.input.appointmentLifecycle!.prepareCancellation({ appointmentReference: tool.appointmentReference }, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
+            execute: (tool, executionContext) => this.input.appointmentLifecycle!.execute(tool, { conversationId: executionContext.conversationId, triggeringInboundMessageId: executionContext.triggeringInboundMessageId ?? null }),
+          } }
         : {}),
     });
     const runtime = new AgentRuntime(this.provider, executor, this.input.model);

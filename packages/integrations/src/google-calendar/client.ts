@@ -18,7 +18,7 @@ export class FetchGoogleCalendarTransport implements GoogleCalendarTransport {
   public async request(input: {
     readonly body?: Readonly<Record<string, unknown>>;
     readonly headers?: Readonly<Record<string, string>>;
-    readonly method: 'GET' | 'POST';
+    readonly method: 'DELETE' | 'GET' | 'POST' | 'PUT';
     readonly timeoutMs: number;
     readonly url: string;
   }): Promise<{ readonly body: unknown; readonly status: number }> {
@@ -105,14 +105,24 @@ export class GoogleCalendarClient {
     return this.eventFrom(await this.request('GET', `${API_ORIGIN}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, undefined, true));
   }
 
-  private async request(method: 'GET' | 'POST', url: string, body: Readonly<Record<string, unknown>> | undefined, safeRead: boolean): Promise<unknown> {
+  /** Events.update is a single provider mutation. Recovery is an explicit read by the caller. */
+  public async updateEvent(calendarId: string, eventId: string, event: Readonly<Record<string, unknown>>, etag: string): Promise<GoogleEvent> {
+    return this.eventFrom(await this.request('PUT', `${API_ORIGIN}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, event, false, { 'If-Match': etag }));
+  }
+
+  /** Events.delete is a single provider mutation. Recovery is an explicit read by the caller. */
+  public async deleteEvent(calendarId: string, eventId: string, etag: string): Promise<void> {
+    await this.request('DELETE', `${API_ORIGIN}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, undefined, false, { 'If-Match': etag });
+  }
+
+  private async request(method: 'DELETE' | 'GET' | 'POST' | 'PUT', url: string, body: Readonly<Record<string, unknown>> | undefined, safeRead: boolean, extraHeaders: Readonly<Record<string, string>> = {}): Promise<unknown> {
     const attempts = safeRead ? SAFE_GET_MAX_ATTEMPTS : 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const token = await this.input.accessToken();
       try {
         const result = await this.input.transport.request({
           ...(body ? { body } : {}),
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}`, ...extraHeaders },
           method, timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS, url,
         });
         if (result.status >= 200 && result.status < 300) return result.body;
@@ -129,11 +139,11 @@ export class GoogleCalendarClient {
   }
 
   private eventFrom(value: unknown): GoogleEvent {
-    const raw = record(value); const id = text(raw.id); const status = text(raw.status);
+    const raw = record(value); const id = text(raw.id); const status = text(raw.status); const etag = text(raw.etag);
     const start = text(record(raw.start).dateTime); const end = text(record(raw.end).dateTime);
     const privateProperties = record(record(raw.extendedProperties).private);
-    if (!id || !status || !start || !end) throw new BookingProviderError('provider_state_unknown');
-    return { id, status, start, end, privateProperties: Object.fromEntries(Object.entries(privateProperties).flatMap(([key, val]) => typeof val === 'string' ? [[key, val]] : [])) };
+    if (!id || !status || !etag || !start || !end) throw new BookingProviderError('provider_state_unknown');
+    return { id, status, etag, resource: raw, start, end, privateProperties: Object.fromEntries(Object.entries(privateProperties).flatMap(([key, val]) => typeof val === 'string' ? [[key, val]] : [])) };
   }
 
   private async backoff(attempt: number): Promise<void> {

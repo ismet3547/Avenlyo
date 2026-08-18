@@ -6,10 +6,15 @@ import type { AgentExecutionContext, AgentToolCall, KnowledgeSource } from '../a
 import { activeToolDefinitions } from './registry';
 import {
   availableAppointmentsSchema,
+  appointmentChangeExecutionSchema,
   bookAppointmentSchema,
+  prepareAppointmentCancellationSchema,
+  prepareAppointmentRescheduleSchema,
   prepareAppointmentBookingSchema,
   requestHumanHelpSchema,
   searchBusinessKnowledgeSchema,
+  rescheduleOptionsSchema,
+  upcomingAppointmentsSchema,
 } from './schemas';
 import type { AgentToolServices, ToolExecutionResult, ToolExecutor } from './types';
 
@@ -56,7 +61,7 @@ export class ControlledToolExecutor implements ToolExecutor {
     private readonly industry: Parameters<typeof activeToolDefinitions>[0],
     private readonly services: AgentToolServices,
   ) {
-    this.tools = activeToolDefinitions(industry, services.scheduling !== undefined).map(
+    this.tools = activeToolDefinitions(industry, services.scheduling !== undefined, services.appointmentLifecycle !== undefined).map(
       (tool) => tool.function,
     );
   }
@@ -68,6 +73,7 @@ export class ControlledToolExecutor implements ToolExecutor {
     const definition = activeToolDefinitions(
       this.industry,
       this.services.scheduling !== undefined,
+      this.services.appointmentLifecycle !== undefined,
     ).find((tool) => tool.name === call.name);
     if (!definition) return rejected(call, 'Unavailable tool requested.');
 
@@ -172,6 +178,29 @@ export class ControlledToolExecutor implements ToolExecutor {
           modelOutput: safeJson(booked),
           sources: [],
         };
+      }
+
+      if (call.name === 'get_upcoming_appointments' && this.services.appointmentLifecycle) {
+        if (!upcomingAppointmentsSchema.safeParse(rawArguments).success) return rejected(call, 'Tool arguments did not pass validation.');
+        const appointments = await this.services.appointmentLifecycle.getUpcomingAppointments({ toolCallId: call.callId }, context);
+        return { execution: { callId: call.callId, name: call.name, status: 'succeeded', summary: `${appointments.length} upcoming appointment(s) found.` }, handoffRequested: false, modelOutput: safeJson({ appointments }), sources: [] };
+      }
+      if (call.name === 'get_reschedule_options' && this.services.appointmentLifecycle) {
+        const parsed = rescheduleOptionsSchema.safeParse(rawArguments); if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
+        const candidates = await this.services.appointmentLifecycle.getRescheduleOptions({ appointmentReference: parsed.data.appointment_reference, dates: parsed.data.dates, toolCallId: call.callId }, context);
+        return { execution: { callId: call.callId, name: call.name, status: 'succeeded', summary: `${candidates.length} reschedule option(s) found.` }, handoffRequested: false, modelOutput: safeJson({ candidates }), sources: [] };
+      }
+      if ((call.name === 'prepare_appointment_reschedule' || call.name === 'prepare_appointment_cancellation') && this.services.appointmentLifecycle) {
+        const result = call.name === 'prepare_appointment_reschedule'
+          ? await (async () => { const parsed = prepareAppointmentRescheduleSchema.safeParse(rawArguments); return parsed.success ? this.services.appointmentLifecycle!.prepareReschedule({ candidateId: parsed.data.candidate_id, toolCallId: call.callId }, context) : null; })()
+          : await (async () => { const parsed = prepareAppointmentCancellationSchema.safeParse(rawArguments); return parsed.success ? this.services.appointmentLifecycle!.prepareCancellation({ appointmentReference: parsed.data.appointment_reference, toolCallId: call.callId }, context) : null; })();
+        if (!result) return rejected(call, 'Tool arguments did not pass validation.');
+        return { execution: { callId: call.callId, name: call.name, status: 'succeeded', summary: result.outcome === 'ready' ? 'Appointment change is ready for confirmation.' : 'Appointment change could not be prepared.' }, handoffRequested: false, modelOutput: safeJson(result), sources: [] };
+      }
+      if ((call.name === 'reschedule_appointment' || call.name === 'cancel_appointment') && this.services.appointmentLifecycle) {
+        const parsed = appointmentChangeExecutionSchema.safeParse(rawArguments); if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
+        const result = await this.services.appointmentLifecycle.execute({ changeIntentId: parsed.data.change_intent_id, toolCallId: call.callId }, context);
+        return { execution: { callId: call.callId, name: call.name, status: result.outcome === 'completed' ? 'succeeded' : 'failed', summary: `Appointment change outcome: ${result.outcome}.` }, handoffRequested: result.outcome === 'unknown' || result.outcome === 'handoff_required', modelOutput: safeJson(result), sources: [] };
       }
 
       const parsed = requestHumanHelpSchema.safeParse(rawArguments);
