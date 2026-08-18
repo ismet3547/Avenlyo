@@ -32,6 +32,7 @@ create table public.sms_consents (
     references public.messages (organization_id, location_id, id),
   constraint sms_consents_source_call_fk foreign key (organization_id, location_id, source_call_id)
     references public.calls (organization_id, location_id, id),
+  constraint sms_consents_organization_location_id_key unique (organization_id, location_id, id),
   constraint sms_consents_route_purpose_key unique (organization_id, location_id, sender_phone_number_id, recipient_e164, purpose),
   constraint sms_consents_source_check check (
     (source_type = 'voice_explicit' and source_call_id is not null and source_message_id is not null)
