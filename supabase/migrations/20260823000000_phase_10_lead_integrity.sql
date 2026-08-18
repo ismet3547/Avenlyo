@@ -341,7 +341,10 @@ begin
 end;
 $$;
 
-create or replace function public.get_my_lead_detail(target_lead_id uuid)
+-- PostgreSQL cannot change OUT columns through CREATE OR REPLACE. Recreate this authenticated
+-- read RPC so its narrow public contract can include safe appointment summary fields.
+drop function public.get_my_lead_detail(uuid);
+create function public.get_my_lead_detail(target_lead_id uuid)
 returns table (
   lead_id uuid, location_id uuid, conversation_id uuid, status text, source_channel text,
   service_category text, urgency text, customer_goal text, qualification_reason text, details jsonb,
@@ -379,3 +382,5 @@ $$;
 
 revoke all on function public.capture_conversation_lead(uuid, text, text, text, text, text, jsonb, text, text), public.convert_booking_lead(uuid, uuid) from public, anon, authenticated, service_role;
 grant execute on function public.capture_conversation_lead(uuid, text, text, text, text, text, jsonb, text, text) to service_role;
+revoke all on function public.get_my_lead_detail(uuid) from public, anon;
+grant execute on function public.get_my_lead_detail(uuid) to authenticated;
