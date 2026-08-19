@@ -394,7 +394,7 @@ update public.locations
 set business_hours = jsonb_set(
   '{"monday":{"open":"00:00","close":"23:59","closed":false},"tuesday":{"open":"00:00","close":"23:59","closed":false},"wednesday":{"open":"00:00","close":"23:59","closed":false},"thursday":{"open":"00:00","close":"23:59","closed":false},"friday":{"open":"00:00","close":"23:59","closed":false},"saturday":{"open":"00:00","close":"23:59","closed":false},"sunday":{"open":"00:00","close":"23:59","closed":false}}'::jsonb,
   array[lower(to_char((now() at time zone 'UTC')::date, 'FMDay'))],
-  jsonb_build_object('open', '00:00', 'close', '23:59', 'closed', true)
+  jsonb_build_object('open', null, 'close', null, 'closed', true)
 )
 where id = 'f1100000-0000-0000-0000-000000000001';
 set local role service_role;
