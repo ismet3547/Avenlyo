@@ -167,8 +167,8 @@ insert into public.messages (id, organization_id, location_id, conversation_id, 
   ('f1800000-0000-0000-0000-000000000011', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1700000-0000-0000-0000-000000000001', 'f1500000-0000-0000-0000-000000000001', 'outbound', 'text', 'A queued follow-up', '{"kind":"lead_followup"}', 'sms', 'system', now());
 insert into public.message_deliveries (organization_id, location_id, message_id, provider)
 values ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1800000-0000-0000-0000-000000000011', 'twilio');
-insert into public.lead_followup_jobs (organization_id, location_id, lead_id, conversation_id, consent_id, sender_phone_number_id, sender_e164, recipient_e164, trigger_message_id, message_id, delivery_id, status)
-values ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000003', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000011', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000011'), 'delivery_pending');
+insert into public.lead_followup_jobs (id, organization_id, location_id, lead_id, conversation_id, consent_id, sender_phone_number_id, sender_e164, recipient_e164, trigger_message_id, message_id, delivery_id, status)
+values ('f1b00000-0000-0000-0000-000000000003', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000003', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000011', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000011'), 'delivery_pending');
 set local role authenticated;
 select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', 'f0000000-0000-0000-0000-000000000001', true);
@@ -178,7 +178,7 @@ select extensions.is((select status from public.lead_followup_jobs where lead_id
 select extensions.is((select status from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000011'), 'suppressed', 'disabling follow-ups suppresses its queued delivery before provider submission');
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
-select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select id from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000003'))), 0, 'a disabled follow-up never receives a delivery submission claim');
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery('f1b00000-0000-0000-0000-000000000003')), 0, 'a disabled follow-up never receives a delivery submission claim');
 select extensions.throws_ok($$ select * from public.prepare_voice_sms_followup_consent('followup-call-a', 'f1800000-0000-0000-0000-000000000005') $$, '42501', 'Voice follow-up consent is unavailable', 'disabled follow-up settings block new Voice consent preparation');
 reset role;
 
@@ -233,14 +233,14 @@ insert into public.message_deliveries (organization_id, location_id, message_id,
 values
   ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1800000-0000-0000-0000-000000000013', 'twilio', 'submitted', now()),
   ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1800000-0000-0000-0000-000000000014', 'twilio');
-insert into public.lead_followup_jobs (organization_id, location_id, lead_id, conversation_id, consent_id, sender_phone_number_id, sender_e164, recipient_e164, trigger_message_id, message_id, delivery_id, status)
+insert into public.lead_followup_jobs (id, organization_id, location_id, lead_id, conversation_id, consent_id, sender_phone_number_id, sender_e164, recipient_e164, trigger_message_id, message_id, delivery_id, status)
 values
-  ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000006', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000013', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000013'), 'delivery_pending'),
-  ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000007', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000014', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000014'), 'delivery_pending');
+  ('f1b00000-0000-0000-0000-000000000006', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000006', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000013', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000013'), 'delivery_pending'),
+  ('f1b00000-0000-0000-0000-000000000007', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000007', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000014', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000014'), 'delivery_pending');
 update public.leads set status = 'qualified' where id = 'f1a00000-0000-0000-0000-000000000007';
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
-select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select id from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000007'))), 0, 'the 24-hour route cap denies a second submission before Twilio is called');
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery('f1b00000-0000-0000-0000-000000000007')), 0, 'the 24-hour route cap denies a second submission before Twilio is called');
 reset role;
 select extensions.ok((select (select status from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000007') = 'skipped'
   and (select status from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000014') = 'suppressed'), 'the capped job and queued delivery are suppressed without a provider attempt');
