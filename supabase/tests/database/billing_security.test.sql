@@ -38,23 +38,23 @@ insert into public.billing_accounts (id, organization_id, stripe_customer_id, li
   ('b1400000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-000000000001', null, null),
   ('b2400000-0000-0000-0000-000000000001', 'b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false);
 
-select extensions.throws_ok(
-  $$ insert into public.billing_accounts (organization_id, stripe_customer_id, livemode) values ('b1000000-0000-0000-0000-000000000001', 'cus_billing_b', false) $$,
-  '23505', 'duplicate key', 'one Stripe customer cannot map to two organizations'
-);
-select extensions.throws_ok(
-  $$ insert into public.billing_subscriptions (organization_id,stripe_customer_id,stripe_subscription_id,is_supported,stripe_status,livemode) values ('b1000000-0000-0000-0000-000000000001','cus_billing_b','sub_cross_org',false,'active',false) $$,
-  '23503', 'foreign key', 'subscription customer cannot cross organizations'
-);
-select extensions.throws_ok(
-  $$ insert into public.billing_checkout_sessions (organization_id,plan_key,stripe_customer_id,idempotency_key) values ('b1000000-0000-0000-0000-000000000001','core','cus_billing_b','avenlyo:test-cross-org-checkout') $$,
-  '23503', 'foreign key', 'checkout customer cannot cross organizations'
-);
+select extensions.ok((select pg_temp.error_matches($sql$
+  insert into public.billing_accounts (organization_id, stripe_customer_id, livemode)
+  values ('b1000000-0000-0000-0000-000000000001', 'cus_billing_b', false)
+$sql$, '23505', 'duplicate key')), 'one Stripe customer cannot map to two organizations');
+select extensions.ok((select pg_temp.error_matches($sql$
+  insert into public.billing_subscriptions (organization_id,stripe_customer_id,stripe_subscription_id,is_supported,stripe_status,livemode)
+  values ('b1000000-0000-0000-0000-000000000001','cus_billing_b','sub_cross_org',false,'active',false)
+$sql$, '23503', 'foreign key')), 'subscription customer cannot cross organizations');
+select extensions.ok((select pg_temp.error_matches($sql$
+  insert into public.billing_checkout_sessions (organization_id,plan_key,stripe_customer_id,idempotency_key)
+  values ('b1000000-0000-0000-0000-000000000001','core','cus_billing_b','avenlyo:test-cross-org-checkout')
+$sql$, '23503', 'foreign key')), 'checkout customer cannot cross organizations');
 insert into public.stripe_webhook_events (stripe_event_id,event_type,livemode) values ('evt_billing_unique', 'invoice.paid', false);
-select extensions.throws_ok(
-  $$ insert into public.stripe_webhook_events (stripe_event_id,event_type,livemode) values ('evt_billing_unique', 'invoice.paid', false) $$,
-  '23505', 'duplicate key', 'Stripe event identity is durable and unique'
-);
+select extensions.ok((select pg_temp.error_matches($sql$
+  insert into public.stripe_webhook_events (stripe_event_id,event_type,livemode)
+  values ('evt_billing_unique', 'invoice.paid', false)
+$sql$, '23505', 'duplicate key')), 'Stripe event identity is durable and unique');
 select extensions.ok(not exists (
   select 1 from information_schema.columns where table_schema = 'public' and table_name = 'stripe_webhook_events'
     and column_name in ('payload', 'raw_payload', 'signature', 'billing_address', 'card_number')
@@ -71,9 +71,11 @@ values ('b1800000-0000-0000-0000-000000000001', 'b1000000-0000-0000-0000-0000000
 select extensions.is((select quantity from public.billing_usage_events where call_id = 'b1800000-0000-0000-0000-000000000001'), 125, 'answered call records exact voice seconds');
 update public.calls set updated_at = now() where id = 'b1800000-0000-0000-0000-000000000001';
 select extensions.is((select count(*)::integer from public.billing_usage_events where call_id = 'b1800000-0000-0000-0000-000000000001'), 1, 'voice finalization replay records one usage event');
+insert into public.calls (id, organization_id, location_id, conversation_id, contact_id, direction, status)
+values ('b1800000-0000-0000-0000-000000000002', 'b1000000-0000-0000-0000-000000000001', 'b1100000-0000-0000-0000-000000000001', 'b1700000-0000-0000-0000-000000000001', 'b1600000-0000-0000-0000-000000000001', 'inbound', 'initiated');
 select extensions.ok((select pg_temp.error_matches($sql$
   insert into public.billing_usage_events (organization_id,location_id,metric,quantity,occurred_at,call_id)
-  values ('b1000000-0000-0000-0000-000000000001','b1200000-0000-0000-0000-000000000001','voice_seconds',1,now(),'b1800000-0000-0000-0000-000000000001') $sql$, '23503', 'foreign key')),
+  values ('b1000000-0000-0000-0000-000000000001','b1200000-0000-0000-0000-000000000001','voice_seconds',1,now(),'b1800000-0000-0000-0000-000000000002') $sql$, '23503', 'foreign key')),
   'usage source cannot cross locations');
 
 insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, sent_at) values
