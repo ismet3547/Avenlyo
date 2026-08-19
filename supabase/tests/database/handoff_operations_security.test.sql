@@ -135,6 +135,7 @@ select extensions.is(
   false,
   'a different tool call on an active conversation reuses the same episode'
 );
+reset role;
 select extensions.is(
   (select count(*)::integer from public.handoffs where conversation_id = 'd1600000-0000-0000-0000-000000000001'),
   1,
@@ -145,11 +146,14 @@ select extensions.is(
   'd1700000-0000-0000-0000-000000000001',
   'the text episode binds the trusted inbound turn that triggered it'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select created from public.request_message_handoff('d1700000-0000-0000-0000-000000000001', 'tool-3', 'Escalated by industry policy.', 'urgent')),
   false,
   'a later urgent signal escalates instead of creating a competing episode'
 );
+reset role;
 select extensions.is(
   (select urgency from public.handoffs where conversation_id = 'd1600000-0000-0000-0000-000000000001'),
   'urgent',
@@ -164,16 +168,21 @@ select extensions.is(
   'Customer reports bleeding.',
   'repeated requests never rewrite the original operational reason'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select created from public.request_message_handoff('d1700000-0000-0000-0000-000000000001', 'tool-4', 'Routine question after urgency.', 'normal')),
   false,
   'a later normal signal cannot fork a second episode'
 );
+reset role;
 select extensions.is(
   (select urgency from public.handoffs where conversation_id = 'd1600000-0000-0000-0000-000000000001'),
   'urgent',
   'a later normal signal cannot silently downgrade urgent work'
 );
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select created from public.request_message_handoff('d1700000-0000-0000-0000-000000000002', 'tool-5', 'Customer wants a callback.', 'normal')),
   true,

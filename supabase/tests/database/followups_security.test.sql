@@ -238,12 +238,22 @@ values
   ('f1b00000-0000-0000-0000-000000000006', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000006', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000013', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000013'), 'delivery_pending'),
   ('f1b00000-0000-0000-0000-000000000007', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000007', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000014', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000014'), 'delivery_pending');
 update public.leads set status = 'qualified' where id = 'f1a00000-0000-0000-0000-000000000007';
+-- The route cap is a send-boundary rule, not a scheduling rule. Quiet hours are neutralised for
+-- this assertion so it proves the cap whatever wall-clock time the suite runs at, then restored.
+update public.lead_followup_settings
+set quiet_hours_start = time '00:00', quiet_hours_end = time '00:00', business_hours_only = false
+where organization_id = 'f1000000-0000-0000-0000-000000000001'
+  and location_id = 'f1100000-0000-0000-0000-000000000001';
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery('f1b00000-0000-0000-0000-000000000007')), 0, 'the 24-hour route cap denies a second submission before Twilio is called');
 reset role;
 select extensions.ok((select (select status from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000007') = 'skipped'
   and (select status from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000014') = 'suppressed'), 'the capped job and queued delivery are suppressed without a provider attempt');
+update public.lead_followup_settings
+set quiet_hours_start = time '20:00', quiet_hours_end = time '08:00', business_hours_only = true
+where organization_id = 'f1000000-0000-0000-0000-000000000001'
+  and location_id = 'f1100000-0000-0000-0000-000000000001';
 select extensions.is((select public.lead_followup_next_allowed_time('2026-08-24 22:00:00+00', 'UTC', time '20:00', time '08:00', '{}'::jsonb, false)), '2026-08-25 08:00:00+00'::timestamptz, 'quiet-hours scheduling moves forward, never earlier');
 
 -- A START/UNSTOP may reopen only the same untouched opted-out job. Consent audit events are
