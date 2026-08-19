@@ -308,10 +308,13 @@ select extensions.is(
   'inactive',
   'terminal unsupported history alone is inactive rather than review required'
 );
+reset role;
 update public.stripe_webhook_events set status = 'processed', processed_at = now(), claimed_at = null, claimed_by = null
 where stripe_event_id in ('evt_billing_unique', 'evt_billing_rpc');
 insert into public.stripe_webhook_events (stripe_event_id, event_type, livemode, status, claimed_at, claimed_by)
 values ('evt_billing_expired_lease', 'invoice.paid', false, 'processing', now() - interval '6 minutes', 'old-worker');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select stripe_event_id from public.claim_stripe_webhook_events('new-worker', 1)),
   'evt_billing_expired_lease',
