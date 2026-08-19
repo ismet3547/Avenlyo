@@ -16,6 +16,7 @@ import { ConversationAgentService } from './conversation-agent.js';
 import { AppointmentReminderWorker } from './appointment-reminder-worker.js';
 import { TwilioSdkOutboundClient } from './twilio.js';
 import { MessageProcessingWorker } from './worker.js';
+import { LeadFollowupWorker } from './lead-followup-worker.js';
 
 export interface MessagingRuntime {
   start(): void;
@@ -49,7 +50,9 @@ export function createMessagingRuntime(): MessagingRuntime | null {
   const scheduling =
     ezyVet || googleCalendar ? new SchedulingBookingService({ connectors, supabase }) : undefined;
   const appointmentLifecycle =
-    ezyVet || googleCalendar ? new AppointmentLifecycleService({ connectors, supabase }) : undefined;
+    ezyVet || googleCalendar
+      ? new AppointmentLifecycleService({ connectors, supabase })
+      : undefined;
   const agent = env.OPENAI_API_KEY
     ? new ConversationAgentService({
         apiKey: env.OPENAI_API_KEY,
@@ -77,13 +80,15 @@ export function createMessagingRuntime(): MessagingRuntime | null {
     ...(twilio ? { twilio } : {}),
   });
   const reminders = twilio ? new AppointmentReminderWorker({ connectors, supabase }) : undefined;
+  const followups = twilio ? new LeadFollowupWorker({ supabase, twilio }) : undefined;
   return {
     start: () => {
       worker.start();
       reminders?.start();
+      followups?.start();
     },
     stop: async () => {
-      await Promise.all([worker.stop(), reminders?.stop()]);
+      await Promise.all([worker.stop(), reminders?.stop(), followups?.stop()]);
     },
   };
 }

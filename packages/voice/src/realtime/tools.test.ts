@@ -20,7 +20,13 @@ describe('voice tool boundary', () => {
       activeVoiceTools({ industry: veterinaryPack, transferEnabled: false }).map(
         ({ name }) => name,
       ),
-    ).toEqual(['search_business_knowledge', 'request_human_help', 'capture_lead']);
+    ).toEqual([
+      'search_business_knowledge',
+      'request_human_help',
+      'capture_lead',
+      'prepare_sms_followup_consent',
+      'confirm_sms_followup_consent',
+    ]);
     expect(
       activeVoiceTools({ industry: veterinaryPack, transferEnabled: true }).map(({ name }) => name),
     ).toContain('transfer_call');
@@ -133,6 +139,58 @@ describe('voice tool boundary', () => {
     expect(requestHumanHelp).not.toHaveBeenCalled();
   });
 
+  it('keeps Voice follow-up consent identities outside model arguments', async () => {
+    const followupTools = activeVoiceTools({ industry: veterinaryPack, transferEnabled: false });
+    expect(
+      followupTools.find((tool) => tool.name === 'prepare_sms_followup_consent')?.description,
+    ).toContain('before asking the consent question');
+    expect(
+      followupTools.find((tool) => tool.name === 'confirm_sms_followup_consent')?.description,
+    ).toContain('new transcript after the follow-up question');
+    const prepare = vi.fn().mockResolvedValue({
+      consentIntentId: '00000000-0000-4000-8000-000000000101',
+      expiresAt: '2026-08-24T10:10:00.000Z',
+    });
+    const confirm = vi.fn().mockResolvedValue({ granted: true });
+    const executor = new VoiceToolExecutor(
+      context,
+      {
+        followupConsent: { confirm, prepare },
+        requestHumanHelp: vi.fn().mockResolvedValue({ created: true }),
+        searchBusinessKnowledge: vi.fn().mockResolvedValue([]),
+        transferCall: vi.fn(),
+      },
+      false,
+    );
+    const transcriptId = '00000000-0000-0000-0000-000000000014';
+
+    await expect(
+      executor.execute({
+        arguments: '{}',
+        callId: 'followup-prepare',
+        name: 'prepare_sms_followup_consent',
+        triggeringInboundMessageId: transcriptId,
+      }),
+    ).resolves.toMatchObject({ status: 'succeeded' });
+    await expect(
+      executor.execute({
+        arguments: '{"consent_intent_id":"00000000-0000-4000-8000-000000000101"}',
+        callId: 'followup-confirm',
+        name: 'confirm_sms_followup_consent',
+        triggeringInboundMessageId: transcriptId,
+      }),
+    ).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(prepare).toHaveBeenCalledWith({ triggeringInboundMessageId: transcriptId }, context);
+    expect(confirm).toHaveBeenCalledWith(
+      {
+        consentIntentId: '00000000-0000-4000-8000-000000000101',
+        triggeringInboundMessageId: transcriptId,
+      },
+      context,
+    );
+  });
+
   it('captures voice lead facts against the latest trusted transcript and requests urgent follow-up', async () => {
     const capture = vi.fn().mockResolvedValue({ missingFields: [], state: 'needs_human' as const });
     const requestHumanHelp = vi.fn().mockResolvedValue({ created: true });
@@ -172,12 +230,10 @@ describe('voice tool boundary', () => {
   });
 
   it('requests one urgent voice handoff when a contradiction remains needs_clarification', async () => {
-    const capture = vi
-      .fn()
-      .mockResolvedValue({
-        missingFields: ['service_category'],
-        state: 'needs_clarification' as const,
-      });
+    const capture = vi.fn().mockResolvedValue({
+      missingFields: ['service_category'],
+      state: 'needs_clarification' as const,
+    });
     const requestHumanHelp = vi.fn().mockResolvedValue({ created: true });
     const executor = new VoiceToolExecutor(
       context,
@@ -220,12 +276,10 @@ describe('voice tool boundary', () => {
       context,
       {
         leadCapture: {
-          capture: vi
-            .fn()
-            .mockResolvedValue({
-              missingFields: ['service_category'],
-              state: 'needs_clarification',
-            }),
+          capture: vi.fn().mockResolvedValue({
+            missingFields: ['service_category'],
+            state: 'needs_clarification',
+          }),
         },
         requestHumanHelp,
         searchBusinessKnowledge: vi.fn(),

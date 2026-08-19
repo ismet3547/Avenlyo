@@ -44,6 +44,22 @@ export class VoiceSidebandRuntime {
     this.executor = new VoiceToolExecutor(
       options.context,
       {
+        ...(options.store.prepareFollowupConsent && options.store.confirmFollowupConsent
+          ? {
+              followupConsent: {
+                prepare: (input, context) =>
+                  options.store.prepareFollowupConsent!({
+                    externalCallId: context.callId,
+                    ...input,
+                  }),
+                confirm: (input, context) =>
+                  options.store.confirmFollowupConsent!({
+                    externalCallId: context.callId,
+                    ...input,
+                  }),
+              },
+            }
+          : {}),
         ...(options.store.captureLead
           ? {
               leadCapture: {
