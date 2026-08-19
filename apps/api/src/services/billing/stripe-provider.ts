@@ -55,6 +55,7 @@ function subscriptionRecord(subscription: Stripe.Subscription): StripeSubscripti
     endedAt: asDate(subscription.ended_at),
     id: subscription.id,
     items: subscription.items.data.map(subscriptionItem),
+    itemsComplete: !subscription.items.has_more,
     livemode: subscription.livemode,
     status: subscription.status,
     trialEnd: asDate(subscription.trial_end),

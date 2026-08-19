@@ -98,6 +98,11 @@ export default async function BillingPage({
           An existing subscription is managed in the Stripe billing portal.
         </p>
       ) : null}
+      {params.existing === 'reconciliation' ? (
+        <p className="mt-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950">
+          Billing is being refreshed from Stripe. Please try again after the current update finishes.
+        </p>
+      ) : null}
       {overview?.billing_state === 'attention' ? (
         <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           Your payment needs attention. Use Manage billing to update payment details in Stripe.

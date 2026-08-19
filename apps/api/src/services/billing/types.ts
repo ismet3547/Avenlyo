@@ -30,6 +30,8 @@ export interface StripeSubscriptionRecord {
   readonly endedAt: Date | null;
   readonly id: string;
   readonly items: readonly StripeSubscriptionItemRecord[];
+  /** False when Stripe's embedded item page may omit additional subscription items. */
+  readonly itemsComplete: boolean;
   readonly livemode: boolean;
   readonly status: string;
   readonly trialEnd: Date | null;

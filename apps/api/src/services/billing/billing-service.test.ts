@@ -23,6 +23,7 @@ const coreSubscription: StripeSubscriptionRecord = {
       productId: 'prod_core',
     },
   ],
+  itemsComplete: true,
   livemode: false,
   status: 'active',
   trialEnd: null,
@@ -44,20 +45,25 @@ function event(type: string, object: Readonly<Record<string, unknown>>): StripeW
 }
 
 interface TestServiceOptions {
+  readonly applyOutcomes?: readonly ('applied' | 'superseded')[];
+  readonly checkoutEligible?: boolean;
   readonly checkoutKnown?: boolean;
+  readonly checkoutPreviouslyCompleted?: boolean;
   readonly customerMapped?: boolean;
   readonly listError?: Error;
   readonly portalError?: Error;
   readonly retrievedEvent?: StripeWebhookEventRecord;
+  readonly storedCustomer?: string;
   readonly subscriptions?: readonly StripeSubscriptionRecord[];
 }
 
 function testService(options: TestServiceOptions = {}) {
-  let storedCustomer: string | null = null;
+  let storedCustomer: string | null = options.storedCustomer ?? null;
+  let nextGeneration = 0;
+  const applyOutcomes = [...(options.applyOutcomes ?? ['applied'])];
   const checkoutKeys: string[] = [];
-  const snapshotCalls: Readonly<Record<string, unknown>>[] = [];
-  const portalAudits: string[] = [];
-  const createCheckoutSession = vi.fn(
+  const checkoutReservations: Readonly<Record<string, unknown>>[] = [];
+  const checkoutSessions = vi.fn(
     (request: Parameters<BillingStripeProvider['createCheckoutSession']>[0]) => {
       checkoutKeys.push(request.idempotencyKey);
       return Promise.resolve<StripeCheckoutSessionRecord>({
@@ -69,9 +75,11 @@ function testService(options: TestServiceOptions = {}) {
       });
     },
   );
+  const snapshotCalls: Readonly<Record<string, unknown>>[] = [];
+  const portalAudits: string[] = [];
   const createCustomer = vi.fn(() => Promise.resolve({ id: 'cus_core', livemode: false }));
   const provider: BillingStripeProvider = {
-    createCheckoutSession,
+    createCheckoutSession: checkoutSessions,
     createCustomer,
     createPortalSession: vi.fn(() =>
       options.portalError
@@ -136,28 +144,44 @@ function testService(options: TestServiceOptions = {}) {
                 ],
           error: null,
         });
-      case 'get_billing_checkout_event_context':
-        return Promise.resolve({
-          data:
-            options.checkoutKnown === false
-              ? []
-              : [{ organization_id: 'org_a', stripe_customer_id: 'cus_core' }],
-          error: null,
-        });
-      case 'complete_billing_checkout_from_event':
+      case 'begin_stripe_billing_reconciliation':
+        nextGeneration += 1;
         return Promise.resolve({
           data: [
             {
+              livemode: false,
               organization_id: 'org_a',
+              reconciliation_generation: nextGeneration,
               stripe_customer_id: 'cus_core',
-              stripe_subscription_id: 'sub_core',
             },
           ],
           error: null,
         });
+      case 'reserve_billing_checkout_subscription_from_event':
+        checkoutReservations.push(args);
+        return Promise.resolve({
+          data:
+            options.checkoutKnown === false
+              ? []
+              : [
+                  {
+                    checkout_completed: options.checkoutPreviouslyCompleted ?? false,
+                    organization_id: 'org_a',
+                    stripe_customer_id: 'cus_core',
+                  },
+                ],
+          error: null,
+        });
       case 'apply_stripe_billing_snapshot':
         snapshotCalls.push(args);
-        return Promise.resolve({ data: 'active', error: null });
+        return Promise.resolve({
+          data: [
+            { billing_state: 'active', outcome: applyOutcomes.shift() ?? 'applied' },
+          ],
+          error: null,
+        });
+      case 'assert_billing_checkout_eligible':
+        return Promise.resolve({ data: options.checkoutEligible ?? true, error: null });
       default:
         return Promise.resolve({ data: null, error: null });
     }
@@ -189,18 +213,27 @@ function testService(options: TestServiceOptions = {}) {
     supabase: { rpc } as unknown as SupabaseClient<Database>,
     webOrigin: 'https://app.avenlyo.example',
   });
-  return { checkoutKeys, createCustomer, portalAudits, service, snapshotCalls };
+  return {
+    checkoutKeys,
+    checkoutReservations,
+    checkoutSessions,
+    createCustomer,
+    portalAudits,
+    service,
+    snapshotCalls,
+  };
 }
 
 describe('billing service', () => {
-  it('uses durable Stripe idempotency keys for customer and Checkout retries', async () => {
-    const test = testService();
-    await expect(test.service.createCheckout('checkout_a')).resolves.toEqual({
-      action: 'checkout',
-      url: 'https://checkout.stripe.example/cs_core',
-    });
-    await test.service.createCheckout('checkout_a');
-    expect(test.createCustomer).toHaveBeenCalledTimes(1);
+  it('uses one durable Stripe idempotency key for concurrent/retried Checkout creation', async () => {
+    const test = testService({ storedCustomer: 'cus_core' });
+    await expect(
+      Promise.all([test.service.createCheckout('checkout_a'), test.service.createCheckout('checkout_a')]),
+    ).resolves.toEqual([
+      { action: 'checkout', url: 'https://checkout.stripe.example/cs_core' },
+      { action: 'checkout', url: 'https://checkout.stripe.example/cs_core' },
+    ]);
+    expect(test.createCustomer).not.toHaveBeenCalled();
     expect(test.checkoutKeys).toEqual([
       'avenlyo:billing-checkout:org_a:attempt_a',
       'avenlyo:billing-checkout:org_a:attempt_a',
@@ -214,6 +247,7 @@ describe('billing service', () => {
     ).resolves.toBe('processed');
     expect(test.snapshotCalls).toEqual([
       expect.objectContaining({
+        target_reconciliation_generation: 1,
         target_snapshot_complete: true,
         target_subscriptions: [
           expect.objectContaining({ stripe_status: 'active', subscription_id: 'sub_core' }),
@@ -288,6 +322,81 @@ describe('billing service', () => {
         ],
       }),
     ]);
+  });
+
+  it('keeps a verified Checkout pending when provider reconciliation fails', async () => {
+    const test = testService({ listError: new Error('temporary Stripe outage') });
+    await expect(
+      test.service.processClaimedEvent(
+        event('checkout.session.completed', {
+          customer: 'cus_core',
+          id: 'cs_core',
+          mode: 'subscription',
+          subscription: 'sub_core',
+        }),
+      ),
+    ).rejects.toThrow('temporary Stripe outage');
+    expect(test.checkoutReservations).toHaveLength(1);
+    expect(test.snapshotCalls).toEqual([]);
+  });
+
+  it('atomically projects provider truth before completing a verified Checkout', async () => {
+    const test = testService();
+    await expect(
+      test.service.processClaimedEvent(
+        event('checkout.session.completed', {
+          customer: 'cus_core',
+          id: 'cs_core',
+          mode: 'subscription',
+          subscription: 'sub_core',
+        }),
+      ),
+    ).resolves.toBe('processed');
+    expect(test.snapshotCalls).toEqual([
+      expect.objectContaining({
+        target_checkout_session_id: 'cs_core',
+        target_checkout_subscription_id: 'sub_core',
+      }),
+    ]);
+  });
+
+  it('retries a Checkout event until its exact subscription is visible in provider truth', async () => {
+    const test = testService({ subscriptions: [subscription({ id: 'sub_other' })] });
+    await expect(
+      test.service.processClaimedEvent(
+        event('checkout.session.completed', {
+          customer: 'cus_core',
+          id: 'cs_core',
+          mode: 'subscription',
+          subscription: 'sub_core',
+        }),
+      ),
+    ).rejects.toThrow('not visible in provider truth');
+    expect(test.snapshotCalls).toEqual([]);
+  });
+
+  it('does not create a new Checkout when fresh provider preflight finds a current subscription', async () => {
+    const test = testService({ checkoutEligible: false, storedCustomer: 'cus_core' });
+    await expect(test.service.createCheckout('checkout_a')).resolves.toEqual({
+      action: 'manage_existing_subscription',
+    });
+    expect(test.checkoutSessions).not.toHaveBeenCalled();
+    expect(test.snapshotCalls).toHaveLength(1);
+  });
+
+  it('does not create a Checkout when a newer reconciliation supersedes preflight', async () => {
+    const test = testService({ applyOutcomes: ['superseded'], storedCustomer: 'cus_core' });
+    await expect(test.service.createCheckout('checkout_a')).resolves.toEqual({
+      action: 'billing_reconciliation_required',
+    });
+    expect(test.checkoutSessions).not.toHaveBeenCalled();
+  });
+
+  it('keeps a superseded webhook reconciliation retryable', async () => {
+    const test = testService({ applyOutcomes: ['superseded'] });
+    await expect(
+      test.service.processClaimedEvent(event('invoice.paid', { customer: 'cus_core', id: 'in_newer' })),
+    ).rejects.toThrow('superseded and must retry');
   });
 
   it('ignores a verified event for an unmapped Stripe customer', async () => {

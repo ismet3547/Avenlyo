@@ -9,7 +9,8 @@ export function projectStripeSubscription(
   const matchingItems = subscription.items.filter(
     (item) => item.productId === corePlan.productId && item.priceId === corePlan.monthlyPriceId,
   );
-  const supported = subscription.items.length === 1 && matchingItems.length === 1;
+  const supported =
+    subscription.itemsComplete && subscription.items.length === 1 && matchingItems.length === 1;
   const item = subscription.items[0] ?? null;
   return {
     cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,

@@ -1,7 +1,7 @@
 -- Phase 12 billing authority, tenant integrity, and prospective metering guarantees.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(64);
+select extensions.plan(87);
 
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
@@ -171,7 +171,7 @@ select extensions.ok((select pg_temp.error_matches($sql$ select * from public.bi
 select extensions.ok((select pg_temp.error_matches($sql$ insert into public.billing_accounts (organization_id) values ('b1000000-0000-0000-0000-000000000001') $sql$, '42501', 'permission denied')), 'member cannot forge billing account state');
 select extensions.ok((select pg_temp.error_matches($sql$ select * from public.begin_my_billing_checkout('core') $sql$, '42501', 'Organization owner or admin')), 'member cannot create Checkout');
 select extensions.ok((select pg_temp.error_matches($sql$
-  select public.apply_stripe_billing_snapshot('b1000000-0000-0000-0000-000000000001', 'cus_invalid', false, '[]'::jsonb, true)
+  select * from public.apply_stripe_billing_snapshot('b1000000-0000-0000-0000-000000000001', 'cus_invalid', false, 1, '[]'::jsonb, true, null, null)
 $sql$, '42501', 'permission denied')), 'member cannot execute internal snapshot helper');
 select extensions.ok((select pg_temp.error_matches($sql$
   select * from public.get_my_billing_overview('b1000000-0000-0000-0000-000000000001')
@@ -190,6 +190,41 @@ insert into pg_temp.billing_state
 select id from public.billing_checkout_sessions where organization_id = 'b1000000-0000-0000-0000-000000000001';
 grant select on table pg_temp.billing_state to service_role;
 
+create function pg_temp.apply_billing_snapshot(
+  target_organization_id uuid,
+  target_customer_id text,
+  target_livemode boolean,
+  target_subscriptions jsonb,
+  target_snapshot_complete boolean
+)
+returns text language plpgsql as $$
+declare fence record; applied record;
+begin
+  select * into fence
+  from public.begin_stripe_billing_reconciliation(
+    target_organization_id,
+    target_customer_id,
+    target_livemode
+  );
+  select * into applied
+  from public.apply_stripe_billing_snapshot(
+    target_organization_id,
+    target_customer_id,
+    target_livemode,
+    fence.reconciliation_generation,
+    target_subscriptions,
+    target_snapshot_complete,
+    null,
+    null
+  );
+  if applied.outcome <> 'applied' then
+    raise exception 'unexpected reconciliation outcome: %', applied.outcome;
+  end if;
+  return applied.billing_state;
+end;
+$$;
+grant execute on function pg_temp.apply_billing_snapshot(uuid, text, boolean, jsonb, boolean) to service_role;
+
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.ok((select pg_temp.error_matches($sql$ select * from public.billing_accounts $sql$, '42501', 'permission denied')), 'service role has no direct billing table grant');
@@ -197,7 +232,7 @@ select extensions.lives_ok($$ select public.record_stripe_billing_customer((sele
 select extensions.lives_ok($$ select * from public.record_stripe_webhook_event('evt_billing_rpc', 'invoice.paid', 'in_1', now(), false) $$, 'service role can persist verified event identity');
 select extensions.lives_ok($$ select * from public.record_stripe_webhook_event('evt_billing_rpc', 'invoice.paid', 'in_1', now(), false) $$, 'service role accepts a duplicate verified event safely');
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001',
     'cus_billing_a',
     false,
@@ -215,7 +250,7 @@ select extensions.is((select count(*)::integer from public.action_logs where org
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001', 'cus_billing_a', false,
     jsonb_build_array(jsonb_build_object('subscription_id', 'sub_core_trial', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'trialing', 'cancel_at_period_end', false)), true
   ),
@@ -223,7 +258,7 @@ select extensions.is(
   'trialing Core normalizes to active'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001', 'cus_billing_a', false,
     jsonb_build_array(jsonb_build_object('subscription_id', 'sub_core_past_due', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'past_due', 'cancel_at_period_end', false)), true
   ),
@@ -231,7 +266,7 @@ select extensions.is(
   'past_due Core normalizes to attention'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001', 'cus_billing_a', false,
     jsonb_build_array(jsonb_build_object('subscription_id', 'sub_core_incomplete', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'incomplete', 'cancel_at_period_end', false)), true
   ),
@@ -239,7 +274,7 @@ select extensions.is(
   'incomplete Core normalizes to inactive but remains current topology'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001', 'cus_billing_a', false,
     jsonb_build_array(jsonb_build_object('subscription_id', 'sub_core_unpaid', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'unpaid', 'cancel_at_period_end', false)), true
   ),
@@ -247,7 +282,7 @@ select extensions.is(
   'unpaid Core normalizes to inactive but remains current topology'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001', 'cus_billing_a', false,
     jsonb_build_array(jsonb_build_object('subscription_id', 'sub_core_paused', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'paused', 'cancel_at_period_end', false)), true
   ),
@@ -255,7 +290,7 @@ select extensions.is(
   'paused Core normalizes to inactive but remains current topology'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001',
     'cus_billing_a',
     false,
@@ -269,7 +304,7 @@ select extensions.is(
   'current unsupported unpaid subscription requires review'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001',
     'cus_billing_a',
     false,
@@ -283,7 +318,7 @@ select extensions.is(
   'multiple current subscriptions require review without intermediate activation'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001',
     'cus_billing_a',
     false,
@@ -296,7 +331,7 @@ select extensions.is(
   'unknown Stripe status never silently becomes inactive'
 );
 select extensions.is(
-  public.apply_stripe_billing_snapshot(
+  pg_temp.apply_billing_snapshot(
     'b2000000-0000-0000-0000-000000000001',
     'cus_billing_b',
     false,
@@ -309,6 +344,183 @@ select extensions.is(
   'terminal unsupported history alone is inactive rather than review required'
 );
 reset role;
+
+create temporary table pg_temp.billing_fences (
+  generation_a bigint not null,
+  generation_b bigint
+);
+create temporary table pg_temp.billing_b_checkout (checkout_id uuid not null);
+insert into pg_temp.billing_b_checkout
+select id
+from public.billing_checkout_sessions
+where organization_id = 'b2000000-0000-0000-0000-000000000001'
+  and status = 'created';
+grant select, insert, update on table pg_temp.billing_fences, pg_temp.billing_b_checkout to service_role;
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+insert into pg_temp.billing_fences (generation_a)
+select reconciliation_generation
+from public.begin_stripe_billing_reconciliation(
+  'b2000000-0000-0000-0000-000000000001',
+  'cus_billing_b',
+  false
+);
+update pg_temp.billing_fences
+set generation_b = (
+  select reconciliation_generation
+  from public.begin_stripe_billing_reconciliation(
+    'b2000000-0000-0000-0000-000000000001',
+    'cus_billing_b',
+    false
+  )
+);
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (
+    select billing_state
+    from public.apply_stripe_billing_snapshot(
+      'b2000000-0000-0000-0000-000000000001',
+      'cus_billing_b',
+      false,
+      (select generation_b from pg_temp.billing_fences),
+      jsonb_build_array(
+        jsonb_build_object('subscription_id', 'sub_fence_preserved', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'active', 'cancel_at_period_end', false)
+      ),
+      true,
+      null,
+      null
+    )
+  ),
+  'active',
+  'newer reconciliation generation applies active provider truth'
+);
+select extensions.is(
+  (
+    select outcome
+    from public.apply_stripe_billing_snapshot(
+      'b2000000-0000-0000-0000-000000000001',
+      'cus_billing_b',
+      false,
+      (select generation_a from pg_temp.billing_fences),
+      jsonb_build_array(
+        jsonb_build_object('subscription_id', 'sub_fence_stale', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'past_due', 'cancel_at_period_end', false)
+      ),
+      true,
+      null,
+      null
+    )
+  ),
+  'superseded',
+  'older complete snapshot is rejected before destructive missing-subscription handling'
+);
+select extensions.is(
+  (
+    select outcome
+    from public.apply_stripe_billing_snapshot(
+      'b2000000-0000-0000-0000-000000000001',
+      'cus_billing_b',
+      false,
+      (select generation_a from pg_temp.billing_fences),
+      jsonb_build_array(
+        jsonb_build_object('subscription_id', 'sub_fence_deleted_stale', 'plan_key', null, 'is_supported', false, 'stripe_status', 'canceled', 'cancel_at_period_end', false)
+      ),
+      false,
+      null,
+      null
+    )
+  ),
+  'superseded',
+  'stale deleted-event fallback is rejected without mutation'
+);
+reset role;
+select extensions.is((select stripe_status from public.billing_subscriptions where stripe_subscription_id = 'sub_fence_preserved'), 'active', 'stale complete snapshot cannot mark a newer subscription missing');
+select extensions.is((select count(*)::integer from public.billing_subscriptions where stripe_subscription_id = 'sub_fence_stale'), 0, 'stale snapshot writes no stale provider subscription');
+select extensions.is((select count(*)::integer from public.billing_subscriptions where stripe_subscription_id = 'sub_fence_deleted_stale'), 0, 'stale deleted fallback writes no provider subscription');
+select extensions.is((select billing_state from public.billing_accounts where organization_id = 'b2000000-0000-0000-0000-000000000001'), 'active', 'stale reconciliation cannot regress account state');
+select extensions.is((select count(*)::integer from public.action_logs where organization_id = 'b2000000-0000-0000-0000-000000000001' and action = 'billing.reconciled'), 2, 'stale reconciliation writes no reconciliation audit');
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  pg_temp.apply_billing_snapshot(
+    'b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false,
+    jsonb_build_array(jsonb_build_object('subscription_id', 'sub_fence_preserved', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'unpaid', 'cancel_at_period_end', false)), true
+  ),
+  'inactive',
+  'active to unpaid normalizes inactive while retaining current topology'
+);
+reset role;
+select extensions.ok(not exists (select 1 from public.action_logs where organization_id = 'b2000000-0000-0000-0000-000000000001' and action = 'billing.subscription.ended'), 'active to unpaid does not write a terminal lifecycle audit');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select pg_temp.apply_billing_snapshot(
+  'b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false,
+  jsonb_build_array(jsonb_build_object('subscription_id', 'sub_fence_preserved', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'active', 'cancel_at_period_end', false)), true
+);
+select extensions.is(
+  pg_temp.apply_billing_snapshot(
+    'b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false,
+    jsonb_build_array(jsonb_build_object('subscription_id', 'sub_fence_preserved', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'paused', 'cancel_at_period_end', false)), true
+  ),
+  'inactive',
+  'active to paused normalizes inactive while retaining current topology'
+);
+reset role;
+select extensions.ok(not exists (select 1 from public.action_logs where organization_id = 'b2000000-0000-0000-0000-000000000001' and action = 'billing.subscription.ended'), 'active to paused does not write a terminal lifecycle audit');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select pg_temp.apply_billing_snapshot(
+  'b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false,
+  jsonb_build_array(jsonb_build_object('subscription_id', 'sub_fence_preserved', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'active', 'cancel_at_period_end', false)), true
+);
+select extensions.is(
+  pg_temp.apply_billing_snapshot(
+    'b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false,
+    jsonb_build_array(jsonb_build_object('subscription_id', 'sub_fence_preserved', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'canceled', 'cancel_at_period_end', false)), true
+  ),
+  'inactive',
+  'active to canceled removes current topology'
+);
+select pg_temp.apply_billing_snapshot(
+  'b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false,
+  jsonb_build_array(jsonb_build_object('subscription_id', 'sub_fence_preserved', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'canceled', 'cancel_at_period_end', false)), true
+);
+select extensions.lives_ok($$ select public.record_stripe_checkout_session((select checkout_id from pg_temp.billing_b_checkout), 'cs_pending_b', 'cus_billing_b', now() + interval '1 day', false) $$, 'service role can record the pending Checkout session');
+select extensions.lives_ok($$ select * from public.reserve_billing_checkout_subscription_from_event('cs_pending_b', 'cus_billing_b', 'sub_pending_b', false) $$, 'verified Checkout subscription identity is retained while projection is pending');
+select extensions.is(public.assert_billing_checkout_eligible((select checkout_id from pg_temp.billing_b_checkout)), false, 'verified pending purchase cannot authorize another Stripe Checkout');
+reset role;
+select extensions.is((select count(*)::integer from public.action_logs where organization_id = 'b2000000-0000-0000-0000-000000000001' and action = 'billing.subscription.ended'), 1, 'active to canceled writes one terminal lifecycle audit even after replay');
+set local role authenticated;
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config('request.jwt.claim.sub', 'b0000000-0000-0000-0000-000000000003', true);
+select extensions.is((select action from public.begin_my_billing_checkout('core')), 'manage_existing_subscription', 'verified pending purchase blocks another Checkout attempt');
+reset role;
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (
+    select outcome
+    from public.apply_stripe_billing_snapshot(
+      'b2000000-0000-0000-0000-000000000001',
+      'cus_billing_b',
+      false,
+      (select reconciliation_generation from public.begin_stripe_billing_reconciliation('b2000000-0000-0000-0000-000000000001', 'cus_billing_b', false)),
+      jsonb_build_array(jsonb_build_object('subscription_id', 'sub_pending_b', 'product_id', 'prod_core', 'price_id', 'price_core', 'plan_key', 'core', 'is_supported', true, 'stripe_status', 'active', 'cancel_at_period_end', false)),
+      true,
+      'cs_pending_b',
+      'sub_pending_b'
+    )
+  ),
+  'applied',
+  'verified Checkout snapshot atomically applies after its exact subscription is visible'
+);
+reset role;
+select extensions.is((select status from public.billing_checkout_sessions where id = (select checkout_id from pg_temp.billing_b_checkout)), 'completed', 'verified Checkout completes only with its fenced provider snapshot');
+select extensions.is((select count(*)::integer from public.action_logs where organization_id = 'b2000000-0000-0000-0000-000000000001' and action = 'billing.checkout.completed'), 1, 'verified Checkout completion writes one durable audit');
+
 update public.stripe_webhook_events set status = 'processed', processed_at = now(), claimed_at = null, claimed_by = null
 where stripe_event_id in ('evt_billing_unique', 'evt_billing_rpc');
 insert into public.stripe_webhook_events (stripe_event_id, event_type, livemode, status, claimed_at, claimed_by)
@@ -330,6 +542,8 @@ select extensions.is((select period_kind from public.get_my_billing_usage_summar
 reset role;
 select extensions.is((select count(*)::integer from public.stripe_webhook_events where stripe_event_id = 'evt_billing_rpc'), 1, 'webhook replay has one durable event row');
 select extensions.ok(has_function_privilege('service_role', 'public.claim_stripe_webhook_events(text,integer)', 'execute'), 'service role has narrow event-claim RPC grant');
+select extensions.ok(has_function_privilege('service_role', 'public.begin_stripe_billing_reconciliation(uuid,text,boolean)', 'execute'), 'service role has the narrow reconciliation fence RPC grant');
+select extensions.ok(not has_function_privilege('authenticated', 'public.reserve_billing_checkout_subscription_from_event(text,text,text,boolean)', 'execute'), 'authenticated callers cannot reserve verified Checkout state');
 select extensions.ok(not has_table_privilege('service_role', 'public.billing_usage_events', 'insert,update,delete'), 'service role has no broad usage-ledger CRUD grant');
 select extensions.ok(not has_function_privilege('anon', 'public.get_my_billing_overview(uuid)', 'execute'), 'anon cannot execute the security-definer billing overview');
 

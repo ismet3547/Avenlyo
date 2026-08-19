@@ -19,6 +19,7 @@ function subscription(
     endedAt: null,
     id: 'sub_1',
     items,
+    itemsComplete: true,
     livemode: false,
     status,
     trialEnd: null,
@@ -78,5 +79,22 @@ describe('Stripe subscription projection', () => {
         catalog,
       ).isSupported,
     ).toBe(false);
+  });
+
+  it('requires a complete Stripe item list before granting the Core entitlement', () => {
+    const coreItem = {
+      currentPeriodEnd: null,
+      currentPeriodStart: null,
+      priceId: 'price_core',
+      productId: 'prod_core',
+    };
+    expect(projectStripeSubscription(subscription([coreItem]), catalog).isSupported).toBe(true);
+    expect(
+      projectStripeSubscription(
+        { ...subscription([coreItem]), itemsComplete: false },
+        catalog,
+      ).isSupported,
+    ).toBe(false);
+    expect(projectStripeSubscription(subscription([]), catalog).isSupported).toBe(false);
   });
 });

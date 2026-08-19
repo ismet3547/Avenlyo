@@ -28,6 +28,8 @@ export async function startBillingCheckoutAction(): Promise<never> {
   const body = (await response.json()) as { action?: unknown; url?: unknown };
   if (body.action === 'manage_existing_subscription')
     redirect('/dashboard/billing?existing=subscription');
+  if (body.action === 'billing_reconciliation_required')
+    redirect('/dashboard/billing?existing=reconciliation');
   if (!response.ok || body.action !== 'checkout' || typeof body.url !== 'string') {
     throw new Error('Billing is unavailable.');
   }

@@ -20,6 +20,29 @@ interface BillingAccountContext {
   readonly stripe_customer_id: string;
 }
 
+interface BillingReconciliationContext {
+  readonly livemode: boolean;
+  readonly organization_id: string;
+  readonly reconciliation_generation: number;
+  readonly stripe_customer_id: string;
+}
+
+interface BillingCheckoutReservation {
+  readonly checkout_completed: boolean;
+  readonly organization_id: string;
+  readonly stripe_customer_id: string;
+}
+
+interface CheckoutSnapshotFinalization {
+  readonly sessionId: string;
+  readonly subscriptionId: string;
+}
+
+type CheckoutCreationResult =
+  | { readonly action: 'billing_reconciliation_required' }
+  | { readonly action: 'checkout'; readonly url: string }
+  | { readonly action: 'manage_existing_subscription' };
+
 interface StripeBillingSnapshotRpcRow {
   readonly cancel_at_period_end: boolean;
   readonly ended_at: string | null;
@@ -69,39 +92,38 @@ interface BillingRpc {
     Args: { target_customer_id: string; target_livemode: boolean };
     Returns: readonly BillingAccountContext[];
   };
-  record_billing_portal_opened: { Args: { target_account_id: string }; Returns: null };
-  get_billing_checkout_event_context: {
-    Args: {
-      target_customer_id: string;
-      target_livemode: boolean;
-      target_session_id: string;
-      target_subscription_id: string;
-    };
-    Returns: readonly { organization_id: string; stripe_customer_id: string }[];
-  };
-  complete_billing_checkout_from_event: {
-    Args: {
-      target_customer_id: string;
-      target_livemode: boolean;
-      target_session_id: string;
-      target_subscription_id: string;
-    };
-    Returns: readonly {
-      organization_id: string;
-      stripe_customer_id: string;
-      stripe_subscription_id: string;
-    }[];
-  };
-  apply_stripe_billing_snapshot: {
+  begin_stripe_billing_reconciliation: {
     Args: {
       target_customer_id: string;
       target_livemode: boolean;
       target_organization_id: string;
+    };
+    Returns: readonly BillingReconciliationContext[];
+  };
+  record_billing_portal_opened: { Args: { target_account_id: string }; Returns: null };
+  reserve_billing_checkout_subscription_from_event: {
+    Args: {
+      target_customer_id: string;
+      target_livemode: boolean;
+      target_session_id: string;
+      target_subscription_id: string;
+    };
+    Returns: readonly BillingCheckoutReservation[];
+  };
+  apply_stripe_billing_snapshot: {
+    Args: {
+      target_customer_id: string;
+      target_checkout_session_id: string | null;
+      target_checkout_subscription_id: string | null;
+      target_livemode: boolean;
+      target_organization_id: string;
+      target_reconciliation_generation: number;
       target_snapshot_complete: boolean;
       target_subscriptions: readonly StripeBillingSnapshotRpcRow[];
     };
-    Returns: string;
+    Returns: readonly { billing_state: string | null; outcome: 'applied' | 'superseded' }[];
   };
+  assert_billing_checkout_eligible: { Args: { target_checkout_id: string }; Returns: boolean };
   record_stripe_webhook_event: {
     Args: {
       target_created_at: string;
@@ -186,6 +208,10 @@ function fallbackDeletedSubscription(
     itemsRecord && typeof itemsRecord === 'object' && !Array.isArray(itemsRecord)
       ? (itemsRecord as Record<string, unknown>).data
       : null;
+  const itemsComplete =
+    itemsRecord !== null &&
+    Array.isArray(itemRows) &&
+    (itemsRecord as Record<string, unknown>).has_more !== true;
   const items: StripeSubscriptionItemRecord[] = (Array.isArray(itemRows) ? itemRows : []).flatMap(
     (item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
@@ -212,6 +238,7 @@ function fallbackDeletedSubscription(
     endedAt: event.createdAt,
     id,
     items,
+    itemsComplete,
     livemode: event.livemode,
     status: 'canceled',
     trialEnd: null,
@@ -252,7 +279,7 @@ export class BillingService {
 
   public async createCheckout(
     checkoutId: string,
-  ): Promise<{ readonly action: 'checkout'; readonly url: string }> {
+  ): Promise<CheckoutCreationResult> {
     const { data, error } = await this.rpc.rpc('get_billing_checkout_execution_context', {
       target_checkout_id: checkoutId,
     });
@@ -281,6 +308,19 @@ export class BillingService {
       if (saved.error) throw new Error('Billing customer could not be saved.');
       customerId = customer.id;
     }
+    const reconciliation = await this.reconcileCustomer({
+      livemode: this.input.expectedLivemode,
+      organization_id: context.organization_id,
+      stripe_customer_id: customerId,
+    });
+    if (reconciliation === 'superseded') {
+      return { action: 'billing_reconciliation_required' };
+    }
+    const eligible = await this.rpc.rpc('assert_billing_checkout_eligible', {
+      target_checkout_id: context.checkout_id,
+    });
+    if (eligible.error) throw new Error('Billing checkout eligibility is unavailable.');
+    if (eligible.data !== true) return { action: 'manage_existing_subscription' };
     const checkout = await this.input.provider.createCheckoutSession({
       cancelUrl: `${this.input.webOrigin}/dashboard/billing?checkout=cancelled`,
       customerId,
@@ -321,6 +361,7 @@ export class BillingService {
   }
 
   public async refresh(accountId: string): Promise<void> {
+    // A newer refresh may win the durable fence; its state is authoritative already.
     await this.reconcileCustomer(await this.accountContext(accountId));
   }
 
@@ -390,33 +431,33 @@ export class BillingService {
       const mode = textField(event.object, 'mode');
       const subscriptionId = webhookSubscriptionId(event);
       if (mode !== 'subscription' || !subscriptionId || !event.objectId) return 'ignored';
-      const known = await this.checkoutEventContext(
-        event.objectId,
-        customerId,
-        subscriptionId,
-        event.livemode,
-      );
-      if (!known) return 'ignored';
-      const completed = await this.rpc.rpc('complete_billing_checkout_from_event', {
+      const reservation = await this.rpc.rpc('reserve_billing_checkout_subscription_from_event', {
         target_customer_id: customerId,
         target_livemode: event.livemode,
         target_session_id: event.objectId,
         target_subscription_id: subscriptionId,
       });
-      const context = completed.data?.[0];
-      if (completed.error) throw new Error('Stripe Checkout mapping is unavailable.');
+      const context = reservation.data?.[0];
+      if (reservation.error) throw new Error('Stripe Checkout mapping is unavailable.');
       if (!context) return 'ignored';
-      await this.reconcileCustomer({
+      if (context.checkout_completed) return 'processed';
+      const reconciliation = await this.reconcileCustomer({
         livemode: event.livemode,
         organization_id: context.organization_id,
         stripe_customer_id: context.stripe_customer_id,
-      }, event);
+      }, undefined, { sessionId: event.objectId, subscriptionId });
+      if (reconciliation === 'superseded') {
+        throw new Error('Stripe reconciliation was superseded and must retry.');
+      }
       return 'processed';
     }
 
     const context = await this.customerContext(customerId, event.livemode);
     if (!context) return 'ignored';
-    await this.reconcileCustomer(context, event);
+    const reconciliation = await this.reconcileCustomer(context, event);
+    if (reconciliation === 'superseded') {
+      throw new Error('Stripe reconciliation was superseded and must retry.');
+    }
     return 'processed';
   }
 
@@ -475,26 +516,12 @@ export class BillingService {
     return context;
   }
 
-  private async checkoutEventContext(
-    sessionId: string,
-    customerId: string,
-    subscriptionId: string,
-    livemode: boolean,
-  ): Promise<{ readonly organization_id: string; readonly stripe_customer_id: string } | null> {
-    const { data, error } = await this.rpc.rpc('get_billing_checkout_event_context', {
-      target_customer_id: customerId,
-      target_livemode: livemode,
-      target_session_id: sessionId,
-      target_subscription_id: subscriptionId,
-    });
-    if (error) throw new Error('Stripe Checkout mapping is unavailable.');
-    return data?.[0] ?? null;
-  }
-
   private async reconcileCustomer(
     context: Pick<BillingAccountContext, 'livemode' | 'organization_id' | 'stripe_customer_id'>,
     deletedEvent?: StripeWebhookEventRecord,
-  ): Promise<void> {
+    checkoutFinalization?: CheckoutSnapshotFinalization,
+  ): Promise<'applied' | 'superseded'> {
+    const fence = await this.beginReconciliation(context);
     let subscriptions: readonly StripeSubscriptionRecord[];
     let snapshotComplete = true;
     try {
@@ -504,6 +531,13 @@ export class BillingService {
       if (!fallback) throw error;
       subscriptions = [fallback];
       snapshotComplete = false;
+    }
+
+    if (
+      checkoutFinalization &&
+      !subscriptions.some((subscription) => subscription.id === checkoutFinalization.subscriptionId)
+    ) {
+      throw new Error('Stripe Checkout subscription is not visible in provider truth.');
     }
 
     const snapshots = subscriptions.map((subscription) => {
@@ -531,13 +565,45 @@ export class BillingService {
     });
     const applied = await this.rpc.rpc('apply_stripe_billing_snapshot', {
       target_customer_id: context.stripe_customer_id,
+      target_checkout_session_id: checkoutFinalization?.sessionId ?? null,
+      target_checkout_subscription_id: checkoutFinalization?.subscriptionId ?? null,
       target_livemode: context.livemode,
       target_organization_id: context.organization_id,
+      target_reconciliation_generation: fence.reconciliation_generation,
       target_snapshot_complete: snapshotComplete,
       target_subscriptions: snapshots,
     });
-    if (applied.error || !applied.data) {
+    const outcome = applied.data?.[0];
+    if (applied.error || !outcome) {
       throw new Error('Stripe subscription reconciliation could not be saved.');
     }
+    if (outcome.outcome === 'superseded') return 'superseded';
+    if (outcome.outcome !== 'applied') {
+      throw new Error('Stripe subscription reconciliation returned an invalid outcome.');
+    }
+    return 'applied';
+  }
+
+  private async beginReconciliation(
+    context: Pick<BillingAccountContext, 'livemode' | 'organization_id' | 'stripe_customer_id'>,
+  ): Promise<BillingReconciliationContext> {
+    const { data, error } = await this.rpc.rpc('begin_stripe_billing_reconciliation', {
+      target_customer_id: context.stripe_customer_id,
+      target_livemode: context.livemode,
+      target_organization_id: context.organization_id,
+    });
+    const fence = data?.[0];
+    if (
+      error ||
+      !fence ||
+      fence.livemode !== context.livemode ||
+      fence.organization_id !== context.organization_id ||
+      fence.stripe_customer_id !== context.stripe_customer_id ||
+      !Number.isSafeInteger(fence.reconciliation_generation) ||
+      fence.reconciliation_generation < 1
+    ) {
+      throw new Error('Stripe reconciliation fence is unavailable.');
+    }
+    return fence;
   }
 }
