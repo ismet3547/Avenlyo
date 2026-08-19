@@ -1,4 +1,13 @@
 import type {
+  ConversationResumeResultRow,
+  ConversationTakeoverResultRow,
+  HandoffClaimResultRow,
+  HandoffHistoryRow,
+  HandoffQueueRow,
+  HandoffQueueSummaryRow,
+  HandoffReleaseResultRow,
+  HandoffResolveResultRow,
+  HumanReplyResultRow,
   InboxConversationRow,
   InboxMessageRow,
   WebChatWidgetConfigurationRow,
@@ -22,15 +31,70 @@ export interface MessagingRpcCaller {
     readonly error: { readonly message: string } | null;
   }>;
   (
-    name: 'take_over_my_conversation' | 'resume_my_conversation_ai',
+    name: 'get_my_handoff_queue',
+    args: {
+      readonly target_location_id: string | null;
+      readonly target_filter: string;
+      readonly target_limit: number;
+    },
+  ): PromiseLike<{
+    readonly data: readonly HandoffQueueRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'get_my_handoff_queue_summary',
+    args: { readonly target_location_id: string | null },
+  ): PromiseLike<{
+    readonly data: readonly HandoffQueueSummaryRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'get_my_conversation_handoff_history',
+    args: { readonly target_conversation_id: string; readonly target_limit: number },
+  ): PromiseLike<{
+    readonly data: readonly HandoffHistoryRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'claim_my_handoff',
+    args: { readonly target_handoff_id: string },
+  ): PromiseLike<{
+    readonly data: readonly HandoffClaimResultRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'release_my_handoff',
+    args: { readonly target_handoff_id: string },
+  ): PromiseLike<{
+    readonly data: readonly HandoffReleaseResultRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'resolve_my_handoff',
+    args: { readonly target_handoff_id: string },
+  ): PromiseLike<{
+    readonly data: readonly HandoffResolveResultRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'take_over_my_conversation',
     args: { readonly target_conversation_id: string },
-  ): PromiseLike<{ readonly data: null; readonly error: { readonly message: string } | null }>;
+  ): PromiseLike<{
+    readonly data: readonly ConversationTakeoverResultRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+  (
+    name: 'resume_my_conversation_ai',
+    args: { readonly target_conversation_id: string },
+  ): PromiseLike<{
+    readonly data: readonly ConversationResumeResultRow[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
   (
     name: 'create_my_human_reply',
     args: { readonly target_conversation_id: string; readonly target_body: string },
   ): PromiseLike<{
-    readonly data:
-      readonly { readonly message_id: string; readonly source_channel: string }[] | null;
+    readonly data: readonly HumanReplyResultRow[] | null;
     readonly error: { readonly message: string } | null;
   }>;
   (

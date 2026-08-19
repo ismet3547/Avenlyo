@@ -171,6 +171,17 @@ const appointmentReminderDeliveryConsistencyTest = readFileSync(
   ),
   'utf8',
 );
+const handoffOperationsMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260826000000_phase_13_handoff_operations.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const handoffOperationsSecurityTest = readFileSync(
+  new URL('../../../supabase/tests/database/handoff_operations_security.test.sql', import.meta.url),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -671,5 +682,111 @@ describe('lead capture migration definition', () => {
     expect(leadIntegrityMigration).toContain("call.provider = 'openai-realtime-sip'");
     expect(leadsSecurityTest).toContain('anonymous voice caller can capture a lead');
     expect(leadsSecurityTest).toContain('later routine capture cannot downgrade urgency');
+  });
+});
+
+describe('human handoff operations migration definition', () => {
+  it('keeps one active customer handoff per conversation at the database level', () => {
+    expect(handoffOperationsMigration).toContain('handoffs_one_active_customer_conversation_key');
+    expect(handoffOperationsMigration).toContain(
+      "where mode = 'customer' and status in ('open', 'acknowledged')",
+    );
+    expect(handoffOperationsMigration).toContain('pg_catalog.pg_advisory_xact_lock');
+    expect(handoffOperationsMigration).toContain(
+      'create function public.persist_active_conversation_handoff',
+    );
+  });
+
+  it('normalizes historical duplicates without deleting escalation history', () => {
+    expect(handoffOperationsMigration).toContain("'superseded_by_migration'");
+    expect(handoffOperationsMigration).not.toMatch(/deletes+froms+public.handoffs/i);
+    expect(handoffOperationsMigration).toContain('last_escalated_at = now()');
+  });
+
+  it('binds a handoff to trusted source state inside its own tenant, location, and conversation', () => {
+    expect(handoffOperationsMigration).toContain('handoffs_source_message_fk');
+    expect(handoffOperationsMigration).toContain('handoffs_source_call_fk');
+    expect(handoffOperationsMigration).toContain('Handoff source message is out of scope');
+    expect(handoffOperationsMigration).toContain('Handoff source call is out of scope');
+    expect(handoffOperationsMigration).toContain('Handoff source identity is immutable');
+  });
+
+  it('moves every handoff and ownership mutation behind narrow security-definer RPCs', () => {
+    expect(handoffOperationsMigration).toContain(
+      'drop policy handoffs_insert_member on public.handoffs',
+    );
+    expect(handoffOperationsMigration).toContain(
+      'drop policy handoffs_update_member on public.handoffs',
+    );
+    expect(handoffOperationsMigration).toContain(
+      'revoke insert, update, delete on public.handoffs from anon, authenticated, service_role',
+    );
+    expect(handoffOperationsMigration).toContain('Conversation ownership is not directly writable');
+    expect(handoffOperationsMigration).toContain('create function public.claim_my_handoff');
+    expect(handoffOperationsMigration).toContain('create function public.release_my_handoff');
+    expect(handoffOperationsMigration).toContain('create function public.resolve_my_handoff');
+  });
+
+  it('keeps resolving an episode separate from resuming automation', () => {
+    expect(handoffOperationsMigration).toContain("'resolve_handoff_first'");
+    expect(handoffOperationsMigration).toContain("'conversation.ai_resumed'");
+    expect(handoffOperationsMigration).toContain("'conversation.human_takeover'");
+    expect(handoffOperationsMigration).not.toContain('resolve_my_handoff_and_resume');
+  });
+
+  it('protects urgent work and suppresses automation once a person owns the episode', () => {
+    expect(handoffOperationsMigration).toContain('Handoff urgency cannot be downgraded');
+    expect(handoffOperationsMigration).toContain(
+      'or conversation_row.assigned_user_id is not null into human_owned',
+    );
+    expect(handoffOperationsMigration).toContain("error_code = 'human_ownership_suppressed'");
+  });
+
+  it('logs only bounded operational metadata for handoff transitions', () => {
+    expect(handoffOperationsMigration).toContain("'handoff.created'");
+    expect(handoffOperationsMigration).toContain("'handoff.escalated'");
+    expect(handoffOperationsMigration).toContain("'handoff.claimed'");
+    expect(handoffOperationsMigration).toContain("'handoff.released'");
+    expect(handoffOperationsMigration).toContain("'handoff.resolved'");
+    expect(handoffOperationsMigration).not.toContain("'reason', target_reason");
+  });
+
+  it('ships executable coverage for ownership, races, queue order, and grants', () => {
+    expect(handoffOperationsSecurityTest).toContain(
+      'a customer conversation cannot hold two active handoffs',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'the operator who arrives second is told the work is already claimed',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'a replayed claim never rewrites the first acknowledgement',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'a member of another location cannot claim this location work',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'resolving leaves automation paused; resuming is a separate decision',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'AI cannot resume while an escalation episode is still active',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'a later normal signal cannot silently downgrade urgent work',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'a future escalation after resolution opens a new episode',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'an urgent active episode with a waiting customer is the highest operator priority',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'voice escalations appear in the same operator queue',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'a voice escalation never creates an automatic text message',
+    );
+    expect(handoffOperationsSecurityTest).toContain(
+      'no broad service-role handoff CRUD grant exists',
+    );
   });
 });

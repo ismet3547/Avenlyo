@@ -447,6 +447,104 @@ export interface InboxMessageRow {
   created_at: string;
 }
 
+export interface HandoffQueueRow {
+  conversation_id: string;
+  location_id: string | null;
+  channel_type: string;
+  contact_name: string | null;
+  contact_phone: string | null;
+  ai_mode: 'ai' | 'human';
+  conversation_assigned_to_me: boolean;
+  conversation_is_assigned: boolean;
+  conversation_assigned_name: string | null;
+  handoff_id: string | null;
+  handoff_is_active: boolean;
+  handoff_status: 'open' | 'acknowledged' | 'resolved' | null;
+  handoff_urgency: 'normal' | 'urgent' | null;
+  handoff_reason: string | null;
+  handoff_assigned_to_me: boolean;
+  handoff_is_assigned: boolean;
+  handoff_assigned_name: string | null;
+  handoff_source: 'voice' | 'message' | null;
+  handoff_call_status: string | null;
+  handoff_created_at: string | null;
+  handoff_first_acknowledged_at: string | null;
+  handoff_resolved_at: string | null;
+  customer_waiting: boolean;
+  waiting_since: string | null;
+  latest_body: string | null;
+  latest_at: string;
+  lead_status: string | null;
+  lead_urgency: string | null;
+  queue_priority: number;
+}
+
+export interface HandoffQueueSummaryRow {
+  needs_attention: number;
+  urgent: number;
+  assigned_to_me: number;
+}
+
+export interface HandoffHistoryRow {
+  handoff_id: string;
+  handoff_status: 'open' | 'acknowledged' | 'resolved';
+  handoff_urgency: 'normal' | 'urgent';
+  handoff_reason: string;
+  handoff_source: 'voice' | 'message';
+  requested_at: string;
+  first_acknowledged_at: string | null;
+  resolved_at: string | null;
+  assigned_display_name: string | null;
+  resolved_by_display_name: string | null;
+}
+
+export interface HandoffClaimResultRow {
+  outcome: 'claimed' | 'already_claimed' | 'already_resolved';
+  handoff_id: string | null;
+  conversation_id: string | null;
+  handoff_status: string | null;
+  urgency: string | null;
+  assigned_to_me: boolean;
+  assigned_display_name: string | null;
+  first_acknowledged_at: string | null;
+}
+
+export interface HandoffReleaseResultRow {
+  outcome: 'released' | 'not_active';
+  handoff_id: string | null;
+  conversation_id: string | null;
+  handoff_status: string | null;
+}
+
+export interface HandoffResolveResultRow {
+  outcome: 'resolved' | 'already_resolved';
+  handoff_id: string | null;
+  conversation_id: string | null;
+  handoff_status: string | null;
+  ai_mode: string | null;
+}
+
+export interface ConversationTakeoverResultRow {
+  outcome: 'taken_over' | 'already_claimed' | 'already_resolved' | 'owned_by_other';
+  conversation_id: string | null;
+  handoff_id: string | null;
+  assigned_display_name: string | null;
+}
+
+export interface ConversationResumeResultRow {
+  outcome: 'resumed' | 'resolve_handoff_first' | 'owned_by_other';
+  conversation_id: string | null;
+  ai_mode: string | null;
+  assigned_display_name: string | null;
+}
+
+export interface HumanReplyResultRow {
+  outcome: 'sent' | 'owned_by_other';
+  message_id: string | null;
+  source_channel: string;
+  assigned_display_name: string | null;
+}
+
 export interface MessageProcessingJobRow {
   job_id: string;
   job_kind: 'inbound_ai' | 'outbound_delivery';
@@ -1048,11 +1146,42 @@ export interface Database {
         Args: { target_conversation_id: string };
         Returns: InboxMessageRow[];
       };
-      take_over_my_conversation: { Args: { target_conversation_id: string }; Returns: undefined };
-      resume_my_conversation_ai: { Args: { target_conversation_id: string }; Returns: undefined };
+      take_over_my_conversation: {
+        Args: { target_conversation_id: string };
+        Returns: ConversationTakeoverResultRow[];
+      };
+      resume_my_conversation_ai: {
+        Args: { target_conversation_id: string };
+        Returns: ConversationResumeResultRow[];
+      };
       create_my_human_reply: {
         Args: { target_conversation_id: string; target_body: string };
-        Returns: { message_id: string; source_channel: string }[];
+        Returns: HumanReplyResultRow[];
+      };
+      claim_my_handoff: { Args: { target_handoff_id: string }; Returns: HandoffClaimResultRow[] };
+      release_my_handoff: {
+        Args: { target_handoff_id: string };
+        Returns: HandoffReleaseResultRow[];
+      };
+      resolve_my_handoff: {
+        Args: { target_handoff_id: string };
+        Returns: HandoffResolveResultRow[];
+      };
+      get_my_handoff_queue: {
+        Args: {
+          target_location_id?: string | null;
+          target_filter?: string | null;
+          target_limit?: number | null;
+        };
+        Returns: HandoffQueueRow[];
+      };
+      get_my_handoff_queue_summary: {
+        Args: { target_location_id?: string | null };
+        Returns: HandoffQueueSummaryRow[];
+      };
+      get_my_conversation_handoff_history: {
+        Args: { target_conversation_id: string; target_limit?: number | null };
+        Returns: HandoffHistoryRow[];
       };
       get_my_web_chat_widget: {
         Args: { target_location_id: string };

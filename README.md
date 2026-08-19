@@ -6,7 +6,8 @@ capture leads, book appointments, and hand off to people when appropriate.
 This repository contains the Phase 0 foundation, **Phase 1 authenticated onboarding**, **Phase 2
 reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, **Phase 4 inbound
 voice control**, **Phase 5 veterinary ezyVet scheduling**, **Phase 6 Google Calendar scheduling**,
-**Phase 7 unified SMS and web-chat messaging**, and **Phase 12 Stripe billing and prospective usage metering**. It
+**Phase 7 unified SMS and web-chat messaging**, **Phase 12 Stripe billing and prospective usage
+metering**, and **Phase 13 human handoff operations and the operator inbox**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
 empty state. It does not include pricing policy, hard runtime billing enforcement, live customer AI,
@@ -212,6 +213,94 @@ Anonymous web chat can create a conversation without inventing a verified contac
 adapter must therefore require a trusted identity before an ezyVet write; it should hand off instead
 of fabricating a contact or pet. Google Calendar remains able to use the existing approved local
 booking model where its connector does not require that external identity.
+
+## Human handoff operations (Phase 13)
+
+Phase 13 turns the durable handoffs Phase 3, 4, 7, 10, and 11 already create into an operational
+queue at **Dashboard -> Inbox**. The product rule is "AI when it can, human when it should": once a
+person owns an escalation, automation must not silently compete with them.
+
+**One active episode per conversation.** A customer conversation may hold at most one unresolved
+handoff (`open` or `acknowledged`). That is a partial unique index plus a per-conversation advisory
+lock inside `persist_active_conversation_handoff`, which every AI, deterministic, and voice creation
+path now calls. A replayed tool call, a second tool call in the same turn, and a later inbound
+request all reuse the same durable row. Test-mode agent handoffs stay outside this rule and outside
+the production queue.
+
+**Source identity comes from the runtime, never the model.** Text escalations bind the trusted
+inbound message in `handoffs.source_message_id`; voice escalations keep the Phase 4
+`handoffs.call_id` binding rather than gaining a second competing column. Both are constrained to
+the same organization, location, and conversation by composite foreign keys and by a trigger that
+also covers the null-location case and keeps the binding immutable.
+
+**Urgency is monotonic.** A later urgent signal escalates the episode already in the queue and
+stamps `last_escalated_at`; nothing downgrades urgent work, including through direct SQL. The
+original `reason` is never rewritten and no generated reason history accumulates.
+
+**Ownership is a database transaction.** `claim_my_handoff`, `release_my_handoff`, and
+`resolve_my_handoff` are the only staff mutation paths, and manual takeover and human reply reuse
+the same `apply_handoff_claim` transition rather than maintaining a second assignment path. Two
+operators claiming concurrently produce exactly one owner; the loser receives `already_claimed` with
+a safe display name for a UI refresh. A replayed claim is an idempotent success that does not
+rewrite `first_acknowledged_at` or write a second audit. A normal member cannot take, reply over, or
+resolve a handoff a teammate owns. An owner/admin can release an abandoned handoff so another
+operator can claim it; releasing keeps the historical first acknowledgement and leaves the
+conversation in human mode.
+
+**Resolve is not resume.** Resolving ends the human escalation episode and deliberately leaves
+`conversations.ai_mode = 'human'`. `resume_my_conversation_ai` is a separate explicit action that
+refuses while an episode is still active (`resolve_handoff_first`), respects conversation ownership,
+and does not synthesise a reply: automation becomes eligible again only on the next inbound customer
+turn.
+
+**Automation stops competing.** `persist_ai_message_reply` re-checks ownership immediately before it
+persists, so a claim that lands after the model call still wins. A queued automated SMS that has not
+crossed the provider boundary is suppressed at `claim_sms_delivery_submission` with
+`human_ownership_suppressed`. Anything already submitted keeps its provider truth: handoff lifecycle
+never rewrites `submitted`, `sent`, `delivered`, `unknown`, `failed`, or `undelivered` history.
+
+**Waiting state is derived, not tracked.** There is no unread system. `customer_waiting` is true when
+a customer turn is newer than the newest human-authored reply, and `waiting_since` is the oldest
+still-unanswered turn in the current episode. AI replies do not count as human handling. The UI
+shows elapsed time only; Phase 13 invents no service-level thresholds.
+
+**Queue order is operational attention.** Urgent waiting work, then urgent, then normal waiting,
+then normal, then human-owned conversations with a waiting customer, then remaining recent
+conversations. Inside a band the oldest waiting or oldest escalation comes first. Filters are
+Urgent, Needs attention, Mine, All active, and Resolved history, and one `get_my_handoff_queue` call
+returns every field a row needs, so the inbox does not fan out per-conversation RPCs. Voice
+escalations appear in the same queue with their reason, urgency, and current call state.
+
+**Claiming a voice handoff is ownership, not audio.** The Direct SIP architecture is untouched, no
+browser softphone exists, and no SMS is created because a staff member claimed or resolved a voice
+escalation. Phase 11 consent rules remain authoritative.
+
+**Security.** Authenticated clients can read handoffs at their locations and nothing else: the
+insert, update, and delete policies are dropped, and `insert, update, delete` is revoked from
+`anon`, `authenticated`, and `service_role`. A trigger also refuses direct browser writes to
+`conversations.ai_mode` and `conversations.assigned_user_id`. Internal helpers
+(`persist_active_conversation_handoff`, `apply_handoff_claim`, `authorize_my_handoff_operation`, the
+display-name and waiting helpers, and the trigger functions) are revoked from every role; the
+service-role handoff surface stays `request_message_handoff` and `request_inbound_voice_handoff`,
+which derive tenant, location, conversation, and source identity from durable state.
+
+**Audit.** `handoff.created`, `handoff.escalated`, `handoff.claimed`, `handoff.released`,
+`handoff.resolved`, `conversation.human_takeover`, and `conversation.ai_resumed` carry bounded
+metadata only (channel, urgency, transition, recovery scope). Free-text reasons, phone numbers,
+message bodies, and transcripts are never logged, and replays do not duplicate lifecycle audits.
+The Phase 4 `voice.handoff.requested` event is replaced by the harmonized `handoff.created` audit so
+one durable episode produces exactly one creation record.
+
+**Migration normalization.** Phase 0-12 created one handoff per triggering turn or tool call, so a
+conversation could already hold several unresolved rows before the uniqueness rule existed. The
+migration keeps the oldest active handoff as the canonical episode, carries any urgent sibling
+signal onto it first so de-duplication cannot downgrade urgent work, and resolves the superseded
+rows with a `superseded_by_migration` audit. No handoff row and no historical attribution is
+deleted.
+
+**Refresh.** The Inbox runs a bounded 12-second client refresh that pauses while the tab is hidden,
+and the navigation attention badge is a single tenant- and location-scoped read per dashboard
+render. Phase 13 adds no websocket platform, no staff notifications, and no billing enforcement.
 
 ## Controlled AI Agent Test
 
