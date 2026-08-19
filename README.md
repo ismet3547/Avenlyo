@@ -6,10 +6,11 @@ capture leads, book appointments, and hand off to people when appropriate.
 This repository contains the Phase 0 foundation, **Phase 1 authenticated onboarding**, **Phase 2
 reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, **Phase 4 inbound
 voice control**, **Phase 5 veterinary ezyVet scheduling**, **Phase 6 Google Calendar scheduling**,
-and **Phase 7 unified SMS and web-chat messaging**. It
+**Phase 7 unified SMS and web-chat messaging**, and **Phase 12 Stripe billing and prospective usage metering**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
-empty state. It does not include production integrations, billing, live customer AI, or AI workflows.
+empty state. It does not include pricing policy, hard runtime billing enforcement, live customer AI,
+or AI workflows.
 
 ## Prerequisites
 
@@ -51,30 +52,35 @@ Copy-Item apps/api/.env.example apps/api/.env
 | ------------------------------- | --------------------------------------------------------------------------- |
 | `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication.                |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.                  |
-| `AVENLYO_API_URL`               | Server-only Fastify URL used by the ezyVet management actions.               |
+| `AVENLYO_API_URL`               | Server-only Fastify URL used by the ezyVet management actions.              |
 | `OPENAI_API_KEY`                | Optional, server-only; required to publish knowledge or run Agent Test.     |
 | `OPENAI_EMBEDDING_MODEL`        | Optional server-only embedding model. Defaults to `text-embedding-3-small`. |
 | `OPENAI_AGENT_MODEL`            | Optional server-only Responses model. Defaults to `gpt-5.6`.                |
 
 `apps/api/.env` accepts these values:
 
-| Variable                    | Required                             | Purpose                                                                   |
-| --------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
-| `API_PORT`                  | No                                   | API listen port. Defaults to `4000`.                                      |
-| `API_HOST`                  | No                                   | API listen host. Defaults to `0.0.0.0`.                                   |
-| `API_CORS_ORIGIN`           | No                                   | Browser origin permitted by the API. Defaults to `http://localhost:3000`. |
-| `SUPABASE_URL`              | Authenticated routes / voice runtime | Supabase project URL.                                                     |
-| `SUPABASE_ANON_KEY`         | Only for authenticated API routes    | Supabase anonymous/publishable key.                                       |
-| `SUPABASE_SERVICE_ROLE_KEY` | Trusted inbound voice runtime only   | Backend-only service role; never use it in Next.js or a browser.          |
-| `OPENAI_API_KEY`            | Trusted inbound voice runtime only   | Backend-only API key for Realtime call control and embeddings.            |
-| `OPENAI_WEBHOOK_SECRET`     | Trusted inbound voice runtime only   | OpenAI webhook secret (`whsec_...`) used for raw-body signature checks.   |
-| `OPENAI_REALTIME_MODEL`     | No                                   | Server-only Realtime model. Defaults to `gpt-realtime-2.1`.               |
-| `OPENAI_PROJECT_ID`         | No                                   | Optional server-only OpenAI project ID (`proj_...`).                      |
-| `EZYVET_PARTNER_ID`         | ezyVet scheduling                    | Server-only ezyVet partner identifier; enables the trusted connector.    |
-| `TWILIO_ACCOUNT_SID`        | SMS webhook/outbound delivery         | Avenlyo-owned Twilio Account SID; never browser-exposed.                 |
-| `TWILIO_AUTH_TOKEN`         | SMS webhook/outbound delivery         | Server-only Twilio token used only by the official Twilio SDK.           |
-| `TWILIO_MESSAGING_WEBHOOK_BASE_URL` | SMS webhook/outbound delivery | Exact public API base used to validate webhook signatures/callbacks.     |
-| `OPENAI_AGENT_MODEL`        | No                                   | Text-agent Responses model. Defaults to `gpt-5.6`.                       |
+| Variable                            | Required                             | Purpose                                                                   |
+| ----------------------------------- | ------------------------------------ | ------------------------------------------------------------------------- |
+| `API_PORT`                          | No                                   | API listen port. Defaults to `4000`.                                      |
+| `API_HOST`                          | No                                   | API listen host. Defaults to `0.0.0.0`.                                   |
+| `API_CORS_ORIGIN`                   | No                                   | Browser origin permitted by the API. Defaults to `http://localhost:3000`. |
+| `SUPABASE_URL`                      | Authenticated routes / voice runtime | Supabase project URL.                                                     |
+| `SUPABASE_ANON_KEY`                 | Only for authenticated API routes    | Supabase anonymous/publishable key.                                       |
+| `SUPABASE_SERVICE_ROLE_KEY`         | Trusted inbound voice runtime only   | Backend-only service role; never use it in Next.js or a browser.          |
+| `OPENAI_API_KEY`                    | Trusted inbound voice runtime only   | Backend-only API key for Realtime call control and embeddings.            |
+| `OPENAI_WEBHOOK_SECRET`             | Trusted inbound voice runtime only   | OpenAI webhook secret (`whsec_...`) used for raw-body signature checks.   |
+| `OPENAI_REALTIME_MODEL`             | No                                   | Server-only Realtime model. Defaults to `gpt-realtime-2.1`.               |
+| `OPENAI_PROJECT_ID`                 | No                                   | Optional server-only OpenAI project ID (`proj_...`).                      |
+| `EZYVET_PARTNER_ID`                 | ezyVet scheduling                    | Server-only ezyVet partner identifier; enables the trusted connector.     |
+| `TWILIO_ACCOUNT_SID`                | SMS webhook/outbound delivery        | Avenlyo-owned Twilio Account SID; never browser-exposed.                  |
+| `TWILIO_AUTH_TOKEN`                 | SMS webhook/outbound delivery        | Server-only Twilio token used only by the official Twilio SDK.            |
+| `TWILIO_MESSAGING_WEBHOOK_BASE_URL` | SMS webhook/outbound delivery        | Exact public API base used to validate webhook signatures/callbacks.      |
+| `OPENAI_AGENT_MODEL`                | No                                   | Text-agent Responses model. Defaults to `gpt-5.6`.                        |
+| `STRIPE_MODE`                       | Stripe Billing                       | `test` or `live`; must match the Stripe secret-key mode.                  |
+| `STRIPE_SECRET_KEY`                 | Stripe Billing                       | Server-only Stripe SDK secret key; never expose to a browser.             |
+| `STRIPE_WEBHOOK_SECRET`             | Stripe Billing                       | Server-only Stripe endpoint signing secret (`whsec_...`).                 |
+| `STRIPE_PRODUCT_CORE`               | Stripe Billing                       | Allowlisted Stripe Product ID for source-controlled Avenlyo Core.         |
+| `STRIPE_PRICE_CORE_MONTHLY`         | Stripe Billing                       | Allowlisted Stripe monthly Price ID for Avenlyo Core.                     |
 
 Never commit actual `.env` or `.env.local` files. The API validates its environment once at
 startup; the web app validates its public configuration once when loaded.
@@ -316,6 +322,44 @@ organization switcher is outside Phase 1.
 
 GitHub Actions runs the full application validation on pull requests to `main`. A separate database
 security job starts Supabase, resets all migrations from scratch, and executes the pgTAP suites.
+
+## Billing foundation (Phase 12)
+
+Billing is organization-scoped: one Avenlyo organization maps to one Stripe Customer and expects
+at most one current Avenlyo subscription. The only source-controlled plan is **Avenlyo Core**.
+Its Stripe Product and monthly Price IDs are allowlisted through the server-only
+`STRIPE_PRODUCT_CORE` and `STRIPE_PRICE_CORE_MONTHLY` environment variables; mutable Stripe
+metadata is never used as an authorization source. Core usage limits are intentionally unlimited
+in this phase.
+
+Owners and admins can open **Dashboard -> Billing** to start a server-created Stripe Checkout
+session, manage the stored Customer through Stripe Customer Portal, or refresh provider state. The
+browser never provides a Stripe customer, subscription, product, price, or return URL. The fixed
+return paths are the Avenlyo billing page. A Checkout success redirect is informational only: a
+signed Stripe webhook is durably recorded first and the worker reconciles current provider truth
+before local state changes.
+
+Set these values only in `apps/api/.env`:
+
+```dotenv
+STRIPE_MODE=test
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRODUCT_CORE=prod_...
+STRIPE_PRICE_CORE_MONTHLY=price_...
+```
+
+`STRIPE_MODE` must match the secret-key mode. The API rejects test/live webhook mismatches.
+Missing billing settings fail billing mutation endpoints closed without affecting Voice, SMS, Web
+Chat, reminders, or follow-ups. Stripe hosts Checkout and Portal; Avenlyo stores only provider
+references and subscription projection state, never card, payment-method, invoice,
+billing-address, raw-webhook, or signature data.
+
+The prospective immutable `billing_usage_events` ledger records answered Voice seconds, outbound
+SMS provider-submission attempts, normal SMS/Web AI text turns, and appointments created through a
+trusted Avenlyo booking intent. It does not backfill historical events or call Stripe Meter Events.
+Billing state is informational in Phase 12: no live customer runtime is hard-gated by subscription
+status, including `past_due`.
 
 ## Inbound Voice (Phase 4)
 

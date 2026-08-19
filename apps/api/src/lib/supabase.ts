@@ -15,6 +15,15 @@ export function createApiSupabaseClient() {
   });
 }
 
+/** Preserves the verified caller JWT for authenticated database RPC authorization. */
+export function createAuthenticatedApiSupabaseClient(accessToken: string) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
+  return createClient<Database>(env.SUPABASE_URL, env.SUPABASE_ANON_KEY, {
+    auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+  });
+}
+
 /** Voice webhooks have no user JWT. This client is created only inside the Fastify backend. */
 /** Server-only client for trusted webhook, worker, and provider execution paths. */
 export function createServiceSupabaseClient() {

@@ -21,6 +21,11 @@ export const env = parseEnvironment(
     SUPABASE_ANON_KEY: z.string().min(1).optional(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
     SUPABASE_URL: z.string().url().optional(),
+    STRIPE_MODE: z.enum(['test', 'live']).optional(),
+    STRIPE_PRICE_CORE_MONTHLY: z.string().min(1).optional(),
+    STRIPE_PRODUCT_CORE: z.string().min(1).optional(),
+    STRIPE_SECRET_KEY: z.string().min(1).optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
     TWILIO_ACCOUNT_SID: z
       .string()
       .regex(/^AC[a-zA-Z0-9]{32}$/)
@@ -41,6 +46,18 @@ if (
 
 if (env.NODE_ENV === 'production' && !env.WEB_CHAT_IFRAME_ORIGIN.startsWith('https://')) {
   throw new Error('WEB_CHAT_IFRAME_ORIGIN must use HTTPS in production.');
+}
+
+if (
+  env.STRIPE_MODE &&
+  env.STRIPE_SECRET_KEY &&
+  !env.STRIPE_SECRET_KEY.startsWith(env.STRIPE_MODE === 'live' ? 'sk_live_' : 'sk_test_')
+) {
+  throw new Error('STRIPE_SECRET_KEY must match the configured STRIPE_MODE.');
+}
+
+if (env.NODE_ENV === 'production' && env.STRIPE_MODE === 'test') {
+  throw new Error('STRIPE_MODE must be live in production.');
 }
 
 export const isSupabaseConfigured = Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
@@ -71,3 +88,16 @@ export const isTwilioMessagingConfigured = Boolean(
   env.SUPABASE_URL &&
   env.SUPABASE_SERVICE_ROLE_KEY,
 );
+
+/** Billing stays fail-closed when any server-only Stripe boundary is unconfigured. */
+export const isStripeBillingConfigured = Boolean(
+  env.STRIPE_MODE &&
+  env.STRIPE_PRICE_CORE_MONTHLY &&
+  env.STRIPE_PRODUCT_CORE &&
+  env.STRIPE_SECRET_KEY &&
+  env.STRIPE_WEBHOOK_SECRET &&
+  env.SUPABASE_URL &&
+  env.SUPABASE_SERVICE_ROLE_KEY,
+);
+
+export const expectedStripeLivemode = env.STRIPE_MODE === 'live';
