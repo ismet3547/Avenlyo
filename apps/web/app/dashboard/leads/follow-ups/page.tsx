@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { saveLeadFollowupSettingsAction } from './actions';
+import { SenderAcknowledgement } from './sender-acknowledgement';
 import { followupsRpc } from '@/lib/followups/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -12,14 +13,17 @@ function time(value: string): string {
 export default async function LeadFollowupsPage() {
   const workspace = await requireCompletedWorkspace();
   const auth = await getRequiredAuthContext();
-  const settings =
+  const [settings, senderOptions] =
     auth && workspace.locationId
-      ? (
-          await followupsRpc(auth.supabase)('get_my_lead_followup_settings', {
+      ? await Promise.all([
+          followupsRpc(auth.supabase)('get_my_lead_followup_settings', {
             target_location_id: workspace.locationId,
-          })
-        ).data?.[0]
-      : null;
+          }).then((result) => result.data?.[0] ?? null),
+          followupsRpc(auth.supabase)('get_my_lead_followup_sender_options', {
+            target_location_id: workspace.locationId,
+          }).then((result) => result.data ?? []),
+        ])
+      : [null, []];
   if (!workspace.locationId || workspace.role === 'member') {
     return (
       <section className="max-w-3xl">
@@ -38,12 +42,15 @@ export default async function LeadFollowupsPage() {
   }
   const configured = settings ?? {
     automation_acknowledged_at: null,
+    automation_acknowledged_sender_phone_number_id: null,
     business_hours_only: true,
     delay_minutes: 240,
     lead_followup_enabled: false,
     quiet_hours_end: '08:00',
     quiet_hours_start: '20:00',
     sender_available: false,
+    sender_e164: null,
+    sender_phone_number_id: null,
   };
   return (
     <section className="max-w-3xl">
@@ -85,22 +92,16 @@ export default async function LeadFollowupsPage() {
             </span>
           </span>
         </label>
-        <label className="flex items-start gap-3 border-t border-border pt-5 text-sm">
-          <input
-            className="mt-1 size-4 accent-primary"
-            defaultChecked={configured.automation_acknowledged_at !== null}
-            name="acknowledgeSender"
-            type="checkbox"
-          />
-          <span>
-            <strong className="font-semibold text-ink">Confirm sender authorization</strong>
-            <br />
-            <span className="text-muted-foreground">
-              Your business is responsible for ensuring this sender, use case, and consent flow are
-              authorized for these messages.
-            </span>
-          </span>
-        </label>
+        <SenderAcknowledgement
+          acknowledged={
+            configured.automation_acknowledged_at !== null &&
+            configured.automation_acknowledged_sender_phone_number_id ===
+              configured.sender_phone_number_id
+          }
+          disabled={!configured.sender_available}
+          options={senderOptions}
+          selectedSenderId={configured.sender_phone_number_id}
+        />
         <label className="grid max-w-48 gap-2 border-t border-border pt-5 text-sm font-medium text-ink">
           Delay (minutes)
           <input

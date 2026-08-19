@@ -15,6 +15,7 @@ const settingsSchema = z
     enabled: z.string().optional(),
     quietHoursEnd: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/),
     quietHoursStart: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/),
+    senderPhoneNumberId: z.string().uuid().optional(),
   })
   .refine((value) => value.quietHoursStart !== value.quietHoursEnd, {
     message: 'Quiet-hours start and end must differ.',
@@ -32,6 +33,7 @@ export async function saveLeadFollowupSettingsAction(formData: FormData): Promis
     enabled: formData.get('enabled'),
     quietHoursEnd: formData.get('quietHoursEnd'),
     quietHoursStart: formData.get('quietHoursStart'),
+    senderPhoneNumberId: formData.get('senderPhoneNumberId') || undefined,
   });
   const auth = await getRequiredAuthContext();
   if (!auth) throw new Error('Authentication is required.');
@@ -43,6 +45,7 @@ export async function saveLeadFollowupSettingsAction(formData: FormData): Promis
     target_location_id: workspace.locationId,
     target_quiet_hours_end: value.quietHoursEnd,
     target_quiet_hours_start: value.quietHoursStart,
+    target_sender_phone_number_id: value.senderPhoneNumberId ?? null,
   });
   if (error) throw new Error('Lead follow-up settings could not be saved.');
   revalidatePath('/dashboard/leads/follow-ups');

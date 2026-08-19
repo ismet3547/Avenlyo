@@ -58,14 +58,14 @@ export const confirmSmsFollowupConsentSchema = z
 
 const prepareSmsFollowupConsentFunction: VoiceFunctionTool = {
   description:
-    'Prepare an optional SMS follow-up consent request for this exact caller. Ask the caller whether they would like a text follow-up before using it. Never ask for or provide a phone number.',
+    'Prepare an optional SMS follow-up consent request for this exact caller before asking the consent question. Then ask whether they would like a text follow-up, wait for a new caller transcript, and only then use the confirmation tool for a clear yes. Never ask for or provide a phone number.',
   name: 'prepare_sms_followup_consent',
   parameters: { additionalProperties: false, properties: {}, required: [], type: 'object' },
   strict: true,
 };
 const confirmSmsFollowupConsentFunction: VoiceFunctionTool = {
   description:
-    'Record consent only after the caller gives a later, clear yes to the follow-up text question. Use the opaque consent intent returned by preparation; never supply a phone number or transcript.',
+    'Record consent only after the caller gives a later, clear yes in a new transcript after the follow-up question. Use the opaque consent intent returned by preparation; never supply a phone number or transcript.',
   name: 'confirm_sms_followup_consent',
   parameters: {
     additionalProperties: false,

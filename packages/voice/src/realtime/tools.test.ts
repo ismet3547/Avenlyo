@@ -140,6 +140,13 @@ describe('voice tool boundary', () => {
   });
 
   it('keeps Voice follow-up consent identities outside model arguments', async () => {
+    const followupTools = activeVoiceTools({ industry: veterinaryPack, transferEnabled: false });
+    expect(
+      followupTools.find((tool) => tool.name === 'prepare_sms_followup_consent')?.description,
+    ).toContain('before asking the consent question');
+    expect(
+      followupTools.find((tool) => tool.name === 'confirm_sms_followup_consent')?.description,
+    ).toContain('new transcript after the follow-up question');
     const prepare = vi.fn().mockResolvedValue({
       consentIntentId: '00000000-0000-4000-8000-000000000101',
       expiresAt: '2026-08-24T10:10:00.000Z',
