@@ -17,7 +17,9 @@ insert into auth.users (id, email) values
   ('b0000000-0000-0000-0000-000000000001', 'billing-owner@example.test'),
   ('b0000000-0000-0000-0000-000000000002', 'billing-member@example.test'),
   ('b0000000-0000-0000-0000-000000000003', 'billing-owner-b@example.test');
-insert into public.users (id, email) select id, email from auth.users where id::text like 'b0000000%';
+insert into public.users (id, email)
+select id, email from auth.users where id::text like 'b0000000%'
+on conflict (id) do nothing;
 insert into public.organizations (id, name, slug, created_by) values
   ('b1000000-0000-0000-0000-000000000001', 'Billing Organization A', 'billing-org-a', 'b0000000-0000-0000-0000-000000000001'),
   ('b2000000-0000-0000-0000-000000000001', 'Billing Organization B', 'billing-org-b', 'b0000000-0000-0000-0000-000000000003');
