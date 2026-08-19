@@ -2,7 +2,7 @@
 -- never contacts.phone, to exercise the database authority boundary.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(52);
+select extensions.plan(80);
 
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
@@ -245,6 +245,292 @@ reset role;
 select extensions.ok((select (select status from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000007') = 'skipped'
   and (select status from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000014') = 'suppressed'), 'the capped job and queued delivery are suppressed without a provider attempt');
 select extensions.is((select public.lead_followup_next_allowed_time('2026-08-24 22:00:00+00', 'UTC', time '20:00', time '08:00', '{}'::jsonb, false)), '2026-08-25 08:00:00+00'::timestamptz, 'quiet-hours scheduling moves forward, never earlier');
+
+-- A START/UNSTOP may reopen only the same untouched opted-out job. Consent audit events are
+-- transitions, not inbound-command noise, and intentionally contain only channel/purpose data.
+insert into public.contacts (id, organization_id, location_id, first_name, phone)
+values ('f1500000-0000-0000-0000-000000000250', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'Reactivate', '+14155550250');
+insert into public.conversations (id, organization_id, location_id, contact_id, channel_id, transport_phone_number_id, mode, ai_mode, status)
+values ('f1700000-0000-0000-0000-000000000250', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1500000-0000-0000-0000-000000000250', 'f1600000-0000-0000-0000-000000000001', 'f1400000-0000-0000-0000-000000000001', 'customer', 'ai', 'open');
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164, created_at)
+values
+  ('f1800000-0000-0000-0000-000000000250', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1700000-0000-0000-0000-000000000250', 'f1500000-0000-0000-0000-000000000250', 'inbound', 'text', 'Please help with my pet.', 'sms', 'customer', '+14155550250', now() - interval '5 minutes'),
+  ('f1800000-0000-0000-0000-000000000251', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1700000-0000-0000-0000-000000000250', 'f1500000-0000-0000-0000-000000000250', 'inbound', 'text', 'START', 'sms', 'customer', '+14155550250', now() - interval '4 minutes');
+insert into public.leads (id, organization_id, location_id, contact_id, conversation_id, last_captured_message_id, status, source_channel, service_category, customer_goal, urgency, qualification_reason, details)
+values ('f1a00000-0000-0000-0000-000000000250', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1500000-0000-0000-0000-000000000250', 'f1700000-0000-0000-0000-000000000250', 'f1800000-0000-0000-0000-000000000250', 'qualified', 'sms', 'wellness', 'appointment', 'routine', 'qualified', '{}');
+insert into public.messaging_contact_preferences (organization_id, location_id, contact_id, channel_type, sender_phone_number_id, status, source_message_id)
+values ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1500000-0000-0000-0000-000000000250', 'sms', 'f1400000-0000-0000-0000-000000000001', 'active', 'f1800000-0000-0000-0000-000000000251');
+create temporary table pg_temp.reactivation_state (job_id uuid not null);
+insert into pg_temp.reactivation_state select id from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000250';
+select extensions.is((select count(*)::integer from pg_temp.reactivation_state), 1, 'START initially creates one durable follow-up job');
+select extensions.is((select count(*)::integer from public.action_logs log join public.sms_consents consent on consent.id = log.entity_id where consent.recipient_e164 = '+14155550250' and log.action = 'sms.consent.granted'), 1, 'the initial active consent is audited once');
+
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164)
+values ('f1800000-0000-0000-0000-000000000252', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1700000-0000-0000-0000-000000000250', 'f1500000-0000-0000-0000-000000000250', 'inbound', 'text', 'STOP', 'sms', 'customer', '+14155550250');
+update public.messaging_contact_preferences set status = 'opted_out', opted_out_at = now(), source_message_id = 'f1800000-0000-0000-0000-000000000252'
+where contact_id = 'f1500000-0000-0000-0000-000000000250' and sender_phone_number_id = 'f1400000-0000-0000-0000-000000000001';
+select extensions.ok((select (select status from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000250') = 'skipped'
+  and (select skip_reason from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000250') = 'opted_out'), 'STOP skips the unsent job with the opted-out reason');
+select extensions.is((select count(*)::integer from public.action_logs log join public.sms_consents consent on consent.id = log.entity_id where consent.recipient_e164 = '+14155550250' and log.action = 'sms.consent.revoked'), 1, 'an active-to-revoked consent transition is audited once');
+select extensions.is((select details from public.action_logs log join public.sms_consents consent on consent.id = log.entity_id where consent.recipient_e164 = '+14155550250' and log.action = 'sms.consent.revoked' order by log.created_at desc limit 1), jsonb_build_object('channel', 'sms', 'purpose', 'lead_followup'), 'consent revocation audit details contain no message or phone data');
+
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164)
+values ('f1800000-0000-0000-0000-000000000253', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1700000-0000-0000-0000-000000000250', 'f1500000-0000-0000-0000-000000000250', 'inbound', 'text', 'UNSTOP', 'sms', 'customer', '+14155550250');
+update public.messaging_contact_preferences set status = 'active', opted_out_at = null, source_message_id = 'f1800000-0000-0000-0000-000000000253'
+where contact_id = 'f1500000-0000-0000-0000-000000000250' and sender_phone_number_id = 'f1400000-0000-0000-0000-000000000001';
+select extensions.ok((select (select id from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000250') = (select job_id from pg_temp.reactivation_state)
+  and (select status from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000250') = 'scheduled'
+  and (select scheduled_for from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000250') > now()), 'UNSTOP reopens the same untouched job with a new future schedule');
+select extensions.is((select count(*)::integer from public.action_logs log join public.lead_followup_jobs job on job.id = log.entity_id where job.lead_id = 'f1a00000-0000-0000-0000-000000000250' and log.action = 'lead.followup.scheduled'), 1, 'reopening does not duplicate the initial scheduling audit');
+
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164)
+values ('f1800000-0000-0000-0000-000000000254', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1700000-0000-0000-0000-000000000250', 'f1500000-0000-0000-0000-000000000250', 'inbound', 'text', 'START', 'sms', 'customer', '+14155550250');
+update public.messaging_contact_preferences set status = 'active', source_message_id = 'f1800000-0000-0000-0000-000000000254'
+where contact_id = 'f1500000-0000-0000-0000-000000000250' and sender_phone_number_id = 'f1400000-0000-0000-0000-000000000001';
+select extensions.is((select count(*)::integer from public.action_logs log join public.sms_consents consent on consent.id = log.entity_id where consent.recipient_e164 = '+14155550250' and log.action = 'sms.consent.granted'), 2, 'replayed START does not create another grant audit');
+select extensions.is((select count(*)::integer from public.lead_followup_jobs where lead_id = 'f1a00000-0000-0000-0000-000000000250'), 1, 'replayed START does not create another follow-up job');
+
+-- Reusable owner-only fixtures for service-role send-boundary tests.
+create temporary table pg_temp.followup_fixture (
+  label text primary key,
+  contact_id uuid not null,
+  conversation_id uuid not null,
+  lead_id uuid not null,
+  trigger_message_id uuid not null,
+  consent_id uuid not null,
+  job_id uuid not null,
+  delivery_message_id uuid not null,
+  delivery_id uuid,
+  recipient_e164 text not null
+);
+grant select on table pg_temp.followup_fixture to service_role;
+
+create function pg_temp.create_followup_fixture(target_label text, target_sequence integer, target_recipient text default null)
+returns void language plpgsql as $$
+declare
+  fixture_contact_id uuid := ('f1500000-0000-0000-0000-' || lpad(target_sequence::text, 12, '0'))::uuid;
+  fixture_conversation_id uuid := ('f1700000-0000-0000-0000-' || lpad(target_sequence::text, 12, '0'))::uuid;
+  fixture_lead_id uuid := ('f1a00000-0000-0000-0000-' || lpad(target_sequence::text, 12, '0'))::uuid;
+  trigger_message_id uuid := ('f1800000-0000-0000-0000-' || lpad((target_sequence * 10 + 1)::text, 12, '0'))::uuid;
+  consent_message_id uuid := ('f1800000-0000-0000-0000-' || lpad((target_sequence * 10 + 2)::text, 12, '0'))::uuid;
+  delivery_message_id uuid := ('f1800000-0000-0000-0000-' || lpad((target_sequence * 10 + 3)::text, 12, '0'))::uuid;
+  recipient text := coalesce(target_recipient, '+1415555' || lpad(target_sequence::text, 4, '0'));
+  consent_id uuid;
+  job_id uuid;
+begin
+  insert into public.contacts (id, organization_id, location_id, first_name, phone)
+  values (fixture_contact_id, 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', target_label,
+    case when exists (select 1 from public.contacts where organization_id = 'f1000000-0000-0000-0000-000000000001' and location_id = 'f1100000-0000-0000-0000-000000000001' and phone = recipient) then null else recipient end);
+  insert into public.conversations (id, organization_id, location_id, contact_id, channel_id, transport_phone_number_id, mode, ai_mode, status)
+  values (fixture_conversation_id, 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture_contact_id,
+    'f1600000-0000-0000-0000-000000000001', 'f1400000-0000-0000-0000-000000000001', 'customer', 'ai', 'open');
+  insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164, created_at)
+  values
+    (trigger_message_id, 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture_conversation_id, fixture_contact_id, 'inbound', 'text', 'Follow-up request', 'sms', 'customer', recipient, now() - interval '5 minutes'),
+    (consent_message_id, 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture_conversation_id, fixture_contact_id, 'inbound', 'text', 'START', 'sms', 'customer', recipient, now() - interval '4 minutes');
+  select id into consent_id from public.sms_consents
+  where organization_id = 'f1000000-0000-0000-0000-000000000001' and location_id = 'f1100000-0000-0000-0000-000000000001'
+    and sender_phone_number_id = 'f1400000-0000-0000-0000-000000000001' and recipient_e164 = recipient and purpose = 'lead_followup';
+  if consent_id is null then
+    insert into public.sms_consents (organization_id, location_id, sender_phone_number_id, recipient_e164, purpose, status, source_type, source_message_id, granted_at)
+    values ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1400000-0000-0000-0000-000000000001', recipient, 'lead_followup', 'active', 'sms_start', consent_message_id, now())
+    returning id into consent_id;
+  end if;
+  insert into public.leads (id, organization_id, location_id, contact_id, conversation_id, last_captured_message_id, status, source_channel, service_category, customer_goal, urgency, qualification_reason, details)
+  values (fixture_lead_id, 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture_contact_id, fixture_conversation_id, trigger_message_id, 'qualified', 'sms', 'wellness', 'appointment', 'routine', 'qualified', '{}');
+  select job.id into job_id from public.lead_followup_jobs job where job.organization_id = 'f1000000-0000-0000-0000-000000000001' and job.lead_id = fixture_lead_id;
+  if job_id is null then
+    insert into public.lead_followup_jobs (organization_id, location_id, lead_id, conversation_id, consent_id, sender_phone_number_id, sender_e164, recipient_e164, trigger_message_id, scheduled_for)
+    values ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture_lead_id, fixture_conversation_id, consent_id, 'f1400000-0000-0000-0000-000000000001', '+14155550901', recipient, trigger_message_id, now() + interval '4 hours')
+    returning id into job_id;
+  end if;
+  insert into pg_temp.followup_fixture (label, contact_id, conversation_id, lead_id, trigger_message_id, consent_id, job_id, delivery_message_id, recipient_e164)
+  values (target_label, fixture_contact_id, fixture_conversation_id, fixture_lead_id, trigger_message_id, consent_id, job_id, delivery_message_id, recipient);
+end;
+$$;
+
+create function pg_temp.queue_followup_delivery(target_label text)
+returns void language plpgsql as $$
+declare fixture pg_temp.followup_fixture%rowtype; delivery_id uuid;
+begin
+  select * into fixture from pg_temp.followup_fixture where label = target_label;
+  insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, metadata, source_channel, author_type, created_at)
+  values (fixture.delivery_message_id, 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture.conversation_id, fixture.contact_id,
+    'outbound', 'text', 'A pending follow-up', '{"kind":"lead_followup"}', 'sms', 'system', now() - interval '2 minutes');
+  insert into public.message_deliveries (organization_id, location_id, message_id, provider)
+  values ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture.delivery_message_id, 'twilio')
+  returning id into delivery_id;
+  update public.lead_followup_jobs
+  set status = 'delivery_pending', message_id = fixture.delivery_message_id, delivery_id = delivery_id, scheduled_for = now() - interval '1 minute', skip_reason = null, failure_reason = null, claimed_at = null, claimed_by = null
+  where id = fixture.job_id;
+  update pg_temp.followup_fixture set delivery_id = delivery_id where label = target_label;
+end;
+$$;
+
+-- The current quiet-hours policy defers a queued delivery rather than submitting it.
+select pg_temp.create_followup_fixture('quiet-defer', 301);
+select pg_temp.queue_followup_delivery('quiet-defer');
+update public.lead_followup_settings
+set quiet_hours_start = ((now() at time zone 'UTC') - interval '1 hour')::time,
+  quiet_hours_end = ((now() at time zone 'UTC') + interval '1 hour')::time,
+  business_hours_only = false;
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'quiet-defer'))), 0, 'a changed quiet-hours policy prevents a stale queued follow-up from submitting');
+reset role;
+select extensions.ok((select (select status from public.lead_followup_jobs where id = fixture.job_id) = 'scheduled'
+  and (select scheduled_for from public.lead_followup_jobs where id = fixture.job_id) > now()
+  and (select status from public.message_deliveries where id = fixture.delivery_id) = 'queued'
+  from pg_temp.followup_fixture fixture where label = 'quiet-defer'), 'quiet-hours deferral retains the queued delivery and moves the job only forward');
+
+-- A business-hours-only policy also defers to the next valid opening rather than sending now.
+select pg_temp.create_followup_fixture('business-defer', 302);
+select pg_temp.queue_followup_delivery('business-defer');
+update public.lead_followup_settings
+set quiet_hours_start = ((now() at time zone 'UTC') + interval '1 hour')::time,
+  quiet_hours_end = ((now() at time zone 'UTC') + interval '2 hours')::time,
+  business_hours_only = true;
+update public.locations
+set business_hours = jsonb_build_object(
+  lower(to_char(((now() at time zone 'UTC')::date + 1), 'FMDay')),
+  jsonb_build_object('open', '00:00', 'close', '23:59', 'closed', false)
+)
+where id = 'f1100000-0000-0000-0000-000000000001';
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'business-defer'))), 0, 'a closed business defers a queued follow-up before provider submission');
+reset role;
+select extensions.ok((select (select status from public.lead_followup_jobs where id = fixture.job_id) = 'scheduled'
+  and (select scheduled_for from public.lead_followup_jobs where id = fixture.job_id) > now()
+  and (select status from public.message_deliveries where id = fixture.delivery_id) = 'queued'
+  from pg_temp.followup_fixture fixture where label = 'business-defer'), 'business-hours deferral keeps the queued delivery for the next opening');
+update public.locations set business_hours = '{"monday":{"open":"00:00","close":"23:59","closed":false},"tuesday":{"open":"00:00","close":"23:59","closed":false},"wednesday":{"open":"00:00","close":"23:59","closed":false},"thursday":{"open":"00:00","close":"23:59","closed":false},"friday":{"open":"00:00","close":"23:59","closed":false},"saturday":{"open":"00:00","close":"23:59","closed":false},"sunday":{"open":"00:00","close":"23:59","closed":false}}'::jsonb
+where id = 'f1100000-0000-0000-0000-000000000001';
+
+-- A future schedule is never brought forward by a fresh policy check.
+select pg_temp.create_followup_fixture('never-earlier', 303);
+select pg_temp.queue_followup_delivery('never-earlier');
+update public.lead_followup_jobs set scheduled_for = now() + interval '2 hours' where id = (select job_id from pg_temp.followup_fixture where label = 'never-earlier');
+update public.lead_followup_settings
+set quiet_hours_start = ((now() at time zone 'UTC') - interval '1 hour')::time,
+  quiet_hours_end = ((now() at time zone 'UTC') + interval '1 hour')::time,
+  business_hours_only = false;
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'never-earlier'))), 0, 'a policy recheck does not submit a not-yet-due queued follow-up');
+reset role;
+select extensions.ok((select scheduled_for > now() + interval '100 minutes' from public.lead_followup_jobs where id = (select job_id from pg_temp.followup_fixture where label = 'never-earlier')), 'the fresh timing policy never moves an existing schedule earlier');
+
+-- An unchanged, currently allowed policy continues to authorize the normal worker claim.
+select pg_temp.create_followup_fixture('allowed-send', 304);
+select pg_temp.queue_followup_delivery('allowed-send');
+update public.lead_followup_settings
+set quiet_hours_start = ((now() at time zone 'UTC') + interval '1 hour')::time,
+  quiet_hours_end = ((now() at time zone 'UTC') + interval '2 hours')::time,
+  business_hours_only = false;
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'allowed-send'))), 1, 'an allowed current policy still claims a queued follow-up exactly once');
+reset role;
+select extensions.is((select status from public.message_deliveries where id = (select delivery_id from pg_temp.followup_fixture where label = 'allowed-send')), 'submitting', 'the allowed worker claim is the queued-to-submitting provider boundary');
+
+-- Later generic AI/system and human SMS activity suppresses the generic follow-up; its own message does not.
+select pg_temp.create_followup_fixture('later-ai', 305);
+select pg_temp.queue_followup_delivery('later-ai');
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, created_at)
+select 'f1800000-0000-0000-0000-000000900305', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', conversation_id, contact_id, 'outbound', 'text', 'A normal AI reply', 'sms', 'ai', now() - interval '1 minute'
+from pg_temp.followup_fixture where label = 'later-ai';
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'later-ai'))), 0, 'a later AI SMS blocks the generic follow-up at the send boundary');
+reset role;
+select extensions.ok((select (select status from public.lead_followup_jobs where id = fixture.job_id) = 'skipped'
+  and (select status from public.message_deliveries where id = fixture.delivery_id) = 'suppressed'
+  from pg_temp.followup_fixture fixture where label = 'later-ai'), 'later AI SMS safely suppresses the queued generic follow-up');
+
+select pg_temp.create_followup_fixture('later-human', 306);
+select pg_temp.queue_followup_delivery('later-human');
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, created_at)
+select 'f1800000-0000-0000-0000-000000900306', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', conversation_id, contact_id, 'outbound', 'text', 'A staff reply', 'sms', 'human', now() - interval '1 minute'
+from pg_temp.followup_fixture where label = 'later-human';
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'later-human'))), 0, 'a later human message leaves no claimable generic follow-up');
+reset role;
+select extensions.is((select status from public.lead_followup_jobs where id = (select job_id from pg_temp.followup_fixture where label = 'later-human')), 'skipped', 'a later human message suppresses the pending generic follow-up');
+
+select pg_temp.create_followup_fixture('own-message', 307);
+select pg_temp.queue_followup_delivery('own-message');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'own-message'))), 1, 'the follow-up message itself does not self-suppress its claim');
+reset role;
+select extensions.is((select status from public.message_deliveries where id = (select delivery_id from pg_temp.followup_fixture where label = 'own-message')), 'submitting', 'the own message claim reaches submitting normally');
+
+-- The 24-hour cap follows a durable attempt, including a later undelivered result, but expires normally.
+select pg_temp.create_followup_fixture('attempted-undelivered', 308, '+14155550308');
+select pg_temp.queue_followup_delivery('attempted-undelivered');
+update public.message_deliveries set status = 'undelivered', attempted_at = now(), error_code = 'carrier_error'
+where id = (select delivery_id from pg_temp.followup_fixture where label = 'attempted-undelivered');
+select pg_temp.create_followup_fixture('capped-after-undelivered', 309, '+14155550308');
+select pg_temp.queue_followup_delivery('capped-after-undelivered');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'capped-after-undelivered'))), 0, 'an undelivered attempt still counts toward the 24-hour route cap');
+reset role;
+select extensions.ok((select (select status from public.lead_followup_jobs where id = fixture.job_id) = 'skipped'
+  and (select status from public.message_deliveries where id = fixture.delivery_id) = 'suppressed'
+  from pg_temp.followup_fixture fixture where label = 'capped-after-undelivered'), 'the capped queued delivery is suppressed before another provider attempt');
+
+select pg_temp.create_followup_fixture('expired-attempt', 310, '+14155550310');
+select pg_temp.queue_followup_delivery('expired-attempt');
+update public.message_deliveries set status = 'undelivered', attempted_at = now() - interval '25 hours', error_code = 'carrier_error'
+where id = (select delivery_id from pg_temp.followup_fixture where label = 'expired-attempt');
+select pg_temp.create_followup_fixture('after-cap-window', 311, '+14155550310');
+select pg_temp.queue_followup_delivery('after-cap-window');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is((select count(*)::integer from public.claim_lead_followup_delivery((select job_id from pg_temp.followup_fixture where label = 'after-cap-window'))), 1, 'a delivery attempted more than 24 hours ago no longer blocks a new claim');
+reset role;
+
+-- A provider-accepted follow-up is never reopened by a later START.
+select pg_temp.create_followup_fixture('provider-boundary', 312);
+select pg_temp.queue_followup_delivery('provider-boundary');
+update public.message_deliveries set status = 'submitted', attempted_at = now()
+where id = (select delivery_id from pg_temp.followup_fixture where label = 'provider-boundary');
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164)
+select 'f1800000-0000-0000-0000-000000900312', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', conversation_id, contact_id, 'inbound', 'text', 'STOP', 'sms', 'customer', recipient_e164
+from pg_temp.followup_fixture where label = 'provider-boundary';
+insert into public.messaging_contact_preferences (organization_id, location_id, contact_id, channel_type, sender_phone_number_id, status, source_message_id)
+select 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', contact_id, 'sms', 'f1400000-0000-0000-0000-000000000001', 'opted_out', 'f1800000-0000-0000-0000-000000900312'
+from pg_temp.followup_fixture where label = 'provider-boundary';
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164)
+select 'f1800000-0000-0000-0000-000000900313', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', conversation_id, contact_id, 'inbound', 'text', 'START', 'sms', 'customer', recipient_e164
+from pg_temp.followup_fixture where label = 'provider-boundary';
+update public.messaging_contact_preferences set status = 'active', opted_out_at = null, source_message_id = 'f1800000-0000-0000-0000-000000900313'
+where contact_id = (select contact_id from pg_temp.followup_fixture where label = 'provider-boundary');
+select extensions.ok((select (select status from public.lead_followup_jobs where id = fixture.job_id) = 'sent'
+  and (select status from public.message_deliveries where id = fixture.delivery_id) = 'submitted'
+  from pg_temp.followup_fixture fixture where label = 'provider-boundary'), 'START never reopens work that crossed the provider submission boundary');
+
+-- A queued delivery that STOP already suppressed is also immutable: START never manufactures a retry.
+select pg_temp.create_followup_fixture('suppressed-queued', 313);
+select pg_temp.queue_followup_delivery('suppressed-queued');
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164)
+select 'f1800000-0000-0000-0000-000000900314', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', conversation_id, contact_id, 'inbound', 'text', 'STOP', 'sms', 'customer', recipient_e164
+from pg_temp.followup_fixture where label = 'suppressed-queued';
+insert into public.messaging_contact_preferences (organization_id, location_id, contact_id, channel_type, sender_phone_number_id, status, source_message_id)
+select 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', contact_id, 'sms', 'f1400000-0000-0000-0000-000000000001', 'opted_out', 'f1800000-0000-0000-0000-000000900314'
+from pg_temp.followup_fixture where label = 'suppressed-queued';
+insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, source_channel, author_type, transport_sender_e164)
+select 'f1800000-0000-0000-0000-000000900315', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', conversation_id, contact_id, 'inbound', 'text', 'START', 'sms', 'customer', recipient_e164
+from pg_temp.followup_fixture where label = 'suppressed-queued';
+update public.messaging_contact_preferences set status = 'active', opted_out_at = null, source_message_id = 'f1800000-0000-0000-0000-000000900315'
+where contact_id = (select contact_id from pg_temp.followup_fixture where label = 'suppressed-queued');
+select extensions.ok((select (select status from public.lead_followup_jobs where id = fixture.job_id) = 'skipped'
+  and (select status from public.message_deliveries where id = fixture.delivery_id) = 'suppressed'
+  from pg_temp.followup_fixture fixture where label = 'suppressed-queued'), 'START does not reopen a queued delivery that was already suppressed');
+
 select extensions.ok((select has_table_privilege('service_role', 'public.sms_consents', 'select') is false), 'service role receives no direct consent table grant');
 select extensions.ok((select has_table_privilege('service_role', 'public.lead_followup_jobs', 'select') is false), 'service role receives no direct follow-up job table grant');
 
