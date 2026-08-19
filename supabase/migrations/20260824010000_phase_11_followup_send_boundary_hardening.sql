@@ -257,7 +257,7 @@ create or replace function public.lead_followup_eligible(target_lead_id uuid)
 returns table (consent_id uuid, sender_phone_number_id uuid, sender_e164 text, recipient_e164 text, trigger_message_id uuid, scheduled_for timestamptz, reason text)
 language plpgsql security definer set search_path = '' as $$
 declare lead_row public.leads%rowtype; conversation_row public.conversations%rowtype;
-  consent public.sms_consents%rowtype; sender public.phone_numbers%rowtype; location public.locations%rowtype; candidate_time timestamptz;
+  consent public.sms_consents%rowtype; sender_row public.phone_numbers%rowtype; location public.locations%rowtype; candidate_time timestamptz;
 begin
   select * into lead_row from public.leads where id = target_lead_id;
   if lead_row.id is null or lead_row.location_id is null or lead_row.status not in ('new','qualified') or lead_row.urgency = 'urgent'
@@ -273,12 +273,12 @@ begin
     or exists (select 1 from public.appointment_change_intents ci where ci.organization_id = lead_row.organization_id and ci.location_id = lead_row.location_id and ci.conversation_id = conversation_row.id and ci.status in ('awaiting_confirmation','executing','provider_success_pending_persistence','provider_state_unknown','handoff_required')) then
     return query select null::uuid, null::uuid, null::text, null::text, null::uuid, null::timestamptz, 'conversation_ineligible'; return;
   end if;
-  select sender.* into sender from public.lead_followup_settings settings
-    join public.phone_numbers sender on sender.organization_id = settings.organization_id and sender.location_id = settings.location_id
-      and sender.id = settings.sender_phone_number_id
+  select phone.* into sender_row from public.lead_followup_settings settings
+    join public.phone_numbers phone on phone.organization_id = settings.organization_id and phone.location_id = settings.location_id
+      and phone.id = settings.sender_phone_number_id
     where settings.organization_id = lead_row.organization_id and settings.location_id = lead_row.location_id
       and public.lead_followup_settings_sender_is_current(settings.organization_id, settings.location_id, settings.sender_phone_number_id);
-  if sender.id is null or sender.phone_number !~ E'^\\+[1-9][0-9]{7,14}$' then
+  if sender_row.id is null or sender_row.phone_number !~ E'^\\+[1-9][0-9]{7,14}$' then
     return query select null::uuid, null::uuid, null::text, null::text, null::uuid, null::timestamptz, 'settings_disabled'; return;
   end if;
   select consent_row.* into consent from public.sms_consents consent_row
@@ -287,7 +287,7 @@ begin
     left join public.calls consent_call on consent_call.organization_id = consent_row.organization_id
       and consent_call.location_id = consent_row.location_id and consent_call.id = consent_row.source_call_id
     where consent_row.organization_id = lead_row.organization_id and consent_row.location_id = lead_row.location_id
-      and consent_row.sender_phone_number_id = sender.id and consent_row.purpose = 'lead_followup' and consent_row.status = 'active'
+      and consent_row.sender_phone_number_id = sender_row.id and consent_row.purpose = 'lead_followup' and consent_row.status = 'active'
       and (consent_message.conversation_id = lead_row.conversation_id or consent_call.conversation_id = lead_row.conversation_id)
     order by consent_row.granted_at desc limit 1;
   if consent.id is null then return query select null::uuid, null::uuid, null::text, null::text, null::uuid, null::timestamptz, 'consent_unavailable'; return; end if;
@@ -295,7 +295,7 @@ begin
     join public.messages route_message on route_message.organization_id = preference.organization_id and route_message.location_id = preference.location_id
       and route_message.contact_id = preference.contact_id and route_message.transport_sender_e164 = consent.recipient_e164
     where preference.organization_id = lead_row.organization_id and preference.location_id = lead_row.location_id
-      and preference.sender_phone_number_id = sender.id and preference.channel_type = 'sms' and preference.status = 'opted_out') then
+      and preference.sender_phone_number_id = sender_row.id and preference.channel_type = 'sms' and preference.status = 'opted_out') then
     return query select null::uuid, null::uuid, null::text, null::text, null::uuid, null::timestamptz, 'opted_out'; return;
   end if;
   select * into location from public.locations where organization_id = lead_row.organization_id and id = lead_row.location_id;
@@ -309,7 +309,7 @@ begin
     and trigger_message.conversation_id = lead_row.conversation_id and trigger_message.direction = 'inbound' and trigger_message.author_type = 'customer') then
     return query select null::uuid, null::uuid, null::text, null::text, null::uuid, null::timestamptz, 'trigger_unavailable'; return;
   end if;
-  return query select consent.id, sender.id, sender.phone_number, consent.recipient_e164, lead_row.last_captured_message_id, candidate_time, null::text;
+  return query select consent.id, sender_row.id, sender_row.phone_number, consent.recipient_e164, lead_row.last_captured_message_id, candidate_time, null::text;
 end;
 $$;
 
