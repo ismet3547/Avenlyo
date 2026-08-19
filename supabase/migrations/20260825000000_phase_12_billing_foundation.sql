@@ -101,16 +101,9 @@ create index stripe_webhook_events_claim_idx
   on public.stripe_webhook_events (received_at)
   where status in ('pending', 'failed', 'processing');
 
--- All metered sources are location-scoped today. This deliberately refuses a location-less
--- source rather than allowing a location A usage fact to reference a location B source.
-alter table public.calls
-  add constraint calls_organization_location_id_key unique (organization_id, location_id, id);
-alter table public.messages
-  add constraint messages_organization_location_id_key unique (organization_id, location_id, id);
-alter table public.message_deliveries
-  add constraint message_deliveries_organization_location_id_key unique (organization_id, location_id, id);
-alter table public.appointments
-  add constraint appointments_organization_location_id_key unique (organization_id, location_id, id);
+-- All metered sources are location-scoped today. The composite unique constraints used by
+-- the source foreign keys below already exist on calls, messages, message_deliveries, and
+-- appointments from the Phase 8 and Phase 11 tenant-integrity migrations.
 
 create table public.billing_usage_events (
   id uuid primary key default extensions.gen_random_uuid(),
