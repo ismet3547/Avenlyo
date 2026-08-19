@@ -122,6 +122,63 @@ begin
 end;
 $$;
 
+-- Qualify the returned CTE fields: PL/pgSQL exposes RETURN TABLE names as variables, so
+-- unqualified names in RETURN QUERY are ambiguous and prevent expired-lease recovery.
+create or replace function public.claim_stripe_webhook_events(
+  target_worker_id text,
+  target_limit integer default 10
+)
+returns table (
+  stripe_event_id text,
+  event_type text,
+  stripe_object_id text,
+  livemode boolean,
+  attempt_count integer
+)
+language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.require_billing_service_role();
+  if length(btrim(coalesce(target_worker_id, ''))) not between 3 and 160
+    or target_limit not between 1 and 25 then
+    raise exception using errcode = '22023', message = 'Billing worker claim is invalid';
+  end if;
+  update public.stripe_webhook_events event
+  set status = 'failed',
+      claimed_at = null,
+      claimed_by = null,
+      last_error_code = 'lease_expired'
+  where event.status = 'processing'
+    and event.claimed_at < now() - interval '5 minutes';
+  return query
+  with claimed as (
+    select event.stripe_event_id
+    from public.stripe_webhook_events event
+    where event.status in ('pending', 'failed')
+      and event.attempt_count < 8
+    order by event.received_at asc
+    for update skip locked
+    limit target_limit
+  ), updated as (
+    update public.stripe_webhook_events event
+    set status = 'processing',
+        attempt_count = event.attempt_count + 1,
+        claimed_at = now(),
+        claimed_by = btrim(target_worker_id),
+        last_error_code = null
+    from claimed
+    where event.stripe_event_id = claimed.stripe_event_id
+    returning event.*
+  )
+  select
+    updated.stripe_event_id,
+    updated.event_type,
+    updated.stripe_object_id,
+    updated.livemode,
+    updated.attempt_count
+  from updated;
+end;
+$$;
+
 -- The old single-subscription projection RPCs remain only for migration compatibility. New
 -- provider code can apply state exclusively through this full, bounded snapshot operation.
 create function public.apply_stripe_billing_snapshot(
