@@ -210,7 +210,10 @@ select extensions.is(
   'active',
   'terminal unsupported history does not poison an active Core subscription'
 );
+reset role;
 select extensions.is((select count(*)::integer from public.action_logs where organization_id = 'b1000000-0000-0000-0000-000000000001' and action = 'billing.reconciled'), 1, 'one atomic snapshot writes one reconciliation audit');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   public.apply_stripe_billing_snapshot(
     'b1000000-0000-0000-0000-000000000001', 'cus_billing_a', false,
