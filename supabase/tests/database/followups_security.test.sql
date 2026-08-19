@@ -351,7 +351,7 @@ $$;
 
 create function pg_temp.queue_followup_delivery(target_label text)
 returns void language plpgsql as $$
-declare fixture pg_temp.followup_fixture%rowtype; delivery_id uuid;
+declare fixture pg_temp.followup_fixture%rowtype; created_delivery_id uuid;
 begin
   select * into fixture from pg_temp.followup_fixture where label = target_label;
   insert into public.messages (id, organization_id, location_id, conversation_id, contact_id, direction, message_type, body, metadata, source_channel, author_type, created_at)
@@ -359,11 +359,11 @@ begin
     'outbound', 'text', 'A pending follow-up', '{"kind":"lead_followup"}', 'sms', 'system', now() - interval '2 minutes');
   insert into public.message_deliveries (organization_id, location_id, message_id, provider)
   values ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', fixture.delivery_message_id, 'twilio')
-  returning id into delivery_id;
+  returning id into created_delivery_id;
   update public.lead_followup_jobs
-  set status = 'delivery_pending', message_id = fixture.delivery_message_id, delivery_id = delivery_id, scheduled_for = now() - interval '1 minute', skip_reason = null, failure_reason = null, claimed_at = null, claimed_by = null
+  set status = 'delivery_pending', message_id = fixture.delivery_message_id, delivery_id = created_delivery_id, scheduled_for = now() - interval '1 minute', skip_reason = null, failure_reason = null, claimed_at = null, claimed_by = null
   where id = fixture.job_id;
-  update pg_temp.followup_fixture set delivery_id = delivery_id where label = target_label;
+  update pg_temp.followup_fixture set delivery_id = created_delivery_id where label = target_label;
 end;
 $$;
 
