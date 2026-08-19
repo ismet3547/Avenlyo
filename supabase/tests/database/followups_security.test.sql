@@ -232,7 +232,7 @@ insert into public.messages (id, organization_id, location_id, conversation_id, 
 insert into public.message_deliveries (organization_id, location_id, message_id, provider, status, attempted_at)
 values
   ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1800000-0000-0000-0000-000000000013', 'twilio', 'submitted', now()),
-  ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1800000-0000-0000-0000-000000000014', 'twilio');
+  ('f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1800000-0000-0000-0000-000000000014', 'twilio', 'queued', null);
 insert into public.lead_followup_jobs (id, organization_id, location_id, lead_id, conversation_id, consent_id, sender_phone_number_id, sender_e164, recipient_e164, trigger_message_id, message_id, delivery_id, status)
 values
   ('f1b00000-0000-0000-0000-000000000006', 'f1000000-0000-0000-0000-000000000001', 'f1100000-0000-0000-0000-000000000001', 'f1a00000-0000-0000-0000-000000000006', 'f1700000-0000-0000-0000-000000000001', (select id from public.sms_consents where recipient_e164 = '+14155550101'), 'f1400000-0000-0000-0000-000000000001', '+14155550901', '+14155550101', 'f1800000-0000-0000-0000-000000000003', 'f1800000-0000-0000-0000-000000000013', (select id from public.message_deliveries where message_id = 'f1800000-0000-0000-0000-000000000013'), 'delivery_pending'),
