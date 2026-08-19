@@ -2,7 +2,7 @@
 -- ownership, and the separation between resolving an episode and resuming AI.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(102);
+select extensions.plan(103);
 
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
@@ -252,11 +252,27 @@ select extensions.throws_ok($$
   where conversation_id = 'd1600000-0000-0000-0000-000000000001'
 $$, '42501', 'permission denied for table handoffs',
   'authenticated clients cannot assign or resolve a handoff directly');
+select extensions.is_empty($$
+  update public.conversations set ai_mode = 'ai', assigned_user_id = null
+  where id = 'd1600000-0000-0000-0000-000000000001' returning id
+$$, 'authenticated clients have no row policy that can rewrite conversation ownership');
+reset role;
+create policy conversations_update_probe on public.conversations for update to authenticated
+  using (public.has_location_access(organization_id, location_id))
+  with check (public.has_location_write_access(organization_id, location_id));
+set local role authenticated;
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config('request.jwt.claim.sub', 'd0000000-0000-0000-0000-000000000002', true);
 select extensions.ok((select pg_temp.error_matches($sql$
   update public.conversations set ai_mode = 'ai', assigned_user_id = null
   where id = 'd1600000-0000-0000-0000-000000000001'
 $sql$, '42501', 'ownership is not directly writable')),
   'authenticated clients cannot rewrite conversation ownership or automation mode directly');
+reset role;
+drop policy conversations_update_probe on public.conversations;
+set local role authenticated;
+select set_config('request.jwt.claim.role', 'authenticated', true);
+select set_config('request.jwt.claim.sub', 'd0000000-0000-0000-0000-000000000002', true);
 
 -- Claim, concurrency, and idempotency.
 select set_config('request.jwt.claim.sub', 'd0000000-0000-0000-0000-000000000004', true);

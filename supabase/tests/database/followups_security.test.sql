@@ -241,7 +241,9 @@ update public.leads set status = 'qualified' where id = 'f1a00000-0000-0000-0000
 -- The route cap is a send-boundary rule, not a scheduling rule. Quiet hours are neutralised for
 -- this assertion so it proves the cap whatever wall-clock time the suite runs at, then restored.
 update public.lead_followup_settings
-set quiet_hours_start = time '00:00', quiet_hours_end = time '00:00', business_hours_only = false
+set quiet_hours_start = (date_trunc('minute', now() at time zone 'UTC') + interval '2 minutes')::time,
+  quiet_hours_end = (date_trunc('minute', now() at time zone 'UTC') + interval '3 minutes')::time,
+  business_hours_only = false
 where organization_id = 'f1000000-0000-0000-0000-000000000001'
   and location_id = 'f1100000-0000-0000-0000-000000000001';
 set local role service_role;
