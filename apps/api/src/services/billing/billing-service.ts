@@ -5,10 +5,34 @@ import type { BillingPlanCatalogEntry } from './catalog.js';
 import { projectStripeSubscription } from './projection.js';
 import type {
   BillingStripeProvider,
+  BillingSubscriptionSnapshot,
   StripeSubscriptionItemRecord,
   StripeSubscriptionRecord,
+  StripeWebhookClaim,
   StripeWebhookEventRecord,
 } from './types.js';
+
+interface BillingAccountContext {
+  readonly billing_account_id: string;
+  readonly livemode: boolean;
+  readonly organization_id: string;
+  readonly organization_name: string;
+  readonly stripe_customer_id: string;
+}
+
+interface StripeBillingSnapshotRpcRow {
+  readonly cancel_at_period_end: boolean;
+  readonly ended_at: string | null;
+  readonly is_supported: boolean;
+  readonly period_end: string | null;
+  readonly period_start: string | null;
+  readonly plan_key: 'core' | null;
+  readonly price_id: string | null;
+  readonly product_id: string | null;
+  readonly stripe_status: string;
+  readonly subscription_id: string;
+  readonly trial_end: string | null;
+}
 
 interface BillingRpc {
   get_billing_checkout_execution_context: {
@@ -24,11 +48,7 @@ interface BillingRpc {
     }[];
   };
   record_stripe_billing_customer: {
-    Args: {
-      target_checkout_id: string;
-      target_livemode: boolean;
-      target_stripe_customer_id: string;
-    };
+    Args: { target_checkout_id: string; target_livemode: boolean; target_stripe_customer_id: string };
     Returns: null;
   };
   record_stripe_checkout_session: {
@@ -43,23 +63,21 @@ interface BillingRpc {
   };
   get_billing_account_execution_context: {
     Args: { target_account_id: string };
-    Returns: readonly {
-      billing_account_id: string;
-      livemode: boolean;
-      organization_id: string;
-      organization_name: string;
-      stripe_customer_id: string;
-    }[];
+    Returns: readonly BillingAccountContext[];
   };
   get_billing_customer_execution_context: {
     Args: { target_customer_id: string; target_livemode: boolean };
-    Returns: readonly {
-      billing_account_id: string;
-      livemode: boolean;
-      organization_id: string;
-      organization_name: string;
-      stripe_customer_id: string;
-    }[];
+    Returns: readonly BillingAccountContext[];
+  };
+  record_billing_portal_opened: { Args: { target_account_id: string }; Returns: null };
+  get_billing_checkout_event_context: {
+    Args: {
+      target_customer_id: string;
+      target_livemode: boolean;
+      target_session_id: string;
+      target_subscription_id: string;
+    };
+    Returns: readonly { organization_id: string; stripe_customer_id: string }[];
   };
   complete_billing_checkout_from_event: {
     Args: {
@@ -74,31 +92,13 @@ interface BillingRpc {
       stripe_subscription_id: string;
     }[];
   };
-  project_stripe_billing_subscription: {
-    Args: {
-      target_cancel_at_period_end: boolean;
-      target_customer_id: string;
-      target_ended_at: string | null;
-      target_is_supported: boolean;
-      target_livemode: boolean;
-      target_organization_id: string;
-      target_period_end: string | null;
-      target_period_start: string | null;
-      target_plan_key: 'core' | null;
-      target_price_id: string | null;
-      target_product_id: string | null;
-      target_status: string;
-      target_subscription_id: string;
-      target_trial_end: string | null;
-    };
-    Returns: string;
-  };
-  mark_missing_stripe_billing_subscriptions_terminal: {
+  apply_stripe_billing_snapshot: {
     Args: {
       target_customer_id: string;
       target_livemode: boolean;
       target_organization_id: string;
-      target_subscription_ids: readonly string[];
+      target_snapshot_complete: boolean;
+      target_subscriptions: readonly StripeBillingSnapshotRpcRow[];
     };
     Returns: string;
   };
@@ -170,6 +170,11 @@ function webhookSubscriptionId(event: StripeWebhookEventRecord): string | null {
   );
 }
 
+function asProviderDate(value: unknown): Date | null {
+  return typeof value === 'number' && Number.isFinite(value) ? new Date(value * 1000) : null;
+}
+
+/** The fallback is limited to the exact signed deletion object and is never a complete snapshot. */
 function fallbackDeletedSubscription(
   event: StripeWebhookEventRecord,
 ): StripeSubscriptionRecord | null {
@@ -181,8 +186,8 @@ function fallbackDeletedSubscription(
     itemsRecord && typeof itemsRecord === 'object' && !Array.isArray(itemsRecord)
       ? (itemsRecord as Record<string, unknown>).data
       : null;
-  if (!Array.isArray(itemRows)) return null;
-  const items: StripeSubscriptionItemRecord[] = itemRows.flatMap((item) => {
+  const items: StripeSubscriptionItemRecord[] = (Array.isArray(itemRows) ? itemRows : []).flatMap(
+    (item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
     const row = item as Record<string, unknown>;
     const price = row.price;
@@ -191,17 +196,16 @@ function fallbackDeletedSubscription(
     const priceId = textField(priceRow, 'id');
     const productId = nestedIdentifier(priceRow, 'product');
     if (!priceId || !productId) return [];
-    const toDate = (value: unknown): Date | null =>
-      typeof value === 'number' ? new Date(value * 1000) : null;
     return [
       {
-        currentPeriodEnd: toDate(row.current_period_end),
-        currentPeriodStart: toDate(row.current_period_start),
+        currentPeriodEnd: asProviderDate(row.current_period_end),
+        currentPeriodStart: asProviderDate(row.current_period_start),
         priceId,
         productId,
       },
     ];
-  });
+    },
+  );
   return {
     cancelAtPeriodEnd: booleanField(event.object, 'cancel_at_period_end') ?? false,
     customerId,
@@ -209,15 +213,28 @@ function fallbackDeletedSubscription(
     id,
     items,
     livemode: event.livemode,
-    status: textField(event.object, 'status') ?? 'canceled',
+    status: 'canceled',
     trialEnd: null,
   };
 }
 
-/**
- * Owns server-side Stripe mutation/reconciliation. It never accepts Stripe IDs, prices, or return
- * URLs from browser input; all identities came from an authenticated RPC or verified Stripe event.
- */
+function snapshotRow(snapshot: BillingSubscriptionSnapshot): StripeBillingSnapshotRpcRow {
+  return {
+    cancel_at_period_end: snapshot.cancelAtPeriodEnd,
+    ended_at: snapshot.endedAt,
+    is_supported: snapshot.isSupported,
+    period_end: snapshot.periodEnd,
+    period_start: snapshot.periodStart,
+    plan_key: snapshot.planKey,
+    price_id: snapshot.priceId,
+    product_id: snapshot.productId,
+    stripe_status: snapshot.status,
+    subscription_id: snapshot.subscriptionId,
+    trial_end: snapshot.trialEnd,
+  };
+}
+
+/** Server-only Stripe mutation and reconciliation boundary. */
 export class BillingService {
   private readonly rpc: BillingRpcClient;
 
@@ -253,8 +270,9 @@ export class BillingService {
         organizationId: context.organization_id,
         organizationName: context.organization_name,
       });
-      if (customer.livemode !== this.input.expectedLivemode)
+      if (customer.livemode !== this.input.expectedLivemode) {
         throw new Error('Stripe mode is unavailable.');
+      }
       const saved = await this.rpc.rpc('record_stripe_billing_customer', {
         target_checkout_id: context.checkout_id,
         target_livemode: customer.livemode,
@@ -294,17 +312,22 @@ export class BillingService {
       customerId: context.stripe_customer_id,
       returnUrl: `${this.input.webOrigin}/dashboard/billing`,
     });
+    if (!session.url) throw new Error('Stripe billing portal is unavailable.');
+    const audit = await this.rpc.rpc('record_billing_portal_opened', {
+      target_account_id: context.billing_account_id,
+    });
+    if (audit.error) throw new Error('Billing portal audit could not be saved.');
     return session.url;
   }
 
   public async refresh(accountId: string): Promise<void> {
-    const context = await this.accountContext(accountId);
-    await this.reconcileCustomer(context.organization_id, context.stripe_customer_id);
+    await this.reconcileCustomer(await this.accountContext(accountId));
   }
 
   public async persistVerifiedWebhook(event: StripeWebhookEventRecord): Promise<boolean> {
-    if (event.livemode !== this.input.expectedLivemode)
+    if (event.livemode !== this.input.expectedLivemode) {
       throw new Error('Stripe mode is unavailable.');
+    }
     const { data, error } = await this.rpc.rpc('record_stripe_webhook_event', {
       target_created_at: event.createdAt.toISOString(),
       target_event_id: event.id,
@@ -324,38 +347,56 @@ export class BillingService {
     return event.livemode === this.input.expectedLivemode;
   }
 
-  public async claimEvents(
-    workerId: string,
-    limit: number,
-  ): Promise<readonly StripeWebhookEventRecord[]> {
+  /** Claims first; each provider read is performed independently by the worker. */
+  public async claimEvents(workerId: string, limit: number): Promise<readonly StripeWebhookClaim[]> {
     const { data, error } = await this.rpc.rpc('claim_stripe_webhook_events', {
       target_limit: limit,
       target_worker_id: workerId,
     });
-    if (error || !data) return [];
-    return Promise.all(
-      data.map(async (claim) => {
-        const event = await this.input.provider.retrieveEvent(claim.stripe_event_id);
-        if (event.livemode !== this.input.expectedLivemode || event.livemode !== claim.livemode) {
-          throw new Error('Stripe event mode mismatch.');
-        }
-        return event;
-      }),
-    );
+    if (error || !data) throw new Error('Stripe webhook events could not be claimed.');
+    return data.map((claim) => ({
+      attemptCount: claim.attempt_count,
+      eventType: claim.event_type,
+      livemode: claim.livemode,
+      stripeEventId: claim.stripe_event_id,
+      stripeObjectId: claim.stripe_object_id,
+    }));
+  }
+
+  public async retrieveClaimedEvent(claim: StripeWebhookClaim): Promise<StripeWebhookEventRecord> {
+    const event = await this.input.provider.retrieveEvent(claim.stripeEventId);
+    if (
+      event.id !== claim.stripeEventId ||
+      event.type !== claim.eventType ||
+      event.livemode !== claim.livemode ||
+      event.livemode !== this.input.expectedLivemode
+    ) {
+      throw new Error('Stripe event identity or mode mismatch.');
+    }
+    return event;
   }
 
   public async processClaimedEvent(
     event: StripeWebhookEventRecord,
   ): Promise<'ignored' | 'processed'> {
-    if (event.livemode !== this.input.expectedLivemode)
+    if (event.livemode !== this.input.expectedLivemode) {
       throw new Error('Stripe event mode mismatch.');
+    }
     if (!this.isRelevant(event.type)) return 'ignored';
     const customerId = webhookCustomerId(event);
     if (!customerId) return 'ignored';
+
     if (event.type === 'checkout.session.completed') {
       const mode = textField(event.object, 'mode');
       const subscriptionId = webhookSubscriptionId(event);
       if (mode !== 'subscription' || !subscriptionId || !event.objectId) return 'ignored';
+      const known = await this.checkoutEventContext(
+        event.objectId,
+        customerId,
+        subscriptionId,
+        event.livemode,
+      );
+      if (!known) return 'ignored';
       const completed = await this.rpc.rpc('complete_billing_checkout_from_event', {
         target_customer_id: customerId,
         target_livemode: event.livemode,
@@ -363,12 +404,19 @@ export class BillingService {
         target_subscription_id: subscriptionId,
       });
       const context = completed.data?.[0];
-      if (completed.error || !context) throw new Error('Stripe Checkout mapping is unavailable.');
-      await this.reconcileCustomer(context.organization_id, context.stripe_customer_id, event);
+      if (completed.error) throw new Error('Stripe Checkout mapping is unavailable.');
+      if (!context) return 'ignored';
+      await this.reconcileCustomer({
+        livemode: event.livemode,
+        organization_id: context.organization_id,
+        stripe_customer_id: context.stripe_customer_id,
+      }, event);
       return 'processed';
     }
+
     const context = await this.customerContext(customerId, event.livemode);
-    await this.reconcileCustomer(context.organization_id, context.stripe_customer_id, event);
+    if (!context) return 'ignored';
+    await this.reconcileCustomer(context, event);
     return 'processed';
   }
 
@@ -381,10 +429,11 @@ export class BillingService {
   }
 
   public async failEvent(eventId: string, errorCode: string): Promise<void> {
-    await this.rpc.rpc('fail_stripe_webhook_event', {
+    const { error } = await this.rpc.rpc('fail_stripe_webhook_event', {
       target_error_code: errorCode.slice(0, 120),
       target_event_id: eventId,
     });
+    if (error) throw new Error('Stripe webhook failure could not be saved.');
   }
 
   private isRelevant(type: string): boolean {
@@ -398,7 +447,7 @@ export class BillingService {
     ].includes(type);
   }
 
-  private async accountContext(accountId: string) {
+  private async accountContext(accountId: string): Promise<BillingAccountContext> {
     const { data, error } = await this.rpc.rpc('get_billing_account_execution_context', {
       target_account_id: accountId,
     });
@@ -409,65 +458,86 @@ export class BillingService {
     return context;
   }
 
-  private async customerContext(customerId: string, livemode: boolean) {
+  /** Zero trusted rows means the signed event has no Avenlyo mapping and should be ignored. */
+  private async customerContext(
+    customerId: string,
+    livemode: boolean,
+  ): Promise<BillingAccountContext | null> {
     const { data, error } = await this.rpc.rpc('get_billing_customer_execution_context', {
       target_customer_id: customerId,
       target_livemode: livemode,
     });
-    const context = data?.[0];
-    if (error || !context || context.livemode !== this.input.expectedLivemode) {
-      throw new Error('Stripe customer mapping is unavailable.');
+    if (error) throw new Error('Stripe customer mapping is unavailable.');
+    const context = data?.[0] ?? null;
+    if (context && context.livemode !== this.input.expectedLivemode) {
+      throw new Error('Stripe customer mode is unavailable.');
     }
     return context;
   }
 
-  private async reconcileCustomer(
-    organizationId: string,
+  private async checkoutEventContext(
+    sessionId: string,
     customerId: string,
+    subscriptionId: string,
+    livemode: boolean,
+  ): Promise<{ readonly organization_id: string; readonly stripe_customer_id: string } | null> {
+    const { data, error } = await this.rpc.rpc('get_billing_checkout_event_context', {
+      target_customer_id: customerId,
+      target_livemode: livemode,
+      target_session_id: sessionId,
+      target_subscription_id: subscriptionId,
+    });
+    if (error) throw new Error('Stripe Checkout mapping is unavailable.');
+    return data?.[0] ?? null;
+  }
+
+  private async reconcileCustomer(
+    context: Pick<BillingAccountContext, 'livemode' | 'organization_id' | 'stripe_customer_id'>,
     deletedEvent?: StripeWebhookEventRecord,
   ): Promise<void> {
     let subscriptions: readonly StripeSubscriptionRecord[];
+    let snapshotComplete = true;
     try {
-      subscriptions = await this.input.provider.listSubscriptions(customerId);
+      subscriptions = await this.input.provider.listSubscriptions(context.stripe_customer_id);
     } catch (error) {
       const fallback = deletedEvent ? fallbackDeletedSubscription(deletedEvent) : null;
       if (!fallback) throw error;
       subscriptions = [fallback];
+      snapshotComplete = false;
     }
-    const subscriptionIds: string[] = [];
-    for (const subscription of subscriptions) {
+
+    const snapshots = subscriptions.map((subscription) => {
       if (
-        subscription.customerId !== customerId ||
-        subscription.livemode !== this.input.expectedLivemode
+        subscription.customerId !== context.stripe_customer_id ||
+        subscription.livemode !== this.input.expectedLivemode ||
+        subscription.livemode !== context.livemode
       ) {
         throw new Error('Stripe subscription identity is unavailable.');
       }
-      subscriptionIds.push(subscription.id);
       const projection = projectStripeSubscription(subscription, this.input.catalog);
-      const saved = await this.rpc.rpc('project_stripe_billing_subscription', {
-        target_cancel_at_period_end: projection.cancelAtPeriodEnd,
-        target_customer_id: customerId,
-        target_ended_at: asIso(projection.endedAt),
-        target_is_supported: projection.isSupported,
-        target_livemode: subscription.livemode,
-        target_organization_id: organizationId,
-        target_period_end: asIso(projection.periodEnd),
-        target_period_start: asIso(projection.periodStart),
-        target_plan_key: projection.planKey,
-        target_price_id: projection.priceId,
-        target_product_id: projection.productId,
-        target_status: projection.status,
-        target_subscription_id: subscription.id,
-        target_trial_end: asIso(projection.trialEnd),
+      return snapshotRow({
+        cancelAtPeriodEnd: projection.cancelAtPeriodEnd,
+        endedAt: asIso(projection.endedAt),
+        isSupported: projection.isSupported,
+        periodEnd: asIso(projection.periodEnd),
+        periodStart: asIso(projection.periodStart),
+        planKey: projection.planKey,
+        priceId: projection.priceId,
+        productId: projection.productId,
+        status: projection.status,
+        subscriptionId: subscription.id,
+        trialEnd: asIso(projection.trialEnd),
       });
-      if (saved.error) throw new Error('Stripe subscription projection could not be saved.');
-    }
-    const complete = await this.rpc.rpc('mark_missing_stripe_billing_subscriptions_terminal', {
-      target_customer_id: customerId,
-      target_livemode: this.input.expectedLivemode,
-      target_organization_id: organizationId,
-      target_subscription_ids: subscriptionIds,
     });
-    if (complete.error) throw new Error('Stripe subscription reconciliation could not be saved.');
+    const applied = await this.rpc.rpc('apply_stripe_billing_snapshot', {
+      target_customer_id: context.stripe_customer_id,
+      target_livemode: context.livemode,
+      target_organization_id: context.organization_id,
+      target_snapshot_complete: snapshotComplete,
+      target_subscriptions: snapshots,
+    });
+    if (applied.error || !applied.data) {
+      throw new Error('Stripe subscription reconciliation could not be saved.');
+    }
   }
 }

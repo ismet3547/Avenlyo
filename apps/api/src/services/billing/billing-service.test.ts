@@ -28,6 +28,10 @@ const coreSubscription: StripeSubscriptionRecord = {
   trialEnd: null,
 };
 
+function subscription(input: Partial<StripeSubscriptionRecord>): StripeSubscriptionRecord {
+  return { ...coreSubscription, ...input };
+}
+
 function event(type: string, object: Readonly<Record<string, unknown>>): StripeWebhookEventRecord {
   return {
     createdAt: new Date('2026-08-25T00:00:00.000Z'),
@@ -39,10 +43,20 @@ function event(type: string, object: Readonly<Record<string, unknown>>): StripeW
   };
 }
 
-function testService(input: { readonly subscriptions?: readonly StripeSubscriptionRecord[] } = {}) {
+interface TestServiceOptions {
+  readonly checkoutKnown?: boolean;
+  readonly customerMapped?: boolean;
+  readonly listError?: Error;
+  readonly portalError?: Error;
+  readonly retrievedEvent?: StripeWebhookEventRecord;
+  readonly subscriptions?: readonly StripeSubscriptionRecord[];
+}
+
+function testService(options: TestServiceOptions = {}) {
   let storedCustomer: string | null = null;
   const checkoutKeys: string[] = [];
-  const projectCalls: Readonly<Record<string, unknown>>[] = [];
+  const snapshotCalls: Readonly<Record<string, unknown>>[] = [];
+  const portalAudits: string[] = [];
   const createCheckoutSession = vi.fn(
     (request: Parameters<BillingStripeProvider['createCheckoutSession']>[0]) => {
       checkoutKeys.push(request.idempotencyKey);
@@ -59,9 +73,21 @@ function testService(input: { readonly subscriptions?: readonly StripeSubscripti
   const provider: BillingStripeProvider = {
     createCheckoutSession,
     createCustomer,
-    createPortalSession: vi.fn(() => Promise.resolve({ url: 'https://billing.stripe.example/portal' })),
-    listSubscriptions: vi.fn(() => Promise.resolve(input.subscriptions ?? [coreSubscription])),
-    retrieveEvent: vi.fn(),
+    createPortalSession: vi.fn(() =>
+      options.portalError
+        ? Promise.reject(options.portalError)
+        : Promise.resolve({ url: 'https://billing.stripe.example/portal' }),
+    ),
+    listSubscriptions: vi.fn(() =>
+      options.listError
+        ? Promise.reject(options.listError)
+        : Promise.resolve(options.subscriptions ?? [coreSubscription]),
+    ),
+    retrieveEvent: vi.fn(() =>
+      Promise.resolve(
+        options.retrievedEvent ?? event('invoice.paid', { customer: 'cus_core', id: 'in_retrieved' }),
+      ),
+    ),
     retrieveSubscription: vi.fn(() => Promise.resolve(coreSubscription)),
     verifyWebhook: vi.fn(),
   };
@@ -87,25 +113,50 @@ function testService(input: { readonly subscriptions?: readonly StripeSubscripti
           typeof args.target_stripe_customer_id === 'string' ? args.target_stripe_customer_id : null;
         return Promise.resolve({ data: null, error: null });
       case 'record_stripe_checkout_session':
-      case 'mark_missing_stripe_billing_subscriptions_terminal':
       case 'complete_stripe_webhook_event':
       case 'fail_stripe_webhook_event':
         return Promise.resolve({ data: null, error: null });
+      case 'record_billing_portal_opened':
+        if (typeof args.target_account_id === 'string') portalAudits.push(args.target_account_id);
+        return Promise.resolve({ data: null, error: null });
       case 'get_billing_customer_execution_context':
+      case 'get_billing_account_execution_context':
+        return Promise.resolve({
+          data:
+            options.customerMapped === false
+              ? []
+              : [
+                  {
+                    billing_account_id: 'account_a',
+                    livemode: false,
+                    organization_id: 'org_a',
+                    organization_name: 'Avenlyo Test',
+                    stripe_customer_id: 'cus_core',
+                  },
+                ],
+          error: null,
+        });
+      case 'get_billing_checkout_event_context':
+        return Promise.resolve({
+          data:
+            options.checkoutKnown === false
+              ? []
+              : [{ organization_id: 'org_a', stripe_customer_id: 'cus_core' }],
+          error: null,
+        });
+      case 'complete_billing_checkout_from_event':
         return Promise.resolve({
           data: [
             {
-              billing_account_id: 'account_a',
-              livemode: false,
               organization_id: 'org_a',
-              organization_name: 'Avenlyo Test',
               stripe_customer_id: 'cus_core',
+              stripe_subscription_id: 'sub_core',
             },
           ],
           error: null,
         });
-      case 'project_stripe_billing_subscription':
-        projectCalls.push(args);
+      case 'apply_stripe_billing_snapshot':
+        snapshotCalls.push(args);
         return Promise.resolve({ data: 'active', error: null });
       default:
         return Promise.resolve({ data: null, error: null });
@@ -138,7 +189,7 @@ function testService(input: { readonly subscriptions?: readonly StripeSubscripti
     supabase: { rpc } as unknown as SupabaseClient<Database>,
     webOrigin: 'https://app.avenlyo.example',
   });
-  return { checkoutKeys, createCustomer, projectCalls, service };
+  return { checkoutKeys, createCustomer, portalAudits, service, snapshotCalls };
 }
 
 describe('billing service', () => {
@@ -156,40 +207,141 @@ describe('billing service', () => {
     ]);
   });
 
-  it('reconciles current provider truth for an out-of-order invoice event', async () => {
+  it('applies an out-of-order provider event as one complete atomic snapshot', async () => {
     const test = testService();
     await expect(
-      test.service.processClaimedEvent(
-        event('invoice.paid', { customer: 'cus_core', id: 'in_old' }),
-      ),
+      test.service.processClaimedEvent(event('invoice.paid', { customer: 'cus_core', id: 'in_old' })),
     ).resolves.toBe('processed');
-    expect(test.projectCalls).toHaveLength(1);
-    expect(test.projectCalls[0]).toMatchObject({
-      target_is_supported: true,
-      target_status: 'active',
-      target_subscription_id: 'sub_core',
-    });
+    expect(test.snapshotCalls).toEqual([
+      expect.objectContaining({
+        target_snapshot_complete: true,
+        target_subscriptions: [
+          expect.objectContaining({ stripe_status: 'active', subscription_id: 'sub_core' }),
+        ],
+      }),
+    ]);
   });
 
-  it('marks unknown provider product/price projection unsupported instead of inferring Core', async () => {
-    const unsupported: StripeSubscriptionRecord = {
-      ...coreSubscription,
-      items: [
-        {
-          currentPeriodEnd: null,
-          currentPeriodStart: null,
-          priceId: 'price_other',
-          productId: 'prod_other',
-        },
+  it('keeps terminal unsupported history in the complete snapshot without inferring Core', async () => {
+    const test = testService({
+      subscriptions: [
+        coreSubscription,
+        subscription({
+          id: 'sub_old',
+          items: [
+            {
+              currentPeriodEnd: null,
+              currentPeriodStart: null,
+              priceId: 'price_other',
+              productId: 'prod_other',
+            },
+          ],
+          status: 'canceled',
+        }),
       ],
-    };
-    const test = testService({ subscriptions: [unsupported] });
+    });
     await test.service.processClaimedEvent(
       event('invoice.payment_failed', { customer: 'cus_core', id: 'in_2' }),
     );
-    expect(test.projectCalls[0]).toMatchObject({
-      target_is_supported: false,
-      target_plan_key: null,
+    expect(test.snapshotCalls[0]?.target_subscriptions).toEqual([
+      expect.objectContaining({ is_supported: true, stripe_status: 'active' }),
+      expect.objectContaining({ is_supported: false, plan_key: null, stripe_status: 'canceled' }),
+    ]);
+  });
+
+  it('keeps a current unpaid subscription in the one provider snapshot for review', async () => {
+    const test = testService({
+      subscriptions: [coreSubscription, subscription({ id: 'sub_unpaid', status: 'unpaid' })],
     });
+    await test.service.processClaimedEvent(
+      event('customer.subscription.updated', { customer: 'cus_core', id: 'sub_unpaid' }),
+    );
+    expect(test.snapshotCalls[0]).toMatchObject({ target_snapshot_complete: true });
+    expect(test.snapshotCalls[0]?.target_subscriptions).toContainEqual(
+      expect.objectContaining({ stripe_status: 'unpaid', subscription_id: 'sub_unpaid' }),
+    );
+  });
+
+  it('uses an exact deleted-subscription fallback without marking siblings missing', async () => {
+    const test = testService({ listError: new Error('temporary Stripe outage') });
+    await test.service.processClaimedEvent(
+      event('customer.subscription.deleted', {
+        cancel_at_period_end: false,
+        customer: 'cus_core',
+        id: 'sub_deleted',
+        items: {
+          data: [
+            {
+              current_period_end: 1_788_307_200,
+              current_period_start: 1_785_628_800,
+              price: { id: 'price_core', product: 'prod_core' },
+            },
+          ],
+        },
+      }),
+    );
+    expect(test.snapshotCalls).toEqual([
+      expect.objectContaining({
+        target_snapshot_complete: false,
+        target_subscriptions: [
+          expect.objectContaining({ stripe_status: 'canceled', subscription_id: 'sub_deleted' }),
+        ],
+      }),
+    ]);
+  });
+
+  it('ignores a verified event for an unmapped Stripe customer', async () => {
+    const test = testService({ customerMapped: false });
+    await expect(
+      test.service.processClaimedEvent(event('invoice.paid', { customer: 'cus_other', id: 'in_other' })),
+    ).resolves.toBe('ignored');
+    expect(test.snapshotCalls).toEqual([]);
+  });
+
+  it('ignores a verified Checkout event without a trusted local Checkout mapping', async () => {
+    const test = testService({ checkoutKnown: false });
+    await expect(
+      test.service.processClaimedEvent(
+        event('checkout.session.completed', {
+          customer: 'cus_core',
+          id: 'cs_unknown',
+          mode: 'subscription',
+          subscription: 'sub_core',
+        }),
+      ),
+    ).resolves.toBe('ignored');
+    expect(test.snapshotCalls).toEqual([]);
+  });
+
+  it('rejects a retrieved event whose durable claim mode does not match', async () => {
+    const test = testService({
+      retrievedEvent: {
+        ...event('invoice.paid', { customer: 'cus_core', id: 'in_mode' }),
+        livemode: true,
+      },
+    });
+    await expect(
+      test.service.retrieveClaimedEvent({
+        attemptCount: 1,
+        eventType: 'invoice.paid',
+        livemode: false,
+        stripeEventId: 'evt_test',
+        stripeObjectId: 'in_mode',
+      }),
+    ).rejects.toThrow('identity or mode mismatch');
+  });
+
+  it('records portal audit only after Stripe created the trusted portal session', async () => {
+    const test = testService();
+    await expect(test.service.createPortal('account_a')).resolves.toBe(
+      'https://billing.stripe.example/portal',
+    );
+    expect(test.portalAudits).toEqual(['account_a']);
+  });
+
+  it('does not record a portal audit when Stripe cannot create a portal session', async () => {
+    const test = testService({ portalError: new Error('Stripe unavailable') });
+    await expect(test.service.createPortal('account_a')).rejects.toThrow('Stripe unavailable');
+    expect(test.portalAudits).toEqual([]);
   });
 });

@@ -44,6 +44,30 @@ export interface StripeWebhookEventRecord {
   readonly type: string;
 }
 
+/** Minimal durable webhook claim; the signed provider object is retrieved only by the worker. */
+export interface StripeWebhookClaim {
+  readonly attemptCount: number;
+  readonly eventType: string;
+  readonly livemode: boolean;
+  readonly stripeEventId: string;
+  readonly stripeObjectId: string | null;
+}
+
+/** Validated, bounded provider data sent to the one atomic database snapshot RPC. */
+export interface BillingSubscriptionSnapshot {
+  readonly cancelAtPeriodEnd: boolean;
+  readonly endedAt: string | null;
+  readonly isSupported: boolean;
+  readonly periodEnd: string | null;
+  readonly periodStart: string | null;
+  readonly planKey: BillingPlanKey | null;
+  readonly priceId: string | null;
+  readonly productId: string | null;
+  readonly status: string;
+  readonly subscriptionId: string;
+  readonly trialEnd: string | null;
+}
+
 export interface BillingStripeProvider {
   createCheckoutSession(input: {
     readonly customerId: string;

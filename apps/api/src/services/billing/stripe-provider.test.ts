@@ -1,7 +1,15 @@
 import Stripe from 'stripe';
 import { describe, expect, it } from 'vitest';
 
-import { StripeSdkBillingProvider } from './stripe-provider.js';
+import {
+  collectBoundedSnapshot,
+  StripeSdkBillingProvider,
+} from './stripe-provider.js';
+
+async function* rows(count: number): AsyncGenerator<number> {
+  await Promise.resolve();
+  for (let index = 0; index < count; index += 1) yield index;
+}
 
 describe('Stripe SDK webhook boundary', () => {
   it('uses Stripe signature verification before exposing a typed event', () => {
@@ -30,5 +38,15 @@ describe('Stripe SDK webhook boundary', () => {
       type: 'checkout.session.completed',
     });
     expect(() => provider.verifyWebhook(raw, 't=0,v1=bad')).toThrow();
+  });
+});
+
+describe('Stripe subscription snapshot pagination', () => {
+  it('retains provider rows beyond the former one-page limit', async () => {
+    await expect(collectBoundedSnapshot(rows(21))).resolves.toHaveLength(21);
+  });
+
+  it('fails safely instead of silently truncating an oversized provider snapshot', async () => {
+    await expect(collectBoundedSnapshot(rows(3), 2)).rejects.toThrow('safe reconciliation limit');
   });
 });

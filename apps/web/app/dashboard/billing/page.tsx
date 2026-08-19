@@ -70,8 +70,9 @@ export default async function BillingPage({
     : [null, null];
   const overview = overviewResponse?.data?.[0] ?? null;
   const usage = usageResponse?.data?.[0] ?? null;
-  const subscribed =
-    overview?.billing_state === 'active' || overview?.billing_state === 'attention';
+  const canSubscribe = overview?.can_subscribe ?? true;
+  const canManageBilling = overview?.can_manage_billing ?? false;
+  const hasAuthoritativePeriod = overview?.has_authoritative_period ?? false;
 
   return (
     <section className="max-w-3xl">
@@ -87,7 +88,12 @@ export default async function BillingPage({
           signed update.
         </p>
       ) : null}
-      {params.checkout === 'cancelled' || params.existing === 'subscription' ? (
+      {params.checkout === 'cancelled' ? (
+        <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+          Checkout was cancelled. No subscription changes were made.
+        </p>
+      ) : null}
+      {params.existing === 'subscription' ? (
         <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
           An existing subscription is managed in the Stripe billing portal.
         </p>
@@ -99,8 +105,8 @@ export default async function BillingPage({
       ) : null}
       {overview?.billing_state === 'review_required' ? (
         <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-          Billing needs attention. Please contact Avenlyo support before making subscription
-          changes.
+          Billing needs attention. Refresh status or manage billing in Stripe to resolve the
+          current subscription state.
         </p>
       ) : null}
 
@@ -108,14 +114,18 @@ export default async function BillingPage({
         <div className="flex flex-wrap items-start justify-between gap-5">
           <div>
             <h2 className="text-lg font-semibold text-ink">
-              {overview?.plan_key ? 'Avenlyo Core' : 'No subscription'}
+              {overview?.plan_key
+                ? 'Avenlyo Core'
+                : overview?.has_current_subscription
+                  ? 'Subscription needs review'
+                  : 'No subscription'}
             </h2>
             <p className="mt-1 text-sm capitalize text-muted-foreground">
               {statusLabel(overview?.billing_state ?? null)}
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
-            {!subscribed ? (
+            {canSubscribe ? (
               <form action={startBillingCheckoutAction}>
                 <button
                   className="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
@@ -125,7 +135,7 @@ export default async function BillingPage({
                 </button>
               </form>
             ) : null}
-            {subscribed ? (
+            {canManageBilling ? (
               <form action={openBillingPortalAction}>
                 <button
                   className="rounded-md border border-border px-4 py-2 text-sm font-semibold text-ink"
@@ -149,8 +159,9 @@ export default async function BillingPage({
           <div>
             <dt className="text-muted-foreground">Current period</dt>
             <dd className="mt-1 font-medium text-ink">
-              {formatDate(overview?.current_period_start ?? null)} –{' '}
-              {formatDate(overview?.current_period_end ?? null)}
+              {hasAuthoritativePeriod
+                ? `${formatDate(overview?.current_period_start ?? null)} – ${formatDate(overview?.current_period_end ?? null)}`
+                : 'Not available for the current subscription topology'}
             </dd>
           </div>
           <div>
@@ -167,9 +178,9 @@ export default async function BillingPage({
       <div className="mt-6 rounded-2xl border border-border bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-ink">Usage</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          {overview?.current_period_start
+          {usage?.period_kind === 'stripe_billing_period'
             ? 'Current Stripe billing period.'
-            : 'Current-month preview; no subscription period is available yet.'}
+            : 'Current-month preview; no authoritative Stripe billing period is available.'}
         </p>
         <div className="mt-4">
           {usageRow('Voice seconds', usage?.voice_seconds ?? 0)}

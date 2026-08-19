@@ -10,6 +10,23 @@ import type {
   StripeWebhookEventRecord,
 } from './types.js';
 
+export const MAX_STRIPE_SUBSCRIPTION_SNAPSHOT_SIZE = 500;
+
+/** Collects an SDK auto-paginated iterable without allowing silent snapshot truncation. */
+export async function collectBoundedSnapshot<T>(
+  source: AsyncIterable<T>,
+  maximum = MAX_STRIPE_SUBSCRIPTION_SNAPSHOT_SIZE,
+): Promise<readonly T[]> {
+  const rows: T[] = [];
+  for await (const row of source) {
+    if (rows.length >= maximum) {
+      throw new Error('Stripe subscription snapshot exceeds the safe reconciliation limit.');
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 function asDate(value: number | null | undefined): Date | null {
   return typeof value === 'number' ? new Date(value * 1000) : null;
 }
@@ -139,13 +156,15 @@ export class StripeSdkBillingProvider implements BillingStripeProvider {
   }
 
   public async listSubscriptions(customerId: string): Promise<readonly StripeSubscriptionRecord[]> {
-    const result = await this.client.subscriptions.list({
-      customer: customerId,
-      expand: ['data.items.data.price.product'],
-      limit: 20,
-      status: 'all',
-    });
-    return result.data.map(subscriptionRecord);
+    const subscriptions = await collectBoundedSnapshot(
+      this.client.subscriptions.list({
+        customer: customerId,
+        expand: ['data.items.data.price.product'],
+        limit: 100,
+        status: 'all',
+      }),
+    );
+    return subscriptions.map(subscriptionRecord);
   }
 
   public verifyWebhook(rawBody: string, signature: string): StripeWebhookEventRecord {

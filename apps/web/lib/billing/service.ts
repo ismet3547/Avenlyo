@@ -7,6 +7,10 @@ export interface BillingOverviewRow {
   readonly current_period_end: string | null;
   readonly current_period_start: string | null;
   readonly plan_key: 'core' | null;
+  readonly can_manage_billing: boolean;
+  readonly can_subscribe: boolean;
+  readonly has_authoritative_period: boolean;
+  readonly has_current_subscription: boolean;
   readonly stripe_status: string | null;
   readonly trial_end: string | null;
 }
@@ -15,6 +19,7 @@ export interface BillingUsageSummaryRow {
   readonly ai_text_turns: number;
   readonly appointments_booked: number;
   readonly outbound_sms: number;
+  readonly period_kind: 'current_month_preview' | 'stripe_billing_period';
   readonly period_end: string;
   readonly period_start: string;
   readonly voice_seconds: number;
