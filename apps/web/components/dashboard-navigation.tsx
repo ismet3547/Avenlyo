@@ -5,6 +5,7 @@ import {
   CircleAlert,
   Home,
   ClipboardList,
+  CreditCard,
   MessageSquare,
   Settings,
   Users,
@@ -23,6 +24,7 @@ const navigation: ReadonlyArray<{ href: string; icon: LucideIcon; label: string 
   { href: '/dashboard/needs-attention', label: 'Needs Attention', icon: CircleAlert },
   { href: '/dashboard/ai-front-office', label: 'AI Front Office', icon: Bot },
   { href: '/dashboard/integrations', label: 'Integrations', icon: Settings },
+  { href: '/dashboard/billing', label: 'Billing', icon: CreditCard },
   { href: '/dashboard/settings', label: 'Settings', icon: Settings },
 ];
 

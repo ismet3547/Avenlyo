@@ -1,11 +1,16 @@
-import { buildApp } from './app.js';
 import { env } from './env.js';
 import { createMessagingRuntime } from './services/messaging/runtime.js';
+import { createBillingRuntime } from './services/billing/runtime.js';
+import { buildApp } from './app.js';
 
-const app = buildApp();
 const messaging = createMessagingRuntime();
+const billing = createBillingRuntime();
+const app = buildApp({ billingService: billing?.service ?? null });
 messaging?.start();
-app.addHook('onClose', async () => messaging?.stop());
+billing?.start();
+app.addHook('onClose', async () => {
+  await Promise.all([messaging?.stop(), billing?.stop()]);
+});
 
 try {
   await app.listen({ host: env.API_HOST, port: env.API_PORT });
