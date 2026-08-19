@@ -422,15 +422,15 @@ begin
 
   if exists (
     select 1
-    from public.lead_followup_jobs existing_job
+    from public.lead_followup_jobs attempted_job
     join public.message_deliveries delivery
-      on delivery.organization_id = existing_job.organization_id
-      and delivery.location_id = existing_job.location_id
-      and delivery.id = existing_job.delivery_id
-    where existing_job.organization_id = lead_row.organization_id
-      and existing_job.location_id = lead_row.location_id
-      and existing_job.sender_phone_number_id = eligible.sender_phone_number_id
-      and existing_job.recipient_e164 = eligible.recipient_e164
+      on delivery.organization_id = attempted_job.organization_id
+      and delivery.location_id = attempted_job.location_id
+      and delivery.id = attempted_job.delivery_id
+    where attempted_job.organization_id = lead_row.organization_id
+      and attempted_job.location_id = lead_row.location_id
+      and attempted_job.sender_phone_number_id = eligible.sender_phone_number_id
+      and attempted_job.recipient_e164 = eligible.recipient_e164
       and delivery.attempted_at is not null
       and delivery.attempted_at > now() - interval '24 hours'
       and delivery.status <> 'suppressed'
