@@ -391,9 +391,10 @@ set quiet_hours_start = ((now() at time zone 'UTC') + interval '1 hour')::time,
   quiet_hours_end = ((now() at time zone 'UTC') + interval '2 hours')::time,
   business_hours_only = true;
 update public.locations
-set business_hours = jsonb_build_object(
-  lower(to_char(((now() at time zone 'UTC')::date + 1), 'FMDay')),
-  jsonb_build_object('open', '00:00', 'close', '23:59', 'closed', false)
+set business_hours = jsonb_set(
+  '{"monday":{"open":"00:00","close":"23:59","closed":false},"tuesday":{"open":"00:00","close":"23:59","closed":false},"wednesday":{"open":"00:00","close":"23:59","closed":false},"thursday":{"open":"00:00","close":"23:59","closed":false},"friday":{"open":"00:00","close":"23:59","closed":false},"saturday":{"open":"00:00","close":"23:59","closed":false},"sunday":{"open":"00:00","close":"23:59","closed":false}}'::jsonb,
+  array[lower(to_char((now() at time zone 'UTC')::date, 'FMDay'))],
+  jsonb_build_object('open', '00:00', 'close', '23:59', 'closed', true)
 )
 where id = 'f1100000-0000-0000-0000-000000000001';
 set local role service_role;
