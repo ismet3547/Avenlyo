@@ -774,7 +774,7 @@ select extensions.is(
 select extensions.ok(
   (select pg_temp.error_matches($sql$
     update public.organization_members set revoked_at = now()
-    where id = 'd0000000-0000-4000-8000-000000000001'
+    where id = 'd0000000-0000-4000-8000-000000000003'
   $sql$, '23514', 'organization_members_revocation_consistent')),
   'a revocation without an actor is rejected by the database'
 );
