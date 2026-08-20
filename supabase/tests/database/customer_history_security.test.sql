@@ -182,16 +182,14 @@ insert into public.appointments
    'c7000000-0000-4000-8000-00000000000b', 'Location B visit', 'confirmed',
    now() + interval '5 days', now() + interval '5 days' + interval '30 minutes');
 
+-- A lead is pinned to the contact's own location by foreign key, so Robin can only have one here.
+-- That makes the Location B assertions below a test of leakage rather than of a rival lead.
 insert into public.leads
   (id, organization_id, location_id, contact_id, conversation_id, status, source, created_at, updated_at) values
   ('cb000000-0000-4000-8000-00000000000a', 'c2000000-0000-4000-8000-000000000001',
    'c3000000-0000-4000-8000-00000000000a', 'c6000000-0000-4000-8000-000000000001',
    'c7000000-0000-4000-8000-00000000000a', 'qualified', 'sms',
-   now() - interval '2 days', now() - interval '2 days'),
-  ('cb000000-0000-4000-8000-00000000000b', 'c2000000-0000-4000-8000-000000000001',
-   'c3000000-0000-4000-8000-00000000000b', 'c6000000-0000-4000-8000-000000000001',
-   'c7000000-0000-4000-8000-00000000000b', 'new', 'sms',
-   now() - interval '3 days', now() - interval '3 days');
+   now() - interval '2 days', now() - interval '2 days');
 
 insert into public.handoffs
   (id, organization_id, location_id, conversation_id, mode, status, urgency, reason,
@@ -344,11 +342,10 @@ select extensions.is(
   1,
   'Location B sees only its own conversation for the shared customer'
 );
-select extensions.is(
-  (select lead_status from public.get_my_customer_directory('c3000000-0000-4000-8000-00000000000b')
+select extensions.ok(
+  (select lead_status is null from public.get_my_customer_directory('c3000000-0000-4000-8000-00000000000b')
    where contact_id = 'c6000000-0000-4000-8000-000000000001'),
-  'new',
-  'Location B sees its own lead status'
+  'the lead recorded at Location A does not appear against the same customer at Location B'
 );
 select extensions.ok(
   (select sms_opted_out from public.get_my_customer_directory('c3000000-0000-4000-8000-00000000000b')
@@ -466,7 +463,7 @@ select extensions.ok(
     select 1 from public.get_my_customer_timeline(
       'c3000000-0000-4000-8000-00000000000a', 'c6000000-0000-4000-8000-000000000001')
     where event_id in ('c7000000-0000-4000-8000-00000000000b', 'c9000000-0000-4000-8000-00000000000b',
-                       'ca000000-0000-4000-8000-00000000000b', 'cb000000-0000-4000-8000-00000000000b')
+                       'ca000000-0000-4000-8000-00000000000b')
   ),
   'no Location B event leaks into the Location A timeline'
 );
