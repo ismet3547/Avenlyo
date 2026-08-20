@@ -231,7 +231,7 @@ client hammering that provider on every load-balancer check. Provider execution 
 durable queues and is read through `ops:status`, not through a health check.
 
 **Schema compatibility.** The database advertises a version through `platform_schema_contract`, and
-the application requires at least version 15. Readiness fails when the deployed schema is older than
+the application requires at least version 16. Readiness fails when the deployed schema is older than
 the running build needs, and deliberately accepts a newer additive schema so an application rollback
 can still serve.
 

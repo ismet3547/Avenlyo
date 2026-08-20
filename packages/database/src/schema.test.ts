@@ -210,6 +210,24 @@ const invitationIdentityTest = readSql(
     import.meta.url,
   ),
 );
+const customerHistoryMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260829000000_phase_16_customer_history.sql',
+    import.meta.url,
+  ),
+);
+const customerHistoryTest = readSql(
+  new URL('../../../supabase/tests/database/customer_history_security.test.sql', import.meta.url),
+);
+const customerHistoryHardeningMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260829010000_phase_16_customer_history_hardening.sql',
+    import.meta.url,
+  ),
+);
+const customerHistoryHardeningTest = readSql(
+  new URL('../../../supabase/tests/database/customer_history_hardening.test.sql', import.meta.url),
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -1151,7 +1169,7 @@ describe('platform operations migration definition', () => {
 
   it('ships executable coverage for the platform boundary and aggregation', () => {
     for (const expected of [
-      'the deployed schema advertises the current compatibility version',
+      'the deployed schema is at least the version Phase 14 requires',
       'the trusted backend has no broad runtime instance write grant',
       'an authenticated caller cannot write runtime state directly',
       'every platform function pins an empty search path',
@@ -1464,6 +1482,202 @@ describe('invitation identity hardening migration definition', () => {
       'reactivation replaces the old scope with exactly the invitation scope',
     ]) {
       expect(invitationIdentityTest).toContain(expected);
+    }
+  });
+});
+
+describe('customer history migration definition', () => {
+  it('is additive and creates no competing customer table', () => {
+    expect(customerHistoryMigration).not.toMatch(/drop table/i);
+    // contacts stays the canonical person record; "Customers" is only what the operator calls it.
+    for (const rival of ['customers', 'customer_profiles', 'crm_contacts', 'people']) {
+      expect(customerHistoryMigration).not.toContain(`create table public.${rival}`);
+    }
+  });
+
+  it('derives visibility from location activity rather than the contact row', () => {
+    // contacts.location_id records where someone was first seen, not where they have been active.
+    expect(customerHistoryMigration).toContain(
+      'create function public.contact_has_location_activity',
+    );
+    expect(customerHistoryMigration).toContain(
+      'create function public.contact_visible_at_location',
+    );
+    expect(customerHistoryMigration).toContain(
+      'create function public.my_customer_location_organization',
+    );
+    // Location access, not an organization identifier the browser supplies.
+    expect(customerHistoryMigration).toContain(
+      'public.has_location_access(location.organization_id, location.id)',
+    );
+  });
+
+  it('excludes test-agent activity from every customer surface', () => {
+    expect(customerHistoryMigration).toMatch(/conversation\.mode = 'customer'/);
+    expect(customerHistoryMigration).toContain(
+      "call.conversation_id is null or conversation.mode = 'customer'",
+    );
+  });
+
+  it('bounds every page in the database rather than trusting the caller', () => {
+    expect(customerHistoryMigration).toContain(
+      'select least(greatest(coalesce(requested, 25), 1), 50)',
+    );
+    expect(customerHistoryMigration).toContain('public.customer_history_page_limit(page_limit)');
+  });
+
+  it('reads consent from its own record and never mutates anything', () => {
+    expect(customerHistoryMigration).toContain('public.messaging_contact_preferences');
+    // Consent is a property of the messaging route, so the lookup is scoped to this location
+    // rather than showing one location a decision made at another.
+    expect(customerHistoryMigration).toContain('preference.location_id = target_location_id');
+    // Read-only by construction: no write of any kind, and no action log for viewing history.
+    expect(customerHistoryMigration).not.toMatch(/insert into public\.action_logs/);
+    expect(customerHistoryMigration).not.toMatch(
+      /update public\.(contacts|conversations|messages|calls|appointments|leads|handoffs|message_deliveries)/,
+    );
+  });
+
+  it('withdraws direct client mutation of contacts', () => {
+    // Every other operational table lost its client mutation policies in the phase that grew a real
+    // boundary; contacts was simply never revisited.
+    expect(customerHistoryMigration).toContain(
+      'revoke insert, update, delete on table public.contacts from authenticated, anon',
+    );
+    expect(customerHistoryMigration).toContain('drop policy if exists contacts_update_member');
+    expect(customerHistoryMigration).not.toMatch(/revoke select on table public\.contacts/);
+  });
+
+  it('keeps the read models authenticated and the helpers internal', () => {
+    expect(customerHistoryMigration).toContain(
+      'grant execute on function\n  public.get_my_customer_directory(uuid, text, timestamptz, uuid, integer),',
+    );
+    expect(customerHistoryMigration).toContain('to authenticated;');
+    // Not service-role: these derive the caller from auth.uid(), and a backend role standing in for
+    // a person would bypass the location authorization that is the point.
+    expect(customerHistoryMigration).not.toMatch(/to service_role/);
+    expect(customerHistoryMigration).toContain(
+      'revoke all on function\n  public.customer_history_page_limit(integer),',
+    );
+  });
+
+  it('indexes access paths without indexing customer content', () => {
+    expect(customerHistoryMigration).toContain('create index conversations_location_activity_idx');
+    expect(customerHistoryMigration).toContain('create index calls_location_contact_idx');
+    // Transcript search is not part of this phase, and indexing message bodies to support a feature
+    // nobody asked for is how a search index becomes an exfiltration surface.
+    expect(customerHistoryMigration).not.toMatch(/using gin/i);
+    expect(customerHistoryMigration).not.toMatch(/trigram|gin_trgm/i);
+    expect(customerHistoryMigration).not.toMatch(/create index[\s\S]{0,80}\(body\)/i);
+    expect(customerHistoryMigration).not.toMatch(/create index[\s\S]{0,80}metadata/i);
+  });
+
+  it('advances the schema compatibility contract to 16', () => {
+    expect(customerHistoryMigration).toContain('set schema_version = 16');
+  });
+
+  it('proves the security properties it claims', () => {
+    for (const expected of [
+      'Location A counts its own two conversations, not the three across the organization',
+      'a customer active only at Location B is absent from Location A',
+      'an organization contact with no location activity is not a customer of that location',
+      'the test-agent conversation never appears in customer history',
+      'no Location B event leaks into the Location A timeline',
+      'a web conversation with no contact is labelled rather than given a synthesised customer',
+      'an unknown delivery is never relabelled as sent or failed',
+      'a revoked member immediately loses the customer directory',
+      'an owner asking for Location A receives Location A history only',
+      'a browser client cannot rewrite a customer phone number or name',
+      'no customer read model exposes provider identifiers, tokens, or raw metadata',
+    ]) {
+      expect(customerHistoryTest).toContain(expected);
+    }
+  });
+});
+
+describe('customer history hardening migration definition', () => {
+  it('is additive and leaves the reviewed history migration intact', () => {
+    expect(customerHistoryHardeningMigration).not.toMatch(/drop table/i);
+    expect(customerHistoryHardeningMigration).toContain(
+      'create or replace function public.get_my_conversation_archive',
+    );
+    // The reviewed migration still contains its own definitions; corrections arrive by replacement.
+    expect(customerHistoryMigration).toContain(
+      'create function public.get_my_conversation_archive',
+    );
+  });
+
+  it('closes the raw contact read path', () => {
+    // The Phase 0 policy authorized contacts by contacts.location_id, which is weaker than the
+    // Phase 16 rule and also exposed metadata the read models omit.
+    expect(customerHistoryHardeningMigration).toContain(
+      'revoke select on table public.contacts from authenticated, anon',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'drop policy if exists contacts_select_member on public.contacts',
+    );
+  });
+
+  it('normalizes the canonical voice channel in one place', () => {
+    // Phase 4 stores inbound voice as channel_type 'phone'.
+    expect(customerHistoryHardeningMigration).toContain(
+      'create function public.history_conversation_channel',
+    );
+    expect(customerHistoryHardeningMigration).toContain("when 'phone' then 'voice'");
+    // And the web default is gone: an unknown channel is not declared to be web chat.
+    expect(customerHistoryHardeningMigration).not.toContain(
+      "coalesce(channel.channel_type, 'web')",
+    );
+    expect(customerHistoryHardeningMigration).toContain("else 'unknown'");
+  });
+
+  it('scopes every associated conversation record to the selected location', () => {
+    expect(customerHistoryHardeningMigration).toContain(
+      'and appointment.location_id = target_location_id',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'and call.location_id is not distinct from target_location_id',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'and lead.location_id is not distinct from target_location_id',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'and handoff.location_id is not distinct from target_location_id',
+    );
+  });
+
+  it('refuses a partial pagination cursor', () => {
+    // Half a cursor is not a smaller page: it changes the comparison and can skip or repeat rows.
+    expect(customerHistoryHardeningMigration).toContain(
+      'create function public.require_complete_history_cursor',
+    );
+    expect(customerHistoryHardeningMigration).toContain('History cursor is incomplete');
+    expect(customerHistoryHardeningMigration).toContain(
+      'num_nulls(cursor_event_at, cursor_event_kind, cursor_event_id) not in (0, 3)',
+    );
+  });
+
+  it('keeps the schema compatibility version at 16', () => {
+    // This corrects Phase 16 behaviour inside the same unmerged phase; it adds no capability a
+    // Phase 16 build could not already assume.
+    expect(customerHistoryHardeningMigration).not.toMatch(/set schema_version = 1[^6]/);
+  });
+
+  it('proves the hardening properties it claims', () => {
+    for (const expected of [
+      'a browser client cannot read the contacts table directly',
+      'an activity-less contact whose home location is accessible cannot be fetched directly',
+      'contact metadata is not browser-readable',
+      'trusted SMS ingestion still creates its contact',
+      'trusted voice ingestion still creates its contact',
+      'a phone-channel conversation projects as voice, which is the word the product uses',
+      'the voice filter finds a real Phase 4 voice conversation',
+      'a conversation with no channel row is reported unknown rather than declared web chat',
+      'an appointment recorded at another location is not returned with this conversation',
+      'a call recorded at another location is not returned with this conversation',
+      'a directory cursor missing its identifier is refused',
+    ]) {
+      expect(customerHistoryHardeningTest).toContain(expected);
     }
   });
 });

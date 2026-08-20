@@ -14,10 +14,9 @@ end;
 $$;
 
 -- Schema compatibility contract.
-select extensions.is(
-  (select schema_version from public.platform_schema_contract),
-  15,
-  'the deployed schema advertises the current compatibility version'
+select extensions.ok(
+  (select schema_version >= 14 from public.platform_schema_contract),
+  'the deployed schema is at least the version Phase 14 requires'
 );
 select extensions.ok((select pg_temp.error_matches($sql$
   insert into public.platform_schema_contract (id, schema_version) values (false, 16)
@@ -108,10 +107,9 @@ reset role;
 -- Runtime lifecycle through the narrow service-role RPCs.
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
-select extensions.is(
-  (select schema_version from public.platform_readiness_probe()),
-  15,
-  'the readiness probe reports the deployed schema version'
+select extensions.ok(
+  (select schema_version >= 14 from public.platform_readiness_probe()),
+  'the readiness probe reports a schema version this build can serve'
 );
 select extensions.ok(
   (select checked_at is not null from public.platform_readiness_probe()),

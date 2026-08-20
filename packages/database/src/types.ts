@@ -97,6 +97,134 @@ export interface WorkspaceContextRow {
   onboarding_step: OnboardingStep | null;
 }
 
+/** Channels a customer conversation can arrive on. Mirrors the canonical channel_type set. */
+export type CustomerConversationChannel = 'sms' | 'voice' | 'web';
+
+/** Event families on the customer activity timeline. */
+export type CustomerTimelineEventKind =
+  'appointment' | 'call' | 'conversation' | 'handoff' | 'lead';
+
+export interface CustomerDirectoryRow {
+  contact_id: string;
+  display_name: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  email: string | null;
+  first_activity_at: string | null;
+  last_activity_at: string | null;
+  /** Every count is scoped to the selected location, never the organization. */
+  conversation_count: number;
+  call_count: number;
+  appointment_count: number;
+  lead_status: string | null;
+  sms_opted_out: boolean;
+}
+
+export interface CustomerOverviewRow {
+  contact_id: string;
+  display_name: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  email: string | null;
+  first_activity_at: string | null;
+  last_activity_at: string | null;
+  conversation_count: number;
+  call_count: number;
+  appointment_count: number;
+  lead_count: number;
+  lead_status: string | null;
+  lead_id: string | null;
+  next_appointment_id: string | null;
+  next_appointment_title: string | null;
+  next_appointment_status: string | null;
+  next_appointment_starts_at: string | null;
+  recent_appointment_id: string | null;
+  recent_appointment_title: string | null;
+  recent_appointment_status: string | null;
+  recent_appointment_starts_at: string | null;
+  sms_opted_out: boolean;
+  sms_opted_out_at: string | null;
+  active_handoff_count: number;
+  active_handoff_urgency: string | null;
+  human_owned_conversation_count: number;
+}
+
+export interface CustomerTimelineRow {
+  event_kind: CustomerTimelineEventKind;
+  event_id: string;
+  event_at: string;
+  conversation_id: string | null;
+  title: string | null;
+  status: string | null;
+  detail: string | null;
+  channel: string | null;
+  ai_mode: string | null;
+  message_count: number | null;
+  ends_at: string | null;
+  has_active_handoff: boolean;
+}
+
+export interface ConversationArchiveRow {
+  conversation_id: string;
+  /** Null for an anonymous web visitor, which has no canonical customer identity. */
+  contact_id: string | null;
+  customer_display_name: string;
+  channel: string;
+  status: string;
+  ai_mode: string;
+  created_at: string;
+  last_activity_at: string;
+  message_count: number;
+  assigned_display_name: string | null;
+  active_handoff_status: string | null;
+  active_handoff_urgency: string | null;
+}
+
+export interface ConversationDetailRow {
+  conversation_id: string;
+  contact_id: string | null;
+  customer_display_name: string;
+  customer_phone: string | null;
+  customer_email: string | null;
+  channel: string;
+  status: string;
+  ai_mode: string;
+  created_at: string;
+  last_activity_at: string;
+  message_count: number;
+  assigned_display_name: string | null;
+  active_handoff_id: string | null;
+  active_handoff_status: string | null;
+  active_handoff_urgency: string | null;
+  lead_id: string | null;
+  lead_status: string | null;
+  appointment_id: string | null;
+  appointment_title: string | null;
+  appointment_status: string | null;
+  appointment_starts_at: string | null;
+  call_id: string | null;
+  call_status: string | null;
+  call_started_at: string | null;
+}
+
+export interface ConversationTranscriptRow {
+  message_id: string;
+  author_type: string;
+  direction: string;
+  source_channel: string;
+  message_type: string;
+  body: string | null;
+  created_at: string;
+  sent_at: string | null;
+  author_display_name: string | null;
+  in_reply_to_message_id: string | null;
+  /** Durable provider truth. `unknown` stays unknown and is never relabelled. */
+  delivery_status: string | null;
+  delivery_updated_at: string | null;
+}
+
 export interface KnowledgeImportRow {
   import_id: string;
   status: string;
@@ -810,6 +938,57 @@ export interface Database {
           target_location_ids?: string[];
         };
         Returns: TeamMutationRow[];
+      };
+      get_my_customer_directory: {
+        Args: {
+          target_location_id: string;
+          target_search?: string | null;
+          cursor_last_activity_at?: string | null;
+          cursor_contact_id?: string | null;
+          page_limit?: number;
+        };
+        Returns: CustomerDirectoryRow[];
+      };
+      get_my_customer_overview: {
+        Args: { target_location_id: string; target_contact_id: string };
+        Returns: CustomerOverviewRow[];
+      };
+      get_my_customer_timeline: {
+        Args: {
+          target_location_id: string;
+          target_contact_id: string;
+          cursor_event_at?: string | null;
+          cursor_event_kind?: string | null;
+          cursor_event_id?: string | null;
+          page_limit?: number;
+        };
+        Returns: CustomerTimelineRow[];
+      };
+      get_my_conversation_archive: {
+        Args: {
+          target_location_id: string;
+          target_channel?: string | null;
+          target_status?: string | null;
+          target_search?: string | null;
+          cursor_activity_at?: string | null;
+          cursor_conversation_id?: string | null;
+          page_limit?: number;
+        };
+        Returns: ConversationArchiveRow[];
+      };
+      get_my_conversation_detail: {
+        Args: { target_location_id: string; target_conversation_id: string };
+        Returns: ConversationDetailRow[];
+      };
+      get_my_conversation_transcript: {
+        Args: {
+          target_location_id: string;
+          target_conversation_id: string;
+          cursor_created_at?: string | null;
+          cursor_message_id?: string | null;
+          page_limit?: number;
+        };
+        Returns: ConversationTranscriptRow[];
       };
       get_my_tenant_context: {
         Args: EmptyRecord;

@@ -3,10 +3,7 @@ import { notFound } from 'next/navigation';
 const sections = {
   'ai-front-office': 'AI Front Office',
   appointments: 'Appointments',
-  conversations: 'Conversations',
-  customers: 'Customers',
   integrations: 'Integrations',
-  'needs-attention': 'Needs Attention',
 } as const;
 
 interface DashboardSectionPageProps {

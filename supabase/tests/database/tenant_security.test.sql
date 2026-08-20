@@ -4,7 +4,7 @@
 begin;
 
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(9);
+select extensions.plan(10);
 
 insert into auth.users (id, email)
 values
@@ -107,8 +107,9 @@ select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000002
 select extensions.is(
   (
     select count(*)::integer
-    from public.contacts
+    from public.locations
     where organization_id = '10000000-0000-0000-0000-000000000001'
+      and id = '11000000-0000-0000-0000-000000000001'
   ),
   1,
   'location-scoped member can read permitted operational data'
@@ -160,11 +161,18 @@ select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000002
 select extensions.is(
   (
     select count(*)::integer
-    from public.contacts
+    from public.locations
     where organization_id = '20000000-0000-0000-0000-000000000001'
   ),
   0,
   'organization A member cannot read organization B data'
+);
+
+-- Phase 16 withdrew direct contact reads entirely: customer identity now flows only through the
+-- Customer 360 read models, whose visibility rule is stronger than this policy ever was.
+select extensions.ok(
+  not has_table_privilege('authenticated', 'public.contacts', 'select'),
+  'customer identity is not readable from the raw table by any tenant member'
 );
 
 select extensions.is(
