@@ -1,7 +1,7 @@
 -- Phase 14 platform operations: internal runtime state and global aggregate observation only.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(63);
+select extensions.plan(65);
 
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
@@ -318,11 +318,24 @@ select extensions.is(
   1::bigint,
   'a reminder scheduled for the future is reported separately and never as backlog'
 );
+-- Instance ...002 is reporting; ...004 has been silent for ninety minutes against a
+-- twenty-five second heartbeat interval.  Counting both as active was the defect: an operator
+-- reading the number would never look for the outage.
 select extensions.is(
   (select value from public.get_platform_operational_snapshot()
    where metric_group = 'runtime' and metric = 'active_instances'),
-  2::bigint,
-  'only instances that have not stopped count as active'
+  1::bigint,
+  'only an instance that has not stopped and is still reporting counts as active'
+);
+select extensions.is(
+  (select value from public.get_platform_operational_snapshot()
+   where metric_group = 'runtime' and metric = 'stale_instances'),
+  1::bigint,
+  'a silent instance counts as stale rather than active'
+);
+select extensions.ok(
+  exists (select 1 from public.runtime_instances where instance_id = 'e1000000-0000-4000-8000-000000000004'),
+  'the stale instance is still retained for diagnosis rather than deleted'
 );
 select extensions.ok(
   exists (select 1 from public.get_platform_operational_snapshot()

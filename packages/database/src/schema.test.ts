@@ -1222,6 +1222,17 @@ describe('runtime hardening migration definition', () => {
     }
   });
 
+  it('replaces the snapshot definition that counted a silent instance as active', () => {
+    // The merged migration counted every not-stopped row; the follow-up replaces the whole
+    // function so the corrected definition is the only one a fresh database ever applies.
+    expect(platformOperationsMigration).toContain(
+      "count(*) filter (where instance.stopped_at is null)::bigint",
+    );
+    expect(runtimeHardeningMigration).toContain(
+      'create or replace function public.get_platform_operational_snapshot()',
+    );
+  });
+
   it('counts a silent instance as stale rather than active', () => {
     expect(runtimeHardeningMigration).toContain("'active_instances'::text");
     expect(runtimeHardeningMigration).toContain("'stale_instances'::text");
