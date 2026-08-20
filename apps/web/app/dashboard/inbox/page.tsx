@@ -16,7 +16,6 @@ import {
   QUEUE_FILTERS,
   assigneeLabel,
   conversationTitle,
-  deriveCustomerWaiting,
   formatWaitingDuration,
   normalizeQueueFilter,
   operatorActions,
@@ -133,10 +132,9 @@ export default async function InboxPage({
   // Owner/admin recovery is offered in the UI only because the server already permits it.
   const viewer = operatorViewerFromRole(workspace.role);
   const actions = selected ? operatorActions(selected, viewer) : null;
-  const detailWaiting = selected
-    ? deriveCustomerWaiting(messages)
-    : { since: null, waiting: false };
-  const detailWaitingFor = formatWaitingDuration(detailWaiting.since, now);
+  // The queue read model is the single authority for waiting state, so the detail pane and the
+  // list can never disagree about when this customer started waiting.
+  const detailWaitingFor = selected ? formatWaitingDuration(selected.waiting_since, now) : null;
   const outcomeMessage = outcome ? (QUEUE_ACTION_MESSAGES[outcome] ?? null) : null;
 
   function filterHref(value: string): string {

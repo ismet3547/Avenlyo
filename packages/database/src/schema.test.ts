@@ -193,6 +193,17 @@ const handoffOwnershipHardeningTest = readFileSync(
   new URL('../../../supabase/tests/database/handoff_ownership_hardening.test.sql', import.meta.url),
   'utf8',
 );
+const handoffWaitingEpisodeMigration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20260826020000_phase_13_waiting_episode_consistency.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const handoffWaitingEpisodeTest = readFileSync(
+  new URL('../../../supabase/tests/database/handoff_waiting_episode.test.sql', import.meta.url),
+  'utf8',
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -928,5 +939,111 @@ describe('handoff ownership hardening migration definition', () => {
     expect(handoffOwnershipHardeningTest).toContain(
       'the advisory lock is always acquired before the first row lock',
     );
+  });
+});
+
+describe('handoff waiting episode migration definition', () => {
+  it('gives the human-attention episode a durable anchor', () => {
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'add column human_attention_started_at timestamptz',
+    );
+    expect(handoffWaitingEpisodeMigration).toContain('conversations_human_attention_state_check');
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'human_attention_started_at is distinct from old.human_attention_started_at',
+    );
+  });
+
+  it('bounds waiting to the current episode instead of unbounded history', () => {
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'create or replace function public.conversation_customer_waiting_since',
+    );
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'conversation.human_attention_started_at is not null',
+    );
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'when boundary.replied_at is null then inbound.created_at >= boundary.anchor',
+    );
+    expect(handoffWaitingEpisodeMigration).not.toContain("'-infinity'::timestamptz");
+  });
+
+  it('anchors each episode on the turn that caused it', () => {
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'select source_message.created_at from public.messages source_message',
+    );
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'create function public.latest_customer_turn_at',
+    );
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'public.latest_customer_turn_at(conversation_row.organization_id, conversation_row.id)',
+    );
+  });
+
+  it('keeps one episode across claim, release, resolve, and reply but ends it on resume', () => {
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'when paused then coalesce(target_attention_anchor, now())',
+    );
+    expect(handoffWaitingEpisodeMigration).toContain(
+      "set ai_mode = 'ai', assigned_user_id = null, human_attention_started_at = null",
+    );
+  });
+
+  it('backfills legacy episodes deterministically without inventing history', () => {
+    expect(handoffWaitingEpisodeMigration).toContain('set human_attention_started_at = coalesce(');
+    expect(handoffWaitingEpisodeMigration).toContain(
+      "case when handoff.status in ('open', 'acknowledged') then 0 else 1 end asc",
+    );
+    expect(handoffWaitingEpisodeMigration).not.toMatch(
+      /min\(inbound\.created_at\)[\s\S]{0,200}set human_attention_started_at/i,
+    );
+  });
+
+  it('audits a staff ownership acquisition that no handoff covers', () => {
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'create function public.acquire_conversation_ownership',
+    );
+    expect(handoffWaitingEpisodeMigration).toContain("'ai_to_human_owned'");
+    expect(handoffWaitingEpisodeMigration).toContain("'unassigned_to_human_owner'");
+    expect(handoffWaitingEpisodeMigration).toContain('if not paused and not assigning then');
+    expect(handoffWaitingEpisodeMigration).toContain(
+      "public.acquire_conversation_ownership(\n    conversation_row.id,\n    auth.uid(),\n    'human_reply',",
+    );
+  });
+
+  it('keeps claiming an active handoff out of the conversation ownership audit', () => {
+    expect(handoffWaitingEpisodeMigration).toContain(
+      "perform public.pause_conversation_automation(conversation_row.id, null, 'handoff', attention_anchor);\n  update public.conversations set assigned_user_id = target_user_id",
+    );
+    expect(handoffWaitingEpisodeMigration).not.toContain(
+      "pause_conversation_automation(conversation_row.id, target_user_id, 'staff'",
+    );
+  });
+
+  it('keeps the episode helpers internal to every role', () => {
+    expect(handoffWaitingEpisodeMigration).toContain(
+      'public.latest_customer_turn_at(uuid, uuid),\n  public.pause_conversation_automation(uuid, uuid, text, timestamptz),\n  public.acquire_conversation_ownership(uuid, uuid, text, timestamptz)\n  from public, anon, authenticated, service_role',
+    );
+  });
+
+  it('ships executable coverage for the waiting matrix and the ownership audits', () => {
+    for (const expected of [
+      'waiting starts at the escalating turn, not at a question answered three weeks ago',
+      'an automated acknowledgement does not clear a waiting customer',
+      'a human reply clears the waiting customer',
+      'a new customer turn after a human reply starts waiting from that turn',
+      'resolving preserves the episode anchor',
+      'resuming clears the episode anchor along with ownership',
+      'turns from the finished episode never become waiting work again',
+      'a voice episode with no customer text turns fabricates no waiting timestamp',
+      'manual takeover anchors on the latest customer turn, not the oldest',
+      'the queue read model reports the same waiting turn as the episode derivation',
+      'taking over an automation-owned conversation writes one ownership audit',
+      'a replayed takeover by the same owner writes no duplicate audit',
+      'acquiring an already-human conversation is audited as an ownership change',
+      'a reply that acquires ownership is audited as an ownership change',
+      'replying again when already the owner writes no duplicate audit',
+      'claiming an active handoff writes no redundant conversation ownership audit',
+    ]) {
+      expect(handoffWaitingEpisodeTest).toContain(expected);
+    }
   });
 });

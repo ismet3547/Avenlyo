@@ -343,6 +343,23 @@ is explicit in code, and the suite asserts structurally that every ownership mut
 `lock_conversation_ownership` and calls it before its first row lock, alongside exhaustive
 state-transition coverage.
 
+**Waiting belongs to an episode.** A conversation carries `human_attention_started_at`: null while
+automation owns it, and stamped when a handoff or a manual takeover first pauses automation. A
+message handoff anchors on the trusted inbound turn that triggered it, voice anchors on the
+escalation itself, and a manual takeover anchors on the latest customer turn that already exists.
+Waiting is then the oldest customer turn at or after that anchor which no human-authored reply in
+the same episode has answered, so a question automation resolved three weeks ago can never surface
+today as the moment the customer started waiting. Claim, release, resolve, and human reply all stay
+inside the same episode; only Resume AI clears the anchor, and a later escalation opens a new
+episode with its own. The database read model is the single authority for waiting state, and the
+TypeScript mirror takes the anchor explicitly rather than scanning unbounded transcript history.
+
+**Ownership acquisition is never audit-invisible.** `conversation.human_takeover` now covers both
+shapes: taking an automation-owned conversation (`ai_to_human_owned`) and taking an already-human
+unassigned one (`unassigned_to_human_owner`), with `trigger` recording whether it came from a staff
+takeover, a human reply, or a handoff. Pausing automation and taking the conversation are one
+operation and one audit; a replay by the same owner writes nothing; and claiming an active handoff
+stays audited as `handoff.claimed` alone rather than adding a second ownership record.
 **Refresh.** The Inbox runs a bounded 12-second client refresh that pauses while the tab is hidden,
 and the navigation attention badge is a single tenant- and location-scoped read per dashboard
 render. Phase 13 adds no websocket platform, no staff notifications, and no billing enforcement.

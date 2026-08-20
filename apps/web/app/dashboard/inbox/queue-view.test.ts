@@ -22,6 +22,10 @@ function minutesAgo(minutes: number): string {
   return new Date(NOW - minutes * 60_000).toISOString();
 }
 
+function daysAgo(days: number): string {
+  return minutesAgo(days * 24 * 60);
+}
+
 function queueRow(overrides: Partial<HandoffQueueRow> = {}): HandoffQueueRow {
   return {
     ai_mode: 'ai',
@@ -165,49 +169,137 @@ describe('queue filters', () => {
 });
 
 describe('customer waiting derivation', () => {
-  it('waits from the oldest customer turn no human has answered', () => {
-    const state = deriveCustomerWaiting([
-      message({ created_at: minutesAgo(40), message_id: 'm1' }),
-      message({
-        author_type: 'human',
-        created_at: minutesAgo(30),
-        direction: 'outbound',
-        message_id: 'm2',
-      }),
-      message({ created_at: minutesAgo(20), message_id: 'm3' }),
-      message({ created_at: minutesAgo(10), message_id: 'm4' }),
-    ]);
+  it('waits from the oldest customer turn no human has answered inside the episode', () => {
+    const state = deriveCustomerWaiting(
+      [
+        message({ created_at: minutesAgo(40), message_id: 'm1' }),
+        message({
+          author_type: 'human',
+          created_at: minutesAgo(30),
+          direction: 'outbound',
+          message_id: 'm2',
+        }),
+        message({ created_at: minutesAgo(20), message_id: 'm3' }),
+        message({ created_at: minutesAgo(10), message_id: 'm4' }),
+      ],
+      minutesAgo(40),
+    );
 
     expect(state.waiting).toBe(true);
     expect(state.since).toBe(minutesAgo(20));
   });
 
+  it('ignores turns automation already answered before the episode opened', () => {
+    const state = deriveCustomerWaiting(
+      [
+        message({ created_at: daysAgo(21), message_id: 'm1' }),
+        message({
+          author_type: 'ai',
+          created_at: daysAgo(21),
+          direction: 'outbound',
+          message_id: 'm2',
+        }),
+        message({ created_at: daysAgo(20), message_id: 'm3' }),
+        message({ created_at: minutesAgo(4), message_id: 'm4' }),
+      ],
+      minutesAgo(4),
+    );
+
+    expect(state).toEqual({ since: minutesAgo(4), waiting: true });
+  });
+
+  it('counts the turn that triggered the escalation as waiting', () => {
+    const state = deriveCustomerWaiting(
+      [message({ created_at: minutesAgo(4), message_id: 'm1' })],
+      minutesAgo(4),
+    );
+
+    expect(state).toEqual({ since: minutesAgo(4), waiting: true });
+  });
+
+  it('reports nobody waiting when no human episode is open', () => {
+    const state = deriveCustomerWaiting(
+      [message({ created_at: minutesAgo(4), message_id: 'm1' })],
+      null,
+    );
+
+    expect(state).toEqual({ since: null, waiting: false });
+  });
+
+  it('reports nobody waiting for an episode with no customer turns', () => {
+    const state = deriveCustomerWaiting([], minutesAgo(1));
+
+    expect(state).toEqual({ since: null, waiting: false });
+  });
+
   it('does not treat an automated reply as human handling', () => {
-    const state = deriveCustomerWaiting([
-      message({ created_at: minutesAgo(15), message_id: 'm1' }),
-      message({
-        author_type: 'ai',
-        created_at: minutesAgo(14),
-        direction: 'outbound',
-        message_id: 'm2',
-      }),
-    ]);
+    const state = deriveCustomerWaiting(
+      [
+        message({ created_at: minutesAgo(15), message_id: 'm1' }),
+        message({
+          author_type: 'ai',
+          created_at: minutesAgo(14),
+          direction: 'outbound',
+          message_id: 'm2',
+        }),
+      ],
+      minutesAgo(15),
+    );
 
     expect(state).toEqual({ since: minutesAgo(15), waiting: true });
   });
 
+  it('ignores a human reply that belongs to a finished episode', () => {
+    const state = deriveCustomerWaiting(
+      [
+        message({ created_at: minutesAgo(60), message_id: 'm1' }),
+        message({
+          author_type: 'human',
+          created_at: minutesAgo(50),
+          direction: 'outbound',
+          message_id: 'm2',
+        }),
+        message({ created_at: minutesAgo(5), message_id: 'm3' }),
+      ],
+      minutesAgo(5),
+    );
+
+    expect(state).toEqual({ since: minutesAgo(5), waiting: true });
+  });
+
   it('clears once a human answers the newest customer turn', () => {
-    const state = deriveCustomerWaiting([
-      message({ created_at: minutesAgo(15), message_id: 'm1' }),
-      message({
-        author_type: 'human',
-        created_at: minutesAgo(2),
-        direction: 'outbound',
-        message_id: 'm2',
-      }),
-    ]);
+    const state = deriveCustomerWaiting(
+      [
+        message({ created_at: minutesAgo(15), message_id: 'm1' }),
+        message({
+          author_type: 'human',
+          created_at: minutesAgo(2),
+          direction: 'outbound',
+          message_id: 'm2',
+        }),
+      ],
+      minutesAgo(15),
+    );
 
     expect(state).toEqual({ since: null, waiting: false });
+  });
+
+  it('starts waiting again from a customer turn that follows the human reply', () => {
+    const state = deriveCustomerWaiting(
+      [
+        message({ created_at: minutesAgo(15), message_id: 'm1' }),
+        message({
+          author_type: 'human',
+          created_at: minutesAgo(10),
+          direction: 'outbound',
+          message_id: 'm2',
+        }),
+        message({ created_at: minutesAgo(3), message_id: 'm3' }),
+      ],
+      minutesAgo(15),
+    );
+
+    expect(state).toEqual({ since: minutesAgo(3), waiting: true });
   });
 
   it('reports elapsed time without inventing a service-level threshold', () => {

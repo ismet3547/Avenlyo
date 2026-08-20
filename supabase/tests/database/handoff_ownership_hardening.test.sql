@@ -377,9 +377,9 @@ select extensions.ok(not has_function_privilege('authenticated', 'public.lock_co
   'authenticated clients cannot take the ownership lock directly');
 select extensions.ok(not has_function_privilege('service_role', 'public.lock_conversation_ownership(uuid)', 'execute'),
   'the trusted backend cannot take the ownership lock directly');
-select extensions.ok(not has_function_privilege('authenticated', 'public.pause_conversation_automation(uuid,uuid,text)', 'execute'),
+select extensions.ok(not has_function_privilege('authenticated', 'public.pause_conversation_automation(uuid,uuid,text,timestamptz)', 'execute'),
   'authenticated clients cannot pause automation directly');
-select extensions.ok(not has_function_privilege('service_role', 'public.pause_conversation_automation(uuid,uuid,text)', 'execute'),
+select extensions.ok(not has_function_privilege('service_role', 'public.pause_conversation_automation(uuid,uuid,text,timestamptz)', 'execute'),
   'the trusted backend cannot pause automation outside the handoff path');
 select extensions.ok(not has_function_privilege('anon', 'public.handoff_queue_row_is_mine(uuid,uuid,boolean,uuid)', 'execute'),
   'the ownership predicate is not exposed to anonymous callers');

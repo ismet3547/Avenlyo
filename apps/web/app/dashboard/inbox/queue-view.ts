@@ -66,23 +66,35 @@ export interface CustomerWaitingState {
 }
 
 /**
- * The same rule the queue applies in SQL, evaluated against a loaded transcript: the customer is
- * waiting when a customer turn is newer than the newest human-authored reply. Automated replies
- * are not human handling, so they never clear the waiting state.
+ * The database read model is the authority for waiting state; the Inbox renders `waiting_since`
+ * straight from it. This mirrors that rule exactly for tests and for any caller that already holds
+ * a transcript, and it takes the current episode anchor explicitly rather than scanning unbounded
+ * history: waiting starts at the anchor (inclusive, so the turn that triggered the escalation
+ * counts) and is cleared only by a human-authored reply inside the same episode. A conversation
+ * with no open episode has nobody waiting on a person.
  */
-export function deriveCustomerWaiting(messages: readonly InboxMessageRow[]): CustomerWaitingState {
-  let lastHumanReplyAt = Number.NEGATIVE_INFINITY;
+export function deriveCustomerWaiting(
+  messages: readonly InboxMessageRow[],
+  humanAttentionStartedAt: string | null,
+): CustomerWaitingState {
+  if (!humanAttentionStartedAt) return { since: null, waiting: false };
+  const anchorAt = Date.parse(humanAttentionStartedAt);
+  if (Number.isNaN(anchorAt)) return { since: null, waiting: false };
+
+  let repliedAt: number | null = null;
   for (const message of messages) {
-    if (message.direction === 'outbound' && message.author_type === 'human') {
-      lastHumanReplyAt = Math.max(lastHumanReplyAt, Date.parse(message.created_at));
-    }
+    if (message.direction !== 'outbound' || message.author_type !== 'human') continue;
+    const at = Date.parse(message.created_at);
+    if (at >= anchorAt && (repliedAt === null || at > repliedAt)) repliedAt = at;
   }
+
   let since: string | null = null;
   let sinceAt = Number.POSITIVE_INFINITY;
   for (const message of messages) {
     if (message.direction !== 'inbound' || message.author_type !== 'customer') continue;
     const at = Date.parse(message.created_at);
-    if (at > lastHumanReplyAt && at < sinceAt) {
+    const inEpisode = repliedAt === null ? at >= anchorAt : at > repliedAt;
+    if (inEpisode && at < sinceAt) {
       since = message.created_at;
       sinceAt = at;
     }
