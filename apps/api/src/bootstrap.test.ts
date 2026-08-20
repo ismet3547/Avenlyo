@@ -7,6 +7,7 @@ import {
   type BootstrapWorkerRuntime,
 } from './bootstrap.js';
 import { createRuntimeState, type RuntimeComponent } from './observability/runtime-state.js';
+import type { WorkerObserver } from './observability/worker-observer.js';
 
 /**
  * These exercise the real startup orchestration rather than re-implementing it. The previous test
@@ -54,16 +55,33 @@ function fakeWorkerRuntime(
   return { events, runtime, isTimerRunning: () => timerRunning };
 }
 
+/** Records every component event the reporter actually receives, in order. */
+interface ComponentEvent {
+  readonly component: RuntimeComponent;
+  readonly detail?: string;
+  readonly kind: 'start' | 'stop' | 'tick';
+}
+
 function fakeHeartbeat(input: { readonly register?: () => Promise<boolean> } = {}) {
   const events: string[] = [];
+  const componentEvents: ComponentEvent[] = [];
   const heartbeat: BootstrapHeartbeat = {
-    observerFor: () => ({ onStart: () => {}, onStop: () => {}, onTick: () => {} }),
+    observerFor: (component) => ({
+      onStart: () => void componentEvents.push({ component, kind: 'start' }),
+      onStop: () => void componentEvents.push({ component, kind: 'stop' }),
+      onTick: (outcome) =>
+        void componentEvents.push({
+          component,
+          detail: outcome.ok ? 'ok' : outcome.errorCode,
+          kind: 'tick',
+        }),
+    }),
     recordState: (component) => void events.push(`state:${component}`),
     register: input.register ?? (() => Promise.resolve(true)),
     start: () => void events.push('start'),
     stop: () => Promise.resolve(void events.push('stop')),
   };
-  return { events, heartbeat };
+  return { componentEvents, events, heartbeat };
 }
 
 describe('liveness before the database', () => {
@@ -233,5 +251,183 @@ describe('shutdown wiring', () => {
     expect(heartbeat.events).toContain('stop');
     // The bounded window never elapsed, so the escape hatch was never needed.
     expect(forceExit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Reproduces the exact production construction order rather than a convenient one.
+ *
+ * A runtime factory resolves `observerFor(component)` while it builds its workers and stores the
+ * returned object in a field. That happens before the reporter can exist, because the reporter
+ * needs the app logger, the app needs the billing service, and the billing service comes out of
+ * this very factory. A fake that ignores `observerFor`, or that calls it later, would pass against
+ * an implementation that hands every worker a permanently dead observer.
+ */
+function observerCapturingRuntime(
+  components: readonly RuntimeComponent[],
+  input: { readonly observerFor: (component: RuntimeComponent) => WorkerObserver },
+) {
+  // Resolved now, at construction, exactly as the real factories do.
+  const stored = new Map<RuntimeComponent, WorkerObserver>();
+  for (const component of components) stored.set(component, input.observerFor(component));
+
+  const runtime: BootstrapWorkerRuntime = {
+    components,
+    start: () => {
+      for (const component of components) stored.get(component)?.onStart();
+    },
+    stop: () => {
+      for (const component of components) stored.get(component)?.onStop();
+      return Promise.resolve();
+    },
+  };
+  return { runtime, stored };
+}
+
+describe('worker observer wiring', () => {
+  it('delivers worker events to a reporter created after the workers were built', async () => {
+    const app = fakeApp();
+    const heartbeat = fakeHeartbeat();
+    let messaging: ReturnType<typeof observerCapturingRuntime> | null = null;
+
+    const result = await bootstrapRuntime({
+      buildApp: () => app.app,
+      createBillingRuntime: () => null,
+      // Created after the runtimes, which is the ordering that broke this.
+      createHeartbeat: () => heartbeat.heartbeat,
+      createMessagingRuntime: (options) => {
+        messaging = observerCapturingRuntime(['message_processing'], options);
+        return messaging.runtime;
+      },
+    });
+
+    // The worker is running: a tick happens, then the process shuts down.
+    const observer = messaging!.stored.get('message_processing');
+    observer?.onTick({ ok: true });
+    await result.shutdown?.shutdown('SIGTERM');
+
+    expect(heartbeat.componentEvents).toEqual([
+      { component: 'message_processing', kind: 'start' },
+      { component: 'message_processing', detail: 'ok', kind: 'tick' },
+      { component: 'message_processing', kind: 'stop' },
+    ]);
+  });
+
+  it('hands out one stable observer per component so a worker can store it', async () => {
+    const app = fakeApp();
+    const heartbeat = fakeHeartbeat();
+    const handedOut: WorkerObserver[] = [];
+
+    await bootstrapRuntime({
+      buildApp: () => app.app,
+      createBillingRuntime: () => null,
+      createHeartbeat: () => heartbeat.heartbeat,
+      createMessagingRuntime: (options) => {
+        handedOut.push(options.observerFor('message_processing'));
+        handedOut.push(options.observerFor('message_processing'));
+        return null;
+      },
+    });
+
+    // Identity matters: a worker keeps the object it was given, so re-asking must not produce a
+    // second observer that a later event could be routed through instead.
+    expect(handedOut[0]).toBe(handedOut[1]);
+
+    // And the object handed out first is a live route, not a dead one.
+    handedOut[0]?.onTick({ ok: true });
+    expect(heartbeat.componentEvents).toEqual([
+      { component: 'message_processing', detail: 'ok', kind: 'tick' },
+    ]);
+  });
+
+  it('scopes each component to its own observer with no cross-mixing', async () => {
+    const app = fakeApp();
+    const heartbeat = fakeHeartbeat();
+    let messaging: ReturnType<typeof observerCapturingRuntime> | null = null;
+    let billing: ReturnType<typeof observerCapturingRuntime> | null = null;
+
+    await bootstrapRuntime({
+      buildApp: () => app.app,
+      createBillingRuntime: (options) => {
+        billing = observerCapturingRuntime(['billing_events'], options);
+        return { ...billing.runtime, service: null as never };
+      },
+      createHeartbeat: () => heartbeat.heartbeat,
+      createMessagingRuntime: (options) => {
+        messaging = observerCapturingRuntime(
+          ['message_processing', 'appointment_reminders', 'lead_followups'],
+          options,
+        );
+        return messaging.runtime;
+      },
+    });
+
+    // Every configured component reported its own start, and nothing was invented for a
+    // runtime that does not exist.
+    expect(heartbeat.componentEvents.filter((event) => event.kind === 'start')).toEqual([
+      { component: 'message_processing', kind: 'start' },
+      { component: 'appointment_reminders', kind: 'start' },
+      { component: 'lead_followups', kind: 'start' },
+      { component: 'billing_events', kind: 'start' },
+    ]);
+
+    heartbeat.componentEvents.length = 0;
+    messaging!.stored.get('message_processing')?.onTick({ ok: true });
+    billing!.stored.get('billing_events')?.onTick({ errorCode: 'provider_timeout', ok: false });
+
+    // No cross-component mixing: each event carries the component it was scoped to.
+    expect(heartbeat.componentEvents).toEqual([
+      { component: 'message_processing', detail: 'ok', kind: 'tick' },
+      { component: 'billing_events', detail: 'provider_timeout', kind: 'tick' },
+    ]);
+  });
+
+  it('stays a safe no-op when no heartbeat reporter exists at all', async () => {
+    // A deployment without the trusted backend has no reporter, and workers must not care.
+    const app = fakeApp();
+    let messaging: ReturnType<typeof observerCapturingRuntime> | null = null;
+
+    const result = await bootstrapRuntime({
+      buildApp: () => app.app,
+      createBillingRuntime: () => null,
+      createHeartbeat: () => null,
+      createMessagingRuntime: (options) => {
+        messaging = observerCapturingRuntime(['message_processing'], options);
+        return messaging.runtime;
+      },
+    });
+
+    expect(result.listening).toBe(true);
+    expect(() => {
+      messaging!.stored.get('message_processing')?.onTick({ ok: true });
+      messaging!.stored.get('message_processing')?.onStop();
+    }).not.toThrow();
+  });
+
+  it('reports no start for a component whose scheduler threw', async () => {
+    const app = fakeApp();
+    const heartbeat = fakeHeartbeat();
+    const runtimeState = createRuntimeState();
+
+    await bootstrapRuntime({
+      buildApp: () => app.app,
+      createBillingRuntime: () => null,
+      createHeartbeat: () => heartbeat.heartbeat,
+      createMessagingRuntime: (options) => {
+        void options.observerFor('message_processing');
+        return {
+          components: ['message_processing'],
+          start: () => {
+            throw new Error('scheduler could not start');
+          },
+          stop: () => Promise.resolve(),
+        };
+      },
+      runtimeState,
+    });
+
+    // A dead scheduler must not look like a running component.
+    expect(heartbeat.componentEvents).toEqual([]);
+    expect(runtimeState.schedulerFailures()).toEqual(['message_processing']);
   });
 });

@@ -8,7 +8,7 @@ import {
   type RuntimeComponent,
   type RuntimeState,
 } from './observability/runtime-state.js';
-import { NOOP_WORKER_OBSERVER, type WorkerObserver } from './observability/worker-observer.js';
+import type { WorkerObserver } from './observability/worker-observer.js';
 import type { BillingService } from './services/billing/billing-service.js';
 import { createBillingRuntime as createBillingRuntimeDefault } from './services/billing/runtime.js';
 import { createMessagingRuntime as createMessagingRuntimeDefault } from './services/messaging/runtime.js';
@@ -113,10 +113,35 @@ export async function bootstrapRuntime(
   const createMessaging = input.createMessagingRuntime ?? createMessagingRuntimeDefault;
   const createBilling = input.createBillingRuntime ?? createBillingRuntimeDefault;
 
-  // Constructed first so its observers exist before any worker is built, but nothing is sent yet.
   let heartbeat: BootstrapHeartbeat | null = null;
-  const observerFor = (component: RuntimeComponent): WorkerObserver =>
-    heartbeat?.observerFor(component) ?? NOOP_WORKER_OBSERVER;
+
+  /**
+   * Worker observers have to be handed out before the reporter exists. The order is forced: the
+   * reporter needs the application logger, the logger belongs to the app, the app needs the
+   * billing service, and the billing service comes out of the very runtime being constructed.
+   *
+   * Resolving `heartbeat?.observerFor(component)` at that moment therefore handed every worker
+   * the no-op observer permanently, because creating the reporter afterwards cannot replace an
+   * object a worker has already stored in a field. Component truth never reached the reporter.
+   *
+   * The proxy below is stable per component -- a worker keeps exactly the object it was given --
+   * and looks the reporter up when an event actually happens rather than when the observer was
+   * handed out. The reporter has no per-observer state (every tick lands in its component map),
+   * so resolving it per event is equivalent to holding one. With no reporter at all the proxy
+   * stays a silent no-op, which is what a deployment without the trusted backend needs.
+   */
+  const deferredObservers = new Map<RuntimeComponent, WorkerObserver>();
+  const observerFor = (component: RuntimeComponent): WorkerObserver => {
+    const existing = deferredObservers.get(component);
+    if (existing) return existing;
+    const deferred: WorkerObserver = {
+      onStart: () => heartbeat?.observerFor(component).onStart(),
+      onStop: () => heartbeat?.observerFor(component).onStop(),
+      onTick: (outcome) => heartbeat?.observerFor(component).onTick(outcome),
+    };
+    deferredObservers.set(component, deferred);
+    return deferred;
+  };
 
   const messaging = createMessaging({ observerFor });
   const billing = createBilling({ observerFor });

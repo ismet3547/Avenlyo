@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { RuntimeHeartbeatReporter } from './heartbeat.js';
+import type { WorkerTickOutcome } from './worker-observer.js';
 
 interface RpcCall {
   readonly args: Record<string, unknown>;
@@ -312,5 +313,63 @@ describe('runtime heartbeat transport failures', () => {
     // And the stopped instance is never re-registered on the way out.
     const registrations = calls.filter((call) => call.name === 'register_runtime_instance');
     expect(registrations).toHaveLength(1);
+  });
+});
+
+describe('component lifecycle through a deferred observer', () => {
+  /**
+   * The full component story against the real reporter and a fake RPC boundary: an observer
+   * acquired before the reporter existed, then start, an empty successful tick, a failure, a
+   * recovery, and a stop.
+   */
+  it('carries start, empty success, failure, recovery, and stop to durable writes', async () => {
+    const { calls, reporter } = reporterFor({
+      instanceId: '88888888-8888-4888-8888-888888888888',
+    });
+
+    // Handed out before the reporter is registered, exactly as bootstrap does it.
+    let current: RuntimeHeartbeatReporter | null = null;
+    const deferred = {
+      onStart: () => current?.observerFor('message_processing').onStart(),
+      onStop: () => current?.observerFor('message_processing').onStop(),
+      onTick: (outcome: WorkerTickOutcome) =>
+        current?.observerFor('message_processing').onTick(outcome),
+    };
+    // Every call before this point is silently dropped, which is the no-reporter contract.
+    deferred.onTick({ ok: true });
+    current = reporter;
+
+    await reporter.register();
+
+    deferred.onStart();
+    await reporter.flush();
+    // An empty poll is a healthy tick, not silence.
+    deferred.onTick({ ok: true });
+    await reporter.flush();
+    deferred.onTick({ errorCode: 'provider_timeout', ok: false });
+    await reporter.flush();
+    deferred.onTick({ ok: true });
+    await reporter.flush();
+    await reporter.stop();
+
+    const writes = heartbeatCalls(calls).map((call) => ({
+      error: call.args.target_error_code,
+      state: call.args.target_state,
+      succeeded: call.args.target_succeeded,
+    }));
+
+    expect(writes).toEqual([
+      // Start: running, with no outcome to report yet.
+      { error: null, state: 'running', succeeded: null },
+      // Empty successful tick.
+      { error: null, state: 'running', succeeded: true },
+      // Failure, with a bounded approved code.
+      { error: 'provider_timeout', state: 'running', succeeded: false },
+      // Recovery clears the code; the reporter's failure streak resets on the database side.
+      { error: null, state: 'running', succeeded: true },
+      // Shutdown.
+      { error: null, state: 'stopped', succeeded: null },
+    ]);
+    expect(calls.filter((call) => call.name === 'stop_runtime_instance')).toHaveLength(1);
   });
 });
