@@ -6,7 +6,7 @@ import { authenticatedRoutes } from './authenticated.js';
 import { appointmentLifecycleRoutes } from './appointment-lifecycle.js';
 import { ezyVetSchedulingRoutes } from './ezyvet-scheduling.js';
 import { googleCalendarSchedulingRoutes } from './google-calendar-scheduling.js';
-import { healthRoutes } from './health.js';
+import { healthRoutes, type HealthRoutesOptions } from './health.js';
 import { openAIRealtimeWebhookRoutes } from './openai-realtime-webhook.js';
 import { stripeBillingRoutes } from './stripe-billing.js';
 import { stripeWebhookRoutes } from './stripe-webhook.js';
@@ -14,12 +14,15 @@ import { twilioMessagingWebhookRoutes } from './twilio-messaging-webhook.js';
 import { messagingConfigurationRoutes } from './messaging-configuration.js';
 import { webChatRoutes } from './web-chat.js';
 
-interface RoutesOptions {
+interface RoutesOptions extends HealthRoutesOptions {
   readonly billingService?: BillingService | null;
 }
 
 export const routes: FastifyPluginAsync<RoutesOptions> = async (app, options) => {
-  await app.register(healthRoutes);
+  await app.register(healthRoutes, {
+    ...(options.probeDatabase ? { probeDatabase: options.probeDatabase } : {}),
+    ...(options.runtimeState ? { runtimeState: options.runtimeState } : {}),
+  });
   await app.register(openAIRealtimeWebhookRoutes);
   await app.register(
     stripeWebhookRoutes,

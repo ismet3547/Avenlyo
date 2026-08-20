@@ -19,6 +19,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "ops:status": "pnpm --filter @avenlyo/api ops:status",
+    "smoke:production": "pnpm --filter @avenlyo/api smoke:production",
     "db:reset": "supabase db reset",
     "db:test": "supabase test db"
   },

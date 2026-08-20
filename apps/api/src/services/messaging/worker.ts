@@ -4,6 +4,9 @@ import { detectSmsKeywordCommand } from '@avenlyo/messaging';
 import type { Database, MessageProcessingJobRow } from '@avenlyo/database';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { classifyError } from '../../observability/errors.js';
+import type { WorkerObserver } from '../../observability/worker-observer.js';
+
 import type { TwilioOutboundClient } from './twilio.js';
 import type { ConversationAgentService } from './conversation-agent.js';
 
@@ -15,12 +18,14 @@ export class MessageProcessingWorker {
   private stopped = false;
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
+  private tickErrorCode: string | null = null;
   private readonly workerId = `api-${randomUUID()}`;
 
   public constructor(
     private readonly input: {
       readonly agent?: ConversationAgentService;
       readonly concurrency?: number;
+      readonly observer?: WorkerObserver;
       readonly supabase: SupabaseClient<Database>;
       readonly twilio?: TwilioOutboundClient;
     },
@@ -28,6 +33,7 @@ export class MessageProcessingWorker {
 
   public start(): void {
     if (this.stopped || this.timer) return;
+    this.input.observer?.onStart();
     this.schedule(0);
   }
 
@@ -36,6 +42,7 @@ export class MessageProcessingWorker {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.inFlight;
+    this.input.observer?.onStop();
   }
 
   private schedule(delay: number): void {
@@ -49,9 +56,16 @@ export class MessageProcessingWorker {
   private async tick(): Promise<void> {
     if (this.active || this.stopped) return;
     this.active = true;
+    this.tickErrorCode = null;
     this.inFlight = this.run();
     try {
       await this.inFlight;
+      // A tick that finds no work is still a successful tick: "no work" is a healthy component.
+      this.input.observer?.onTick(
+        this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
+      );
+    } catch (error) {
+      this.input.observer?.onTick({ errorCode: classifyError(error), ok: false });
     } finally {
       this.inFlight = null;
       this.active = false;
@@ -64,7 +78,11 @@ export class MessageProcessingWorker {
       target_limit: this.input.concurrency ?? 4,
       target_worker_id: this.workerId,
     });
-    if (error || !jobs.length) return;
+    if (error) {
+      this.tickErrorCode = 'database_unavailable';
+      return;
+    }
+    if (!jobs.length) return;
     await Promise.all(jobs.map((job) => this.process(job)));
   }
 
@@ -77,6 +95,7 @@ export class MessageProcessingWorker {
       });
     } catch (error) {
       const code = error instanceof Error ? error.name : 'messaging_worker_failure';
+      this.tickErrorCode ??= classifyError(error);
       await this.input.supabase.rpc('retry_message_processing_job', {
         target_error_code: code,
         target_job_id: job.job_id,

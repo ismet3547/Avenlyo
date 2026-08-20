@@ -3,9 +3,15 @@ import 'dotenv/config';
 import { parseEnvironment } from '@avenlyo/shared';
 import { z } from 'zod';
 
+import {
+  describeRuntimeCapabilities,
+  isTrustedBackendConfigured,
+} from './observability/capabilities.js';
+
 export const env = parseEnvironment(
   z.object({
     API_CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
+    AVENLYO_RELEASE: z.string().trim().min(1).max(120).optional(),
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(4000),
     EZYVET_PARTNER_ID: z.string().min(1).optional(),
@@ -60,44 +66,34 @@ if (env.NODE_ENV === 'production' && env.STRIPE_MODE === 'test') {
   throw new Error('STRIPE_MODE must be live in production.');
 }
 
+/**
+ * Capability status is derived once from the validated environment so provider configuration has a
+ * single definition. The runtime flags below stay exactly as narrow as they were: each one still
+ * requires its own provider settings plus the trusted backend boundary.
+ */
+export const runtimeCapabilities = describeRuntimeCapabilities(env);
+
+const trustedBackendConfigured = isTrustedBackendConfigured(env);
+
 export const isSupabaseConfigured = Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
 
-export const isVoiceRuntimeConfigured = Boolean(
-  env.OPENAI_API_KEY &&
-  env.OPENAI_WEBHOOK_SECRET &&
-  env.SUPABASE_URL &&
-  env.SUPABASE_SERVICE_ROLE_KEY,
-);
+export const isVoiceRuntimeConfigured =
+  runtimeCapabilities.capabilities.openai_voice === 'configured' && trustedBackendConfigured;
 
-export const isEzyVetRuntimeConfigured = Boolean(
-  env.EZYVET_PARTNER_ID && env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY,
-);
+export const isEzyVetRuntimeConfigured =
+  runtimeCapabilities.capabilities.ezyvet === 'configured' && trustedBackendConfigured;
 
-export const isGoogleCalendarRuntimeConfigured = Boolean(
-  env.GOOGLE_CLIENT_ID &&
-  env.GOOGLE_CLIENT_SECRET &&
-  env.GOOGLE_OAUTH_REDIRECT_URI &&
-  env.SUPABASE_URL &&
-  env.SUPABASE_SERVICE_ROLE_KEY,
-);
+export const isGoogleCalendarRuntimeConfigured =
+  runtimeCapabilities.capabilities.google_calendar === 'configured' && trustedBackendConfigured;
 
-export const isTwilioMessagingConfigured = Boolean(
-  env.TWILIO_ACCOUNT_SID &&
-  env.TWILIO_AUTH_TOKEN &&
-  env.TWILIO_MESSAGING_WEBHOOK_BASE_URL &&
-  env.SUPABASE_URL &&
-  env.SUPABASE_SERVICE_ROLE_KEY,
-);
+export const isTwilioMessagingConfigured =
+  runtimeCapabilities.capabilities.twilio_messaging === 'configured' && trustedBackendConfigured;
 
 /** Billing stays fail-closed when any server-only Stripe boundary is unconfigured. */
-export const isStripeBillingConfigured = Boolean(
-  env.STRIPE_MODE &&
-  env.STRIPE_PRICE_CORE_MONTHLY &&
-  env.STRIPE_PRODUCT_CORE &&
-  env.STRIPE_SECRET_KEY &&
-  env.STRIPE_WEBHOOK_SECRET &&
-  env.SUPABASE_URL &&
-  env.SUPABASE_SERVICE_ROLE_KEY,
-);
+export const isStripeBillingConfigured =
+  runtimeCapabilities.capabilities.stripe_billing === 'configured' && trustedBackendConfigured;
 
 export const expectedStripeLivemode = env.STRIPE_MODE === 'live';
+
+/** A deployment identifier the operator supplies. Never generated per request, never a secret. */
+export const release = env.AVENLYO_RELEASE ?? 'unknown';

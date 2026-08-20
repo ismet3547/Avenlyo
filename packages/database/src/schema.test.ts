@@ -2,207 +2,189 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-const migration = readFileSync(
+/** Normalizes line endings so migration assertions never depend on the checkout's git config. */
+function readSql(url: URL): string {
+  return readFileSync(url, 'utf8').split('\r\n').join('\n');
+}
+
+const migration = readSql(
   new URL('../../../supabase/migrations/20260816000000_initial_foundation.sql', import.meta.url),
-  'utf8',
 );
 
-const onboardingMigration = readFileSync(
+const onboardingMigration = readSql(
   new URL('../../../supabase/migrations/20260816010000_phase_1_onboarding.sql', import.meta.url),
-  'utf8',
 );
 
-const onboardingSecurityTest = readFileSync(
+const onboardingSecurityTest = readSql(
   new URL('../../../supabase/tests/database/onboarding_security.test.sql', import.meta.url),
-  'utf8',
 );
 
-const leadsMigration = readFileSync(
+const leadsMigration = readSql(
   new URL('../../../supabase/migrations/20260822000000_phase_10_leads.sql', import.meta.url),
-  'utf8',
 );
-const leadIntegrityMigration = readFileSync(
+const leadIntegrityMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260823000000_phase_10_lead_integrity.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const leadsSecurityTest = readFileSync(
+const leadsSecurityTest = readSql(
   new URL('../../../supabase/tests/database/leads_security.test.sql', import.meta.url),
-  'utf8',
 );
 
-const knowledgeMigration = readFileSync(
+const knowledgeMigration = readSql(
   new URL('../../../supabase/migrations/20260816020000_phase_2_knowledge.sql', import.meta.url),
-  'utf8',
 );
 
-const knowledgeHardeningMigration = readFileSync(
+const knowledgeHardeningMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816030000_phase_2_knowledge_hardening.sql',
     import.meta.url,
   ),
-  'utf8',
 );
 
-const knowledgeSecurityTest = readFileSync(
+const knowledgeSecurityTest = readSql(
   new URL('../../../supabase/tests/database/knowledge_security.test.sql', import.meta.url),
-  'utf8',
 );
 
-const agentRuntimeMigration = readFileSync(
+const agentRuntimeMigration = readSql(
   new URL('../../../supabase/migrations/20260816040000_phase_3_agent_runtime.sql', import.meta.url),
-  'utf8',
 );
 
-const agentRuntimeSecurityTest = readFileSync(
+const agentRuntimeSecurityTest = readSql(
   new URL('../../../supabase/tests/database/agent_runtime_security.test.sql', import.meta.url),
-  'utf8',
 );
-const agentRuntimeReliabilityMigration = readFileSync(
+const agentRuntimeReliabilityMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816050000_phase_3_runtime_reliability.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const voiceMigration = readFileSync(
+const voiceMigration = readSql(
   new URL('../../../supabase/migrations/20260816060000_phase_4_inbound_voice.sql', import.meta.url),
-  'utf8',
 );
-const voiceReliabilityMigration = readFileSync(
+const voiceReliabilityMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816061000_phase_4_voice_reliability.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const voiceSecurityTest = readFileSync(
+const voiceSecurityTest = readSql(
   new URL('../../../supabase/tests/database/voice_security.test.sql', import.meta.url),
-  'utf8',
 );
-const schedulingMigration = readFileSync(
+const schedulingMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816070000_phase_5_ezyvet_booking.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const schedulingSecurityTest = readFileSync(
+const schedulingSecurityTest = readSql(
   new URL('../../../supabase/tests/database/scheduling_security.test.sql', import.meta.url),
-  'utf8',
 );
-const schedulingHardeningMigration = readFileSync(
+const schedulingHardeningMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816071000_phase_5_booking_hardening.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const googleCalendarMigration = readFileSync(
+const googleCalendarMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816080000_phase_6_google_calendar.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const googleCalendarSecurityTest = readFileSync(
+const googleCalendarSecurityTest = readSql(
   new URL('../../../supabase/tests/database/google_calendar_security.test.sql', import.meta.url),
-  'utf8',
 );
-const schedulingReliabilityMigration = readFileSync(
+const schedulingReliabilityMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816081000_phase_6_scheduling_reliability.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const ezyVetRecoveryMigration = readFileSync(
+const ezyVetRecoveryMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260816082000_phase_6_ezyvet_recovery_symmetry.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const schedulingReliabilitySecurityTest = readFileSync(
+const schedulingReliabilitySecurityTest = readSql(
   new URL('../../../supabase/tests/database/scheduling_reliability.test.sql', import.meta.url),
-  'utf8',
 );
-const appointmentReminderMigration = readFileSync(
+const appointmentReminderMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260818000000_phase_8_appointment_reminders.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const appointmentReminderSecurityTest = readFileSync(
+const appointmentReminderSecurityTest = readSql(
   new URL(
     '../../../supabase/tests/database/appointment_reminders_security.test.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const appointmentReminderReliabilityMigration = readFileSync(
+const appointmentReminderReliabilityMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260818100000_phase_8_reminder_reliability_hardening.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const appointmentReminderReliabilityTest = readFileSync(
+const appointmentReminderReliabilityTest = readSql(
   new URL(
     '../../../supabase/tests/database/appointment_reminder_reliability.test.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const appointmentReminderDeliveryConsistencyMigration = readFileSync(
+const appointmentReminderDeliveryConsistencyMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260818110000_phase_8_reminder_delivery_consistency.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const appointmentReminderDeliveryConsistencyTest = readFileSync(
+const appointmentReminderDeliveryConsistencyTest = readSql(
   new URL(
     '../../../supabase/tests/database/appointment_reminder_delivery_consistency.test.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const handoffOperationsMigration = readFileSync(
+const handoffOperationsMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260826000000_phase_13_handoff_operations.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const handoffOperationsSecurityTest = readFileSync(
+const handoffOperationsSecurityTest = readSql(
   new URL('../../../supabase/tests/database/handoff_operations_security.test.sql', import.meta.url),
-  'utf8',
 );
-const handoffOwnershipHardeningMigration = readFileSync(
+const handoffOwnershipHardeningMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260826010000_phase_13_ownership_hardening.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const handoffOwnershipHardeningTest = readFileSync(
+const handoffOwnershipHardeningTest = readSql(
   new URL('../../../supabase/tests/database/handoff_ownership_hardening.test.sql', import.meta.url),
-  'utf8',
 );
-const handoffWaitingEpisodeMigration = readFileSync(
+const handoffWaitingEpisodeMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260826020000_phase_13_waiting_episode_consistency.sql',
     import.meta.url,
   ),
-  'utf8',
 );
-const handoffWaitingEpisodeTest = readFileSync(
+const handoffWaitingEpisodeTest = readSql(
   new URL('../../../supabase/tests/database/handoff_waiting_episode.test.sql', import.meta.url),
-  'utf8',
+);
+const platformOperationsMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260827000000_phase_14_platform_operations.sql',
+    import.meta.url,
+  ),
+);
+const platformOperationsTest = readSql(
+  new URL(
+    '../../../supabase/tests/database/platform_operations_security.test.sql',
+    import.meta.url,
+  ),
 );
 
 describe('foundation migration definition', () => {
@@ -1044,6 +1026,124 @@ describe('handoff waiting episode migration definition', () => {
       'claiming an active handoff writes no redundant conversation ownership audit',
     ]) {
       expect(handoffWaitingEpisodeTest).toContain(expected);
+    }
+  });
+});
+
+describe('platform operations migration definition', () => {
+  it('publishes a schema compatibility contract the application can check', () => {
+    expect(platformOperationsMigration).toContain('create table public.platform_schema_contract');
+    expect(platformOperationsMigration).toContain(
+      'insert into public.platform_schema_contract (id, schema_version) values (true, 14)',
+    );
+    expect(platformOperationsMigration).toContain(
+      'create function public.platform_readiness_probe',
+    );
+  });
+
+  it('keeps runtime state internal with no tenant reader and no broad write grant', () => {
+    expect(platformOperationsMigration).toContain(
+      'revoke all on table public.platform_schema_contract, public.runtime_instances,\n  public.runtime_component_heartbeats\n  from public, anon, authenticated, service_role',
+    );
+    expect(platformOperationsMigration).toContain('enable row level security');
+    expect(platformOperationsMigration).not.toMatch(/create policy[\s\S]{0,120}runtime_instances/);
+    expect(platformOperationsMigration).toContain(
+      'grant execute on function\n  public.platform_readiness_probe(),',
+    );
+  });
+
+  it('models runtime identity as ephemeral and multi-replica safe', () => {
+    expect(platformOperationsMigration).toContain('create table public.runtime_instances');
+    expect(platformOperationsMigration).toContain(
+      'create table public.runtime_component_heartbeats',
+    );
+    expect(platformOperationsMigration).toContain(
+      'runtime_component_heartbeats_instance_component_key unique (instance_id, component)',
+    );
+    expect(platformOperationsMigration).toContain(
+      'where instance_id = target_instance_id and stopped_at is null',
+    );
+    // No host, container, or network identity is recorded or trusted.
+    expect(platformOperationsMigration).not.toMatch(/hostname|ip_address|container_id/i);
+  });
+
+  it('records only bounded operational failure detail', () => {
+    expect(platformOperationsMigration).toContain(
+      'last_error_code text check (last_error_code is null or char_length(last_error_code) between 1 and 60)',
+    );
+    expect(platformOperationsMigration).toContain(
+      'consecutive_failures integer not null default 0',
+    );
+    expect(platformOperationsMigration).not.toMatch(
+      /^s*(stack_trace|payload|response_body|error_payload)s+(text|jsonb)/im,
+    );
+  });
+
+  it('bounds runtime history without deleting a stale diagnostic row', () => {
+    expect(platformOperationsMigration).toContain('create function public.prune_runtime_instances');
+    expect(platformOperationsMigration).toContain(
+      "instance.stopped_at is not null and instance.stopped_at < now() - interval '2 days'",
+    );
+    expect(platformOperationsMigration).toContain(
+      "instance.last_heartbeat_at < now() - interval '7 days'",
+    );
+  });
+
+  it('separates work that is due from work that is merely scheduled', () => {
+    expect(platformOperationsMigration).toContain(
+      "select 'reminders'::text, 'due'::text, count(*)::bigint, min(reminder.scheduled_for)",
+    );
+    expect(platformOperationsMigration).toContain("'scheduled_future'::text");
+    expect(platformOperationsMigration).toContain('reminder.scheduled_for <= now()');
+  });
+
+  it('surfaces ambiguous provider truth without reconciling it', () => {
+    expect(platformOperationsMigration).toContain("'provider_state_unknown'");
+    expect(platformOperationsMigration).toContain("'billing_events'::text, event.status");
+    expect(platformOperationsMigration).toContain("'sms_delivery'::text, delivery.status");
+    // The snapshot is read-only: no state machine is advanced by observing it.
+    expect(platformOperationsMigration).not.toMatch(
+      /update public\.(message_deliveries|stripe_webhook_events|appointment_reminders|booking_intents)/,
+    );
+  });
+
+  it('returns no tenant, customer, or provider identifier from the snapshot', () => {
+    expect(platformOperationsMigration).toContain(
+      'returns table (metric_group text, metric text, value bigint, oldest_at timestamptz, detail text)',
+    );
+    expect(platformOperationsMigration).not.toMatch(
+      /stripe_event_id|stripe_customer_id|recipient_e164|contact_id|conversation_id\b.*snapshot/i,
+    );
+  });
+
+  it('adds only narrow partial indexes for operational aggregation', () => {
+    expect(platformOperationsMigration).toContain('create index message_deliveries_unresolved_idx');
+    expect(platformOperationsMigration).toContain('create index booking_intents_ambiguous_idx');
+    expect(platformOperationsMigration).toContain(
+      'create index appointment_change_intents_ambiguous_idx',
+    );
+    expect(platformOperationsMigration).toMatch(/create index[\s\S]{0,200}where status/);
+  });
+
+  it('ships executable coverage for the platform boundary and aggregation', () => {
+    for (const expected of [
+      'the deployed schema advertises the Phase 14 compatibility version',
+      'the trusted backend has no broad runtime instance write grant',
+      'an authenticated caller cannot write runtime state directly',
+      'every platform function pins an empty search path',
+      'a tick that found no work still counts as success',
+      'a successful tick clears the failure streak',
+      'the other replica keeps running',
+      'a recently silent instance is kept because silence is itself the diagnosis',
+      'only a reminder that is actually due counts as due work',
+      'a reminder scheduled for the future is reported separately and never as backlog',
+      'an ambiguous SMS delivery is visible without being changed',
+      'a failed Stripe webhook event is visible',
+      'the snapshot exposes no customer or contact value',
+      'platform tables carry no tenant, customer, or credential column',
+      'reading the snapshot does not resolve an ambiguous delivery',
+    ]) {
+      expect(platformOperationsTest).toContain(expected);
     }
   });
 });

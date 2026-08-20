@@ -7,7 +7,8 @@ This repository contains the Phase 0 foundation, **Phase 1 authenticated onboard
 reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, **Phase 4 inbound
 voice control**, **Phase 5 veterinary ezyVet scheduling**, **Phase 6 Google Calendar scheduling**,
 **Phase 7 unified SMS and web-chat messaging**, **Phase 12 Stripe billing and prospective usage
-metering**, and **Phase 13 human handoff operations and the operator inbox**. It
+metering**, **Phase 13 human handoff operations and the operator inbox**, and **Phase 14 production health and
+operational observability**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
 empty state. It does not include pricing policy, hard runtime billing enforcement, live customer AI,
@@ -213,6 +214,73 @@ Anonymous web chat can create a conversation without inventing a verified contac
 adapter must therefore require a trusted identity before an ezyVet write; it should hand off instead
 of fabricating a contact or pet. Google Calendar remains able to use the existing approved local
 booking model where its connector does not require that external identity.
+
+## Production health and operations (Phase 14)
+
+Phase 14 makes the system operable. It adds no customer-facing behaviour: no new AI tool, lead rule,
+reminder policy, handoff workflow, scheduling policy, or billing enforcement. Billing stays
+observational and human ownership stays exactly as Phase 13 defined it.
+
+**Health endpoints.** `GET /health/live` proves the process is serving HTTP and touches nothing else;
+`GET /health` remains a liveness alias so existing probes keep their original meaning.
+`GET /health/ready` answers whether this replica can take production traffic, and validates local
+facts only — configuration completeness, database reachability through one cheap probe, schema
+compatibility, worker scheduler state, and whether the process is draining. It never pings OpenAI,
+Twilio, Google, ezyVet, or Stripe, because a provider outage must not turn every replica into a
+client hammering that provider on every load-balancer check. Provider execution truth lives in the
+durable queues and is read through `ops:status`, not through a health check.
+
+**Schema compatibility.** The database advertises a version through `platform_schema_contract`, and
+the application requires at least version 14. Readiness fails when the deployed schema is older than
+the running build needs, and deliberately accepts a newer additive schema so an application rollback
+can still serve.
+
+**Configuration diagnostics.** Every runtime capability is classified `configured`, `disabled`, or
+`partial` from one source-controlled catalogue, which the existing runtime flags now derive from
+rather than duplicating. A capability nobody configured is `disabled` and never blocks readiness. A
+half-configured one is `partial` and does block it: half a Twilio or Stripe boundary is not a
+disabled provider, it is a deployment that will fail somewhere later. Capability names are reported;
+setting names and values never are.
+
+**Structured logs.** The existing Fastify/Pino logger gains production configuration rather than a
+second framework. Every request carries a server-generated correlation identifier, returned as
+`X-Request-Id`; a client-supplied identifier is never adopted as the internal one. Completion lines
+record request id, method, normalized route, status, and duration. The raw URL is never logged
+because query strings carry web-chat tokens and provider identifiers, and request and response bodies
+are never logged at all. Authorization, cookies, and every provider signature header are redacted.
+Provider errors are reduced to a bounded set of codes so an SDK message cannot leak a URL or an
+identifier into production logs.
+
+**Runtime heartbeats.** Each process registers an ephemeral instance identifier and writes a bounded
+heartbeat about every 25 seconds per component, never one per queue item. Several replicas reporting
+at once is expected: durable claim and idempotency semantics, not process identity, decide who may do
+work, so there is no leader election. A tick that finds no work is a successful tick. Failures record
+a short bounded error code and a consecutive-failure count, never a stack trace, payload, or customer
+value. Stopped instances are pruned after two days and silent ones after seven; a recently silent
+instance is kept, because silence is itself the diagnosis.
+
+**Operational snapshot.** One service-role-only RPC returns global aggregates in a long format a
+future exporter can consume without a schema change: message jobs, SMS delivery states, reminders,
+lead follow-ups, Stripe webhook events, and ambiguous booking states. Work scheduled for the future is
+reported separately from work that is due, so tomorrow's reminder is never counted as backlog. There
+is no tenant identifier, contact, phone number, message body, transcript, or provider identifier in
+it, and reading it never advances a state machine.
+
+**Operator tooling.** `pnpm ops:status` (optionally `--json`) prints the capability doctor, runtime
+heartbeats, and durable aggregates. It is a CLI rather than an HTTP route because Avenlyo has tenant
+authorization and no platform-staff role system, and a hidden super-admin page would be pretending to
+have security that does not exist. `pnpm smoke:production` checks a deployment's public health
+endpoints only — no credential, no tenant mutation, no provider write.
+
+**Graceful shutdown.** `SIGTERM` and `SIGINT` mark the replica not-ready first so the load balancer
+drains it while it can still finish accepted work, then stop worker claims, await in-flight ticks,
+drain HTTP, and write a final stopped heartbeat. A second signal joins the first sequence instead of
+duplicating cleanup or a provider mutation. A failed listen still stops worker runtimes, so no
+orphaned timer loop survives.
+
+See [`docs/production-runbook.md`](docs/production-runbook.md) for the deployment order, deployment
+checklist, and the response procedures for a database outage, a message-job backlog, an unknown SMS
+delivery, a `provider_state_unknown` booking, and a Stripe webhook backlog.
 
 ## Human handoff operations (Phase 13)
 

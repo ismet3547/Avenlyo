@@ -8,6 +8,8 @@
     "build": "tsc --noEmit",
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
+    "ops:status": "tsx src/scripts/ops-status.ts",
+    "smoke:production": "tsx src/scripts/smoke-production.ts",
     "voice:assign-number": "tsx src/scripts/assign-voice-number.ts",
     "voice:set-transfer-capability": "tsx src/scripts/set-voice-transfer-capability.ts"
   },

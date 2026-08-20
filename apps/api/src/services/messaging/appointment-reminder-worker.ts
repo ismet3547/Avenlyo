@@ -4,6 +4,9 @@ import type { AppointmentReminderExecutionRow, Database } from '@avenlyo/databas
 import type { BookingConnector } from '@avenlyo/integrations';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { classifyError } from '../../observability/errors.js';
+import type { WorkerObserver } from '../../observability/worker-observer.js';
+
 import type { ApiSchedulingConnectorRegistry } from '../scheduling/connector-registry.js';
 
 const IDLE_POLL_MS = 30_000;
@@ -19,18 +22,21 @@ export class AppointmentReminderWorker {
   private stopped = false;
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
+  private tickErrorCode: string | null = null;
   private readonly workerId = `reminder-${randomUUID()}`;
 
   public constructor(
     private readonly input: {
       readonly concurrency?: number;
       readonly connectors: ApiSchedulingConnectorRegistry;
+      readonly observer?: WorkerObserver;
       readonly supabase: SupabaseClient<Database>;
     },
   ) {}
 
   public start(): void {
     if (this.stopped || this.timer) return;
+    this.input.observer?.onStart();
     this.schedule(0);
   }
 
@@ -39,6 +45,7 @@ export class AppointmentReminderWorker {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.inFlight;
+    this.input.observer?.onStop();
   }
 
   private schedule(delay: number): void {
@@ -52,9 +59,16 @@ export class AppointmentReminderWorker {
   private async tick(): Promise<void> {
     if (this.active || this.stopped) return;
     this.active = true;
+    this.tickErrorCode = null;
     this.inFlight = this.run();
     try {
       await this.inFlight;
+      // A tick that finds no work is still a successful tick: "no work" is a healthy component.
+      this.input.observer?.onTick(
+        this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
+      );
+    } catch (error) {
+      this.input.observer?.onTick({ errorCode: classifyError(error), ok: false });
     } finally {
       this.inFlight = null;
       this.active = false;
@@ -69,7 +83,10 @@ export class AppointmentReminderWorker {
       'reconcile_appointment_reminder_schedules',
       { target_limit: RECONCILIATION_BATCH_SIZE },
     );
-    if (reconciliationError) return;
+    if (reconciliationError) {
+      this.tickErrorCode = 'database_unavailable';
+      return;
+    }
 
     const { data: claims, error } = await this.input.supabase.rpc(
       'claim_due_appointment_reminders',
