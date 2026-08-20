@@ -4,7 +4,10 @@ import { detectSmsKeywordCommand } from '@avenlyo/messaging';
 import type { Database, MessageProcessingJobRow } from '@avenlyo/database';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { classifyError } from '../../observability/errors.js';
+import {
+  classifyDatabaseError,
+  classifyProviderError,
+} from '../../observability/errors.js';
 import type { WorkerObserver } from '../../observability/worker-observer.js';
 
 import type { TwilioOutboundClient } from './twilio.js';
@@ -65,7 +68,7 @@ export class MessageProcessingWorker {
         this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
       );
     } catch (error) {
-      this.input.observer?.onTick({ errorCode: classifyError(error), ok: false });
+      this.input.observer?.onTick({ errorCode: classifyProviderError(error), ok: false });
     } finally {
       this.inFlight = null;
       this.active = false;
@@ -74,12 +77,22 @@ export class MessageProcessingWorker {
   }
 
   private async run(): Promise<void> {
-    const { data: jobs, error } = await this.input.supabase.rpc('claim_message_processing_jobs', {
-      target_limit: this.input.concurrency ?? 4,
-      target_worker_id: this.workerId,
-    });
-    if (error) {
-      this.tickErrorCode = 'database_unavailable';
+    let jobs: readonly MessageProcessingJobRow[];
+    try {
+      const claimed = await this.input.supabase.rpc('claim_message_processing_jobs', {
+        target_limit: this.input.concurrency ?? 4,
+        target_worker_id: this.workerId,
+      });
+      if (claimed.error) {
+        this.tickErrorCode = 'database_unavailable';
+        return;
+      }
+      jobs = claimed.data;
+    } catch (error) {
+      // The claim is a database call, so a thrown transport failure here is a database
+      // outage. Classifying it against the provider boundary would point an operator at
+      // Twilio or OpenAI for a Supabase problem.
+      this.tickErrorCode = classifyDatabaseError(error);
       return;
     }
     if (!jobs.length) return;
@@ -95,7 +108,7 @@ export class MessageProcessingWorker {
       });
     } catch (error) {
       const code = error instanceof Error ? error.name : 'messaging_worker_failure';
-      this.tickErrorCode ??= classifyError(error);
+      this.tickErrorCode ??= classifyProviderError(error);
       await this.input.supabase.rpc('retry_message_processing_job', {
         target_error_code: code,
         target_job_id: job.job_id,

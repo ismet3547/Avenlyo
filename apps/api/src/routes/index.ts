@@ -20,7 +20,11 @@ interface RoutesOptions extends HealthRoutesOptions {
 
 export const routes: FastifyPluginAsync<RoutesOptions> = async (app, options) => {
   await app.register(healthRoutes, {
+    ...(options.capabilities ? { capabilities: options.capabilities } : {}),
     ...(options.probeDatabase ? { probeDatabase: options.probeDatabase } : {}),
+    ...(options.requiredSchemaVersion !== undefined
+      ? { requiredSchemaVersion: options.requiredSchemaVersion }
+      : {}),
     ...(options.runtimeState ? { runtimeState: options.runtimeState } : {}),
   });
   await app.register(openAIRealtimeWebhookRoutes);

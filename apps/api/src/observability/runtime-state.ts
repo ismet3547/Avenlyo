@@ -22,11 +22,30 @@ export const RUNTIME_COMPONENTS: readonly RuntimeComponent[] = [
 export class RuntimeState {
   private draining = false;
   private readonly failedSchedulers = new Set<RuntimeComponent>();
+  private localStartupComplete = false;
 
   public constructor(public readonly instanceId: string = randomUUID()) {}
 
   public isDraining(): boolean {
     return this.draining;
+  }
+
+  /**
+   * True once every locally owned startup step has finished: worker schedulers constructed and
+   * started, or deliberately absent. Liveness is available before this point, because a process
+   * that is listening is alive. Readiness is not, because a replica that has not yet started its
+   * schedulers would accept traffic it cannot process.
+   *
+   * Durable heartbeat registration is deliberately not part of this: it is operational reporting
+   * over the network, not a local prerequisite, and readiness already owns database truth
+   * through its own probe.
+   */
+  public isLocalStartupComplete(): boolean {
+    return this.localStartupComplete;
+  }
+
+  public markLocalStartupComplete(): void {
+    this.localStartupComplete = true;
   }
 
   /** Called on the first shutdown signal so readiness stops advertising this replica immediately. */

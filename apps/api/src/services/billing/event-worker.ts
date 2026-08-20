@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
-import { classifyError } from '../../observability/errors.js';
+import {
+  classifyDatabaseError,
+  classifyProviderError,
+} from '../../observability/errors.js';
 import type { WorkerObserver } from '../../observability/worker-observer.js';
 
 import type { BillingService } from './billing-service.js';
@@ -57,7 +60,7 @@ export class BillingEventWorker {
         this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
       );
     } catch (error) {
-      this.tickErrorCode ??= classifyError(error);
+      this.tickErrorCode ??= classifyProviderError(error);
       this.observer?.onTick({ errorCode: this.tickErrorCode, ok: false });
       this.log('Billing event worker batch failed.', error);
     } finally {
@@ -76,7 +79,17 @@ export class BillingEventWorker {
   }
 
   private async run(): Promise<void> {
-    const claims = await this.service.claimEvents(this.workerId, 10);
+    let claims: readonly StripeWebhookClaim[];
+    try {
+      claims = await this.service.claimEvents(this.workerId, 10);
+    } catch (error) {
+      // Claiming reads the durable queue. A thrown transport failure here is a database
+      // outage and must not be reported as a Stripe outage. It stays visible in the log and
+      // the next poll is still scheduled.
+      this.tickErrorCode = classifyDatabaseError(error);
+      this.log('Billing event worker could not claim events.', error);
+      return;
+    }
     for (const claim of claims) {
       await this.processClaim(claim);
     }
@@ -87,7 +100,7 @@ export class BillingEventWorker {
       const event = await this.service.retrieveClaimedEvent(claim);
       await this.service.completeEvent(event.id, await this.service.processClaimedEvent(event));
     } catch (error) {
-      this.tickErrorCode ??= classifyError(error);
+      this.tickErrorCode ??= classifyProviderError(error);
       try {
         await this.service.failEvent(
           claim.stripeEventId,

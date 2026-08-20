@@ -199,3 +199,71 @@ describe('production smoke checks', () => {
     expect(summary).toEqual({ failed: ['api_ready'], ok: false });
   });
 });
+
+describe('runtime liveness classification', () => {
+  const FRESH = '11111111-1111-4111-8111-111111111111';
+  const SILENT = '22222222-2222-4222-8222-222222222222';
+  const STOPPED = '33333333-3333-4333-8333-333333333333';
+
+  /** Mirrors the SQL aggregation so the CLI view and the snapshot metric cannot disagree. */
+  function countStates(report: ReturnType<typeof reportFor>) {
+    return {
+      active: report.runtime.filter((instance) => instance.state === 'active').length,
+      stale: report.runtime.filter((instance) => instance.state === 'stale').length,
+      stopped: report.runtime.filter((instance) => instance.state === 'stopped').length,
+    };
+  }
+
+  it('separates a fresh instance from a silent one and from a deliberate stop', () => {
+    const report = reportFor({
+      runtime: [
+        runtimeRow({ instance_id: FRESH, last_heartbeat_at: minutesAgo(0) }),
+        // Silent for ninety minutes against a twenty-five second interval. Counting this as a live
+        // replica was the defect: an operator reading "2 active" would never look for the outage.
+        runtimeRow({
+          instance_id: SILENT,
+          last_heartbeat_at: minutesAgo(90),
+          last_success_at: minutesAgo(90),
+          started_at: minutesAgo(120),
+        }),
+        runtimeRow({
+          instance_id: STOPPED,
+          last_heartbeat_at: minutesAgo(45),
+          started_at: minutesAgo(200),
+          stopped_at: minutesAgo(45),
+        }),
+      ],
+    });
+
+    expect(countStates(report)).toEqual({ active: 1, stale: 1, stopped: 1 });
+    // A stopped instance is neither active nor stale-running: the three states are exclusive.
+    expect(report.runtime.find((instance) => instance.instance_id === STOPPED)?.state).toBe(
+      'stopped',
+    );
+    // The silent row is still present. Retention is the diagnosis, so it is never deleted to make
+    // the count look right.
+    expect(report.runtime.map((instance) => instance.instance_id).sort()).toEqual(
+      [FRESH, SILENT, STOPPED].sort(),
+    );
+  });
+
+  it('treats a process with no components as active while it is still reporting', () => {
+    // A core-only API deployment: the process heartbeat is the only liveness signal it has.
+    const report = reportFor({
+      runtime: [
+        runtimeRow({
+          component: null,
+          component_state: null,
+          consecutive_failures: null,
+          instance_id: FRESH,
+          last_heartbeat_at: minutesAgo(0),
+          last_success_at: null,
+          last_tick_at: null,
+        }),
+      ],
+    });
+
+    expect(report.runtime[0]?.state).toBe('active');
+    expect(report.runtime[0]?.components).toEqual([]);
+  });
+});

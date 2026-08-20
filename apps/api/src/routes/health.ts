@@ -1,8 +1,9 @@
 import type { FastifyPluginCallback } from 'fastify';
 
-import { env, release, runtimeCapabilities } from '../env.js';
+import { release, runtimeCapabilities } from '../env.js';
 import { createServiceSupabaseClient } from '../lib/supabase.js';
-import { classifyError } from '../observability/errors.js';
+import type { CapabilityReport } from '../observability/capabilities.js';
+import { classifyDatabaseError } from '../observability/errors.js';
 import {
   evaluateReadiness,
   type DatabaseProbeResult,
@@ -11,8 +12,13 @@ import {
 import type { RuntimeState } from '../observability/runtime-state.js';
 
 export interface HealthRoutesOptions {
-  /** Injected in tests; production uses the process runtime state. */
+  /**
+   * Injected in tests. Without it the readiness contract could only be asserted as "200 or 503",
+   * which asserts nothing: every branch of the contract needs its inputs stated.
+   */
+  readonly capabilities?: CapabilityReport;
   readonly probeDatabase?: () => Promise<DatabaseProbeResult>;
+  readonly requiredSchemaVersion?: number;
   readonly runtimeState?: RuntimeState;
 }
 
@@ -40,6 +46,7 @@ async function probeDatabaseThroughRpc(): Promise<DatabaseProbeResult> {
 
 export const healthRoutes: FastifyPluginCallback<HealthRoutesOptions> = (app, options, done) => {
   const probe = options.probeDatabase ?? probeDatabaseThroughRpc;
+  const capabilities = options.capabilities ?? runtimeCapabilities;
 
   // Liveness must stay free of every dependency: it answers "is this process serving HTTP".
   const liveness = () => ({
@@ -58,18 +65,21 @@ export const healthRoutes: FastifyPluginCallback<HealthRoutesOptions> = (app, op
     const runtimeState = options.runtimeState;
     let result: ReadinessResult;
     try {
-      const databaseConfigured =
-        runtimeCapabilities.capabilities.supabase_core === 'configured' &&
-        Boolean(env.SUPABASE_SERVICE_ROLE_KEY);
+      // supabase_core already requires the service-role key, so this is the whole question.
+      const databaseConfigured = capabilities.capabilities.supabase_core === 'configured';
       result = evaluateReadiness({
-        capabilities: runtimeCapabilities,
+        capabilities,
         draining: runtimeState?.isDraining() ?? false,
+        localStartupComplete: runtimeState?.isLocalStartupComplete() ?? true,
         probe: databaseConfigured ? await probe() : null,
+        ...(options.requiredSchemaVersion !== undefined
+          ? { requiredSchemaVersion: options.requiredSchemaVersion }
+          : {}),
         schedulerFailures: runtimeState?.schedulerFailures() ?? [],
       });
     } catch (error) {
       request.log.error(
-        { component: 'health', error_code: classifyError(error), operation: 'readiness' },
+        { component: 'health', error_code: classifyDatabaseError(error), operation: 'readiness' },
         'Readiness evaluation failed.',
       );
       result = { ready: false, reasons: ['database_unavailable'], schemaVersion: null };

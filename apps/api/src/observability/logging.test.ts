@@ -3,8 +3,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../app.js';
 
-import { classifyError, describeError } from './errors.js';
-import { REDACTED_LOG_PATHS } from './logging.js';
+import {
+  classifyDatabaseError,
+  classifyError,
+  classifyProviderError,
+  describeError,
+} from './errors.js';
+import { REDACTED_LOG_PATHS, UNMATCHED_ROUTE_LABEL } from './logging.js';
 
 /**
  * These tests drive the real production logger through a memory destination, so what they assert is
@@ -138,16 +143,72 @@ describe('webhook logging', () => {
   });
 });
 
+describe('unmatched route logging', () => {
+  it('logs a fixed label instead of an attacker-controlled path', async () => {
+    const captured = captureLogs();
+    app = captured.app;
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/cus_secret_customer_identifier/private/path?token=secret',
+    });
+
+    const completion = captured.lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.operation === 'request');
+
+    expect(response.statusCode).toBe(404);
+    expect(completion).toMatchObject({ route: UNMATCHED_ROUTE_LABEL, status_code: 404 });
+
+    // 404 traffic is the one class of request whose path Avenlyo has no reason to trust: a
+    // scanner chooses it, so echoing it back into a log line is echoing attacker input.
+    const output = captured.lines.join('\n');
+    expect(output).not.toContain('cus_secret_customer_identifier');
+    expect(output).not.toContain('private/path');
+    expect(output).not.toContain('token=secret');
+    expect(output).not.toContain('secret');
+  });
+
+  it('keeps the route template for a registered route', async () => {
+    const captured = captureLogs();
+    app = captured.app;
+    captured.app.get('/v1/widgets/:widgetId', () => ({ ok: true }));
+
+    await app.inject({ method: 'GET', url: '/v1/widgets/wgt_secret_identifier' });
+
+    const completion = captured.lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((entry) => entry.operation === 'request');
+
+    // The source-controlled template, so the parameter value never reaches a log.
+    expect(completion).toMatchObject({ route: '/v1/widgets/:widgetId' });
+    expect(captured.lines.join('\n')).not.toContain('wgt_secret_identifier');
+  });
+});
+
 describe('error classification', () => {
   it('maps provider failures onto a bounded set of codes', () => {
-    expect(classifyError({ status: 401 })).toBe('provider_unauthorized');
-    expect(classifyError({ status: 429 })).toBe('provider_rate_limited');
-    expect(classifyError({ status: 409 })).toBe('lease_conflict');
-    expect(classifyError({ status: 504 })).toBe('provider_timeout');
-    expect(classifyError({ status: 422 })).toBe('provider_rejected');
-    expect(classifyError({ code: 'ETIMEDOUT' })).toBe('provider_timeout');
-    expect(classifyError({ code: 'ECONNREFUSED' })).toBe('database_unavailable');
-    expect(classifyError(new Error('anything at all'))).toBe('unexpected_error');
+    expect(classifyProviderError({ status: 401 })).toBe('provider_unauthorized');
+    expect(classifyProviderError({ status: 429 })).toBe('provider_rate_limited');
+    expect(classifyProviderError({ status: 409 })).toBe('lease_conflict');
+    expect(classifyProviderError({ status: 504 })).toBe('provider_timeout');
+    expect(classifyProviderError({ status: 422 })).toBe('provider_rejected');
+    expect(classifyProviderError({ code: 'ETIMEDOUT' })).toBe('provider_timeout');
+    expect(classifyProviderError(new Error('anything at all'))).toBe('unexpected_error');
+  });
+
+  it('does not report a provider network failure as a database outage', () => {
+    // The defect this replaces: a refused Twilio, Stripe, OpenAI, Google, or ezyVet connection
+    // classified as database_unavailable, sending an operator to the wrong dependency.
+    for (const code of ['ECONNREFUSED', 'ENOTFOUND', 'ECONNRESET']) {
+      expect(classifyProviderError({ code })).toBe('provider_unavailable');
+      expect(classifyDatabaseError({ code })).toBe('database_unavailable');
+    }
+  });
+
+  it('requires an explicit boundary so a caller cannot classify by accident', () => {
+    expect(classifyError({ code: 'ECONNREFUSED' }, 'database')).toBe('database_unavailable');
+    expect(classifyError({ code: 'ECONNREFUSED' }, 'provider')).toBe('provider_unavailable');
   });
 
   it('keeps provider error text out of production diagnostics', () => {

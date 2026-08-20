@@ -48,15 +48,27 @@ interface SerialisedReply {
 }
 
 /**
+ * Label applied to any request that did not match a registered route. Scanners and misdirected
+ * provider callbacks reach 404 with paths of their own choosing, so the path itself is never
+ * echoed into a log line.
+ */
+export const UNMATCHED_ROUTE_LABEL = 'unmatched';
+
+/**
  * Route rather than URL: a raw URL carries query parameters, and Phase 7 web chat plus provider
  * callbacks put opaque tokens and identifiers there.
+ *
+ * A registered route resolves to Fastify's route template, which is source-controlled text and
+ * therefore safe. Anything unmatched resolves to a fixed label. Falling back to the request pathname
+ * would have logged attacker-supplied input verbatim -- a scan for
+ * `/cus_.../private/path?token=...` would have written the customer identifier and the token's path
+ * segment straight into the log, and 404 traffic is the one class of request whose path Avenlyo has
+ * no reason to trust.
  */
 export function normalizedRoute(request: FastifyRequest): string {
   const routed = request.routeOptions?.url;
   if (typeof routed === 'string' && routed.length > 0) return routed;
-  const raw = typeof request.url === 'string' ? request.url : '';
-  const withoutQuery = raw.split('?')[0] ?? '';
-  return withoutQuery.length > 0 ? withoutQuery : 'unknown';
+  return UNMATCHED_ROUTE_LABEL;
 }
 
 export function serializeRequestForLog(request: FastifyRequest): SerialisedRequest {

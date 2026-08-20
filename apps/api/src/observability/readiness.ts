@@ -18,6 +18,7 @@ export const REQUIRED_SCHEMA_VERSION = 14;
 
 export type ReadinessReason =
   | 'shutting_down'
+  | 'starting_up'
   | 'configuration_partial'
   | 'database_not_configured'
   | 'database_unavailable'
@@ -27,6 +28,11 @@ export type ReadinessReason =
 export interface ReadinessInput {
   readonly capabilities: CapabilityReport;
   readonly draining: boolean;
+  /**
+   * Whether this process finished its own local startup. Defaults to true so existing callers
+   * and tests that do not model startup are unaffected.
+   */
+  readonly localStartupComplete?: boolean;
   readonly probe: DatabaseProbeResult | null;
   readonly requiredSchemaVersion?: number;
   readonly schedulerFailures: readonly RuntimeComponent[];
@@ -47,6 +53,10 @@ export function evaluateReadiness(input: ReadinessInput): ReadinessResult {
   const reasons: ReadinessReason[] = [];
 
   if (input.draining) reasons.push('shutting_down');
+  // The HTTP listener comes up before startup finishes so liveness never depends on a database.
+  // Readiness has to close that window explicitly, or a replica would advertise itself as able
+  // to serve while its worker schedulers were still being started.
+  if (input.localStartupComplete === false) reasons.push('starting_up');
   // Half a provider configuration is not a disabled provider. Fail loudly instead of quietly
   // running a deployment whose Twilio, Stripe, or Google boundary is only partly present.
   if (input.capabilities.partial.length > 0) reasons.push('configuration_partial');

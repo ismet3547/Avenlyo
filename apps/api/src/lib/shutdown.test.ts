@@ -91,18 +91,116 @@ describe('graceful shutdown', () => {
     handle.dispose();
   });
 
-  it('still tears down worker runtimes when startup fails before shutdown is needed', async () => {
-    // Mirrors the listen-failure path in server.ts: the handle is disposed and the runtimes are
-    // stopped directly, so no worker timer is left running in an orphaned process.
-    const stopped: string[] = [];
-    const { handle } = handleFor();
-    handle.dispose();
+  it('runs the same sequence for SIGINT as for SIGTERM', async () => {
+    const { handle, order } = handleFor();
 
-    const messagingStop = () => Promise.resolve(void stopped.push('messaging'));
-    const billingStop = () => Promise.resolve(void stopped.push('billing'));
-    await Promise.all([messagingStop(), billingStop()]);
+    await handle.shutdown('SIGINT');
 
-    expect(handle.isShuttingDown()).toBe(false);
-    expect(stopped.sort()).toEqual(['billing', 'messaging']);
+    expect(order).toEqual(['mark_draining', 'drain', 'stop_http']);
+  });
+});
+
+describe('shutdown failure handling', () => {
+  it('still closes HTTP when the worker drain rejects', async () => {
+    // The defect this replaces: awaiting drain and stopHttp in one expression meant a rejected
+    // drain skipped the HTTP close entirely and left the listener open on a wedged process.
+    const warn = vi.fn();
+    const error = vi.fn();
+    const info = vi.fn();
+    const previousExitCode = process.exitCode;
+    const { handle, order, stopHttp } = handleFor({
+      drain: () =>
+        Promise.reject(
+          Object.assign(new Error('worker teardown hit https://secret-db-host.example.internal'), {
+            code: 'ECONNREFUSED',
+          }),
+        ),
+      logger: { error, info, warn },
+    });
+
+    await expect(handle.shutdown('SIGTERM')).resolves.toBeUndefined();
+
+    expect(stopHttp).toHaveBeenCalledTimes(1);
+    expect(order).toContain('stop_http');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = previousExitCode;
+
+    // Not a clean stop, and never the raw Error.
+    const logged = JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
+    expect(logged).toContain('runtime.stopped_with_errors');
+    // The clean-stop line is not written for a sequence that did not reach its terminal state.
+    expect(
+      info.mock.calls.some(
+        ([payload]) => (payload as { operation?: unknown }).operation === 'runtime.stopped',
+      ),
+    ).toBe(false);
+    expect(logged).not.toContain('secret-db-host');
+    expect(logged).not.toContain('https://');
+    expect(logged).toContain('database_unavailable');
+  });
+
+  it('closes HTTP even when the durable heartbeat stop rejects', async () => {
+    const previousExitCode = process.exitCode;
+    const stopHeartbeat = vi.fn(() => Promise.reject(new Error('stop_runtime_instance failed')));
+    const { handle, order, stopHttp } = handleFor({
+      logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      stopHeartbeat,
+    });
+
+    await handle.shutdown('SIGTERM');
+
+    // Reporting is last and never blocks the two local steps.
+    expect(order).toEqual(['mark_draining', 'drain', 'stop_http']);
+    expect(stopHttp).toHaveBeenCalledTimes(1);
+    expect(stopHeartbeat).toHaveBeenCalledTimes(1);
+    process.exitCode = previousExitCode;
+  });
+
+  it('terminates through the injected exit seam when the window elapses', async () => {
+    vi.useFakeTimers();
+    const forceExit = vi.fn();
+    const warn = vi.fn();
+    const info = vi.fn();
+    const previousExitCode = process.exitCode;
+    const drainControl: { release: () => void } = { release: () => {} };
+    const { handle, stopHttp } = handleFor({
+      // A hung provider socket: the promise never settles, so nothing after it can run.
+      drain: () =>
+        new Promise<void>((resolve) => {
+          drainControl.release = resolve;
+        }),
+      forceExit,
+      logger: { error: vi.fn(), info, warn },
+      timeoutMs: 5_000,
+    });
+
+    const running = handle.shutdown('SIGTERM');
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(forceExit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2);
+
+    // Exactly once, and setting process.exitCode alone would never have terminated this process.
+    expect(forceExit).toHaveBeenCalledTimes(1);
+    expect(forceExit).toHaveBeenCalledWith(1);
+    expect(
+      warn.mock.calls.some(
+        ([payload]) =>
+          (payload as { operation?: unknown }).operation === 'runtime.shutdown_timeout',
+      ),
+    ).toBe(true);
+
+    // No new provider mutation is started by the timeout path, and the clean-stop line is not
+    // written for a process that had to be killed.
+    expect(stopHttp).not.toHaveBeenCalled();
+    drainControl.release();
+    await running;
+    expect(forceExit).toHaveBeenCalledTimes(1);
+    expect(
+      info.mock.calls.some(
+        ([payload]) => (payload as { operation?: unknown }).operation === 'runtime.stopped',
+      ),
+    ).toBe(false);
+    process.exitCode = previousExitCode;
+    vi.useRealTimers();
   });
 });

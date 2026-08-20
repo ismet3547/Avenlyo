@@ -5,6 +5,7 @@ import formbody from '@fastify/formbody';
 import Fastify from 'fastify';
 
 import { env, release } from './env.js';
+import type { CapabilityReport } from './observability/capabilities.js';
 import { buildLoggerOptions, normalizedRoute } from './observability/logging.js';
 import type { DatabaseProbeResult } from './observability/readiness.js';
 import type { RuntimeState } from './observability/runtime-state.js';
@@ -14,9 +15,12 @@ import type { BillingService } from './services/billing/billing-service.js';
 
 export interface BuildAppInput {
   readonly billingService?: BillingService | null;
+  /** Readiness dependency seams. Production passes nothing, so the process defaults apply. */
+  readonly capabilities?: CapabilityReport;
   /** Test seam: supplying a destination turns the real production logger on so it can be asserted. */
   readonly loggerDestination?: { write(chunk: string): void };
   readonly probeDatabase?: () => Promise<DatabaseProbeResult>;
+  readonly requiredSchemaVersion?: number;
   readonly runtimeState?: RuntimeState;
 }
 
@@ -55,6 +59,15 @@ export function buildApp(input: BuildAppInput = {}) {
     );
   });
 
+  // Fastify own not-found handler logs "Route GET:/<raw url> not found" at info level, raw
+  // query string included. That is the one request class whose path is chosen by whoever sent
+  // it, so the default is replaced with one that answers 404 without repeating the path.
+  app.setNotFoundHandler((request, reply) => {
+    void reply
+      .code(404)
+      .send({ error: 'Not Found', request_id: String(request.id), statusCode: 404 });
+  });
+
   void app.register(formbody);
 
   void app.register(cors, {
@@ -63,7 +76,11 @@ export function buildApp(input: BuildAppInput = {}) {
   void app.register(authPlugin);
   void app.register(routes, {
     ...(input.billingService !== undefined ? { billingService: input.billingService } : {}),
+    ...(input.capabilities ? { capabilities: input.capabilities } : {}),
     ...(input.probeDatabase ? { probeDatabase: input.probeDatabase } : {}),
+    ...(input.requiredSchemaVersion !== undefined
+      ? { requiredSchemaVersion: input.requiredSchemaVersion }
+      : {}),
     ...(input.runtimeState ? { runtimeState: input.runtimeState } : {}),
   });
 

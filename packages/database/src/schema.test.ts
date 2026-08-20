@@ -186,6 +186,12 @@ const platformOperationsTest = readSql(
     import.meta.url,
   ),
 );
+const runtimeHardeningMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260827010000_phase_14_runtime_hardening.sql',
+    import.meta.url,
+  ),
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -1145,5 +1151,98 @@ describe('platform operations migration definition', () => {
     ]) {
       expect(platformOperationsTest).toContain(expected);
     }
+  });
+});
+
+describe('runtime hardening migration definition', () => {
+  it('is additive and never rewrites the merged platform operations migration', () => {
+    // The Phase 14 migration is already merged; correcting it in place would change a migration a
+    // deployed database has already applied.
+    expect(runtimeHardeningMigration).not.toContain('drop table');
+    expect(runtimeHardeningMigration).not.toContain('drop function');
+    expect(runtimeHardeningMigration).not.toMatch(/alter table[\s\S]{0,80}drop column/i);
+    expect(platformOperationsMigration).toContain(
+      'last_error_code text check (last_error_code is null or char_length(last_error_code) between 1 and 60)',
+    );
+  });
+
+  it('gives a process its own heartbeat that cannot resurrect a stopped instance', () => {
+    expect(runtimeHardeningMigration).toContain(
+      'create function public.heartbeat_runtime_instance(target_instance_id uuid)',
+    );
+    // An update, never an insert or upsert: it cannot create an instance, and the predicate
+    // excludes a deliberately stopped one.
+    expect(runtimeHardeningMigration).toContain(
+      'where instance_id = target_instance_id and stopped_at is null',
+    );
+    expect(runtimeHardeningMigration).not.toMatch(
+      /heartbeat_runtime_instance[\s\S]{0,600}insert into public\.runtime_instances/,
+    );
+    expect(runtimeHardeningMigration).toContain("set search_path = ''");
+    expect(runtimeHardeningMigration).toContain('perform public.require_platform_service_role()');
+  });
+
+  it('grants exactly one narrow execution boundary and no table write', () => {
+    expect(runtimeHardeningMigration).toContain(
+      'revoke all on function\n  public.is_approved_runtime_error_code(text),',
+    );
+    expect(runtimeHardeningMigration).toContain(
+      'grant execute on function\n  public.heartbeat_runtime_instance(uuid),',
+    );
+    // Constraint and policy helpers are not a callable surface for anyone, service_role included.
+    expect(runtimeHardeningMigration).not.toMatch(
+      /grant execute on function[\s\S]{0,200}is_approved_runtime_error_code/,
+    );
+    expect(runtimeHardeningMigration).not.toMatch(
+      /grant (insert|update|delete|all)[\s\S]{0,80}on table public\.runtime_/i,
+    );
+  });
+
+  it('constrains a persisted error code to the approved set rather than to a length', () => {
+    // Length is not a safety property: a phone number fits in sixty characters.
+    expect(runtimeHardeningMigration).toContain(
+      'create function public.is_approved_runtime_error_code(candidate text)',
+    );
+    expect(runtimeHardeningMigration).toContain(
+      'add constraint runtime_component_heartbeats_error_code_approved',
+    );
+    expect(runtimeHardeningMigration).toContain(
+      'check (last_error_code is null or public.is_approved_runtime_error_code(last_error_code))',
+    );
+    for (const code of [
+      'provider_timeout',
+      'provider_unavailable',
+      'database_unavailable',
+      'lease_conflict',
+      'invalid_webhook',
+      'configuration_invalid',
+      'unexpected_error',
+    ]) {
+      expect(runtimeHardeningMigration).toContain(`'${code}'`);
+    }
+  });
+
+  it('counts a silent instance as stale rather than active', () => {
+    expect(runtimeHardeningMigration).toContain("'active_instances'::text");
+    expect(runtimeHardeningMigration).toContain("'stale_instances'::text");
+    expect(runtimeHardeningMigration).toContain(
+      'instance.stopped_at is null and instance.last_heartbeat_at >= now() - stale_after',
+    );
+    expect(runtimeHardeningMigration).toContain(
+      'instance.stopped_at is null and instance.last_heartbeat_at < now() - stale_after',
+    );
+    // A stale row is reclassified, never deleted: silence is the diagnosis.
+    expect(runtimeHardeningMigration).not.toMatch(/delete from public\.runtime_instances/);
+  });
+
+  it('derives staleness from the heartbeat interval rather than a customer service level', () => {
+    // A technical liveness threshold, not an invented service level: the runtime heartbeat
+    // interval (25s) times a fixed multiple (4). apps/api asserts the two definitions agree.
+    expect(runtimeHardeningMigration).toContain(
+      'create function public.runtime_heartbeat_stale_after()',
+    );
+    expect(runtimeHardeningMigration).toContain(
+      String.raw`select interval ` + "'100 seconds'",
+    );
   });
 });

@@ -1237,6 +1237,7 @@ export interface Database {
         Args: { target_instance_id: string; target_service: string; target_release: string };
         Returns: undefined;
       };
+      heartbeat_runtime_instance: { Args: { target_instance_id: string }; Returns: undefined };
       heartbeat_runtime_component: {
         Args: {
           target_instance_id: string;

@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { Database } from '@avenlyo/database';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { classifyError } from '../../observability/errors.js';
+import {
+  classifyDatabaseError,
+  classifyProviderError,
+} from '../../observability/errors.js';
 import type { WorkerObserver } from '../../observability/worker-observer.js';
 
 import type { TwilioOutboundClient } from './twilio.js';
@@ -104,7 +107,7 @@ export class LeadFollowupWorker {
         this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
       );
     } catch (error) {
-      this.input.observer?.onTick({ errorCode: classifyError(error), ok: false });
+      this.input.observer?.onTick({ errorCode: classifyProviderError(error), ok: false });
     } finally {
       this.inFlight = null;
       this.active = false;
@@ -114,11 +117,20 @@ export class LeadFollowupWorker {
 
   private async run(): Promise<void> {
     const supabase = this.input.supabase as FollowupClient;
-    const { data: jobs, error } = await supabase.rpc('claim_lead_followup_jobs', {
-      target_limit: this.input.concurrency ?? 4,
-      target_worker_id: this.workerId,
-    });
-    if (error || !jobs?.length) return;
+    let jobs: LeadFollowupRpc['claim_lead_followup_jobs']['Returns'] | null;
+    try {
+      const claimed = await supabase.rpc('claim_lead_followup_jobs', {
+        target_limit: this.input.concurrency ?? 4,
+        target_worker_id: this.workerId,
+      });
+      if (claimed.error) return;
+      jobs = claimed.data;
+    } catch (error) {
+      // The claim is a database call; a thrown transport failure is a database outage.
+      this.tickErrorCode = classifyDatabaseError(error);
+      return;
+    }
+    if (!jobs?.length) return;
     await Promise.all(jobs.map((job) => this.process(supabase, job)));
   }
 

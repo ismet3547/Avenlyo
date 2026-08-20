@@ -90,16 +90,40 @@ describe('runtime heartbeat reporter', () => {
     });
   });
 
-  it('never writes a stack trace, payload, or customer value', async () => {
+  it('normalises an unapproved error code instead of persisting free-form text', async () => {
     const { calls, reporter } = reporterFor();
     await reporter.register();
 
-    reporter.observerFor('message_processing').onTick({ errorCode: 'x'.repeat(400), ok: false });
+    // Short enough to have passed a length check, and exactly the kind of value that must
+    // never reach an operational table.
+    reporter.observerFor('message_processing').onTick({ errorCode: '+15551234567', ok: false });
+    await reporter.flush();
+    reporter.observerFor('billing_events').onTick({ errorCode: 'x'.repeat(400), ok: false });
     await reporter.flush();
 
-    const errorCode = heartbeatCalls(calls)[0]?.args.target_error_code;
-    expect(typeof errorCode).toBe('string');
-    expect((errorCode as string).length).toBeLessThanOrEqual(60);
+    const codes = heartbeatCalls(calls).map((call) => call.args.target_error_code);
+    expect(codes).not.toContain('+15551234567');
+    expect(codes.every((code) => code === null || code === 'unexpected_error')).toBe(true);
+  });
+
+  it('advances the process heartbeat with zero components configured', async () => {
+    const { calls, reporter } = reporterFor({
+      instanceId: '66666666-6666-4666-8666-666666666666',
+    });
+    await reporter.register();
+
+    // A core-only API deployment: no messaging, reminders, follow-ups, or billing worker.
+    await reporter.flush();
+    await reporter.flush();
+    await reporter.flush();
+
+    const instanceBeats = calls.filter((call) => call.name === 'heartbeat_runtime_instance');
+    expect(instanceBeats).toHaveLength(3);
+    expect(instanceBeats[0]?.args).toEqual({
+      target_instance_id: '66666666-6666-4666-8666-666666666666',
+    });
+    // No fake component is invented just to keep the process visible.
+    expect(heartbeatCalls(calls)).toHaveLength(0);
   });
 
   it('marks components stopped and stops only its own instance', async () => {
@@ -165,5 +189,128 @@ describe('multiple runtime instances', () => {
       target_state: 'running',
       target_succeeded: true,
     });
+  });
+});
+
+describe('runtime heartbeat transport failures', () => {
+  /** A Supabase client can reject as well as resolve with an error; both must be absorbed. */
+  function throwingReporter(input: { readonly throwOn: string; readonly instanceId?: string }) {
+    const warn = vi.fn();
+    const calls: RpcCall[] = [];
+    const rpc = vi.fn((name: string, args: Record<string, unknown>) => {
+      calls.push({ args, name });
+      if (name === input.throwOn) {
+        // Shaped like a real Node transport failure: the message carries exactly the detail
+        // that must never be logged, and the machine-readable code is what may be read.
+        const failure = Object.assign(
+          new Error('connect ECONNREFUSED https://secret-db-host.example.internal:5432'),
+          { code: 'ECONNREFUSED' },
+        );
+        return Promise.reject(failure);
+      }
+      return Promise.resolve({ error: null });
+    });
+    const reporter = new RuntimeHeartbeatReporter({
+      client: { rpc } as unknown as SupabaseClient<Database>,
+      instanceId: input.instanceId ?? '77777777-7777-4777-8777-777777777777',
+      logger: { warn },
+      release: 'abc123',
+    });
+    return { calls, reporter, warn };
+  }
+
+  function loggedText(warn: ReturnType<typeof vi.fn>): string {
+    return JSON.stringify(warn.mock.calls);
+  }
+
+  it('survives a rejected register_runtime_instance and stays recoverable', async () => {
+    const { reporter, warn } = throwingReporter({ throwOn: 'register_runtime_instance' });
+
+    await expect(reporter.register()).resolves.toBe(false);
+
+    expect(warn).toHaveBeenCalled();
+    const [payload] = warn.mock.calls[0] ?? [];
+    expect(payload).toMatchObject({
+      component: 'runtime_heartbeat',
+      error_code: 'database_unavailable',
+      operation: 'runtime.heartbeat.register_failed',
+      outcome: 'failed',
+    });
+    // Never the database host, the transport message, or a stack trace.
+    expect(loggedText(warn)).not.toContain('secret-db-host');
+    expect(loggedText(warn)).not.toContain('ECONNREFUSED');
+    expect(loggedText(warn)).not.toContain('https://');
+
+    // A later flush retries registration rather than giving up permanently.
+    await expect(reporter.flush()).resolves.toBeUndefined();
+  });
+
+  it('survives a rejected heartbeat_runtime_instance without an unhandled rejection', async () => {
+    const { calls, reporter, warn } = throwingReporter({ throwOn: 'heartbeat_runtime_instance' });
+    await reporter.register();
+    reporter.observerFor('message_processing').onTick({ ok: true });
+
+    await expect(reporter.flush()).resolves.toBeUndefined();
+
+    expect(
+      warn.mock.calls.some(
+        ([payload]) =>
+          (payload as { operation?: unknown }).operation ===
+          'runtime.heartbeat.instance_write_failed',
+      ),
+    ).toBe(true);
+    // The component write is skipped once the instance write failed, and nothing threw.
+    expect(calls.some((call) => call.name === 'heartbeat_runtime_component')).toBe(false);
+    expect(loggedText(warn)).not.toContain('secret-db-host');
+  });
+
+  it('survives a rejected heartbeat_runtime_component and keeps the pending outcome', async () => {
+    const { calls, reporter, warn } = throwingReporter({ throwOn: 'heartbeat_runtime_component' });
+    await reporter.register();
+    reporter.observerFor('billing_events').onTick({ errorCode: 'provider_timeout', ok: false });
+
+    await expect(reporter.flush()).resolves.toBeUndefined();
+    await expect(reporter.flush()).resolves.toBeUndefined();
+
+    // The failed outcome is reported again rather than being lost.
+    const componentWrites = calls.filter((call) => call.name === 'heartbeat_runtime_component');
+    expect(componentWrites.length).toBeGreaterThanOrEqual(2);
+    expect(componentWrites.at(-1)?.args).toMatchObject({
+      target_error_code: 'provider_timeout',
+      target_succeeded: false,
+    });
+    expect(loggedText(warn)).not.toContain('secret-db-host');
+  });
+
+  it('survives a rejected stop_runtime_instance so shutdown still completes', async () => {
+    const { reporter, warn } = throwingReporter({ throwOn: 'stop_runtime_instance' });
+    await reporter.register();
+    reporter.observerFor('lead_followups').onStart();
+
+    await expect(reporter.stop()).resolves.toBeUndefined();
+
+    expect(
+      warn.mock.calls.some(
+        ([payload]) =>
+          (payload as { operation?: unknown }).operation === 'runtime.heartbeat.stop_failed',
+      ),
+    ).toBe(true);
+    expect(loggedText(warn)).not.toContain('secret-db-host');
+  });
+
+  it('still records the stop after an immediately preceding component write failed', async () => {
+    const { calls, reporter } = throwingReporter({ throwOn: 'heartbeat_runtime_component' });
+    await reporter.register();
+    reporter.observerFor('message_processing').onStart();
+    await reporter.flush();
+
+    await reporter.stop();
+
+    // The durable stop is attempted regardless: leaving stopped_at null would make a clean exit
+    // indistinguishable from a crash for the whole retention window.
+    expect(calls.filter((call) => call.name === 'stop_runtime_instance')).toHaveLength(1);
+    // And the stopped instance is never re-registered on the way out.
+    const registrations = calls.filter((call) => call.name === 'register_runtime_instance');
+    expect(registrations).toHaveLength(1);
   });
 });
