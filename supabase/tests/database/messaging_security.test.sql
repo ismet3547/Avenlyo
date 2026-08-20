@@ -323,7 +323,11 @@ select extensions.is(
   'location-scoped member sees an authorized customer conversation at their assigned location'
 );
 select extensions.is(
-  (select count(*)::integer from public.conversations conversation where conversation.organization_id = '91000000-0000-0000-0000-000000000001' and conversation.location_id = '91100000-0000-0000-0000-000000000001' and conversation.mode = 'customer' and conversation.contact_id is not null),
+  (select count(*)::integer from public.conversations conversation
+   where conversation.id in (
+     select queue.conversation_id from public.get_my_inbox_conversations('91100000-0000-0000-0000-000000000001') queue
+     where queue.contact_phone = '+14155550101'
+   )),
   1,
   'location-scoped member can directly read the authorized operational customer conversation'
 );

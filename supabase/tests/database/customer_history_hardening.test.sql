@@ -189,7 +189,7 @@ set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
   $$ select * from public.bootstrap_inbound_sms(
-       'SM_hardening_inbound_fixture', '+15405550301', '+15405558002', 'Hello from SMS') $$,
+       'SMhardeninginboundfixture000000000', '+15405550301', '+15405558002', 'Hello from SMS') $$,
   'trusted inbound SMS ingestion still runs'
 );
 reset role;
@@ -204,7 +204,12 @@ select extensions.ok(
 );
 
 -- The voice path is the other producer of contact rows, and it never needed the browser grant
--- either: it runs inside a SECURITY DEFINER function on the trusted webhook boundary.
+-- either: it runs inside a SECURITY DEFINER function on the trusted webhook boundary. Inbound voice
+-- only routes when the dialled number is a Twilio number with voice enabled for its location.
+update public.phone_numbers set provider = 'twilio'
+where id = 'e5000000-0000-4000-8000-000000000001';
+insert into public.voice_configurations (organization_id, location_id, enabled)
+values ('e2000000-0000-4000-8000-000000000001', 'e3000000-0000-4000-8000-00000000000a', true);
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
