@@ -198,3 +198,17 @@ export function callDurationMinutes(
   if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
   return Math.max(1, Math.round((end - start) / 60_000));
 }
+
+/**
+ * Activity dates for the customer directory.
+ *
+ * Lives here rather than in the page so the client component can call it locally. A formatter is an
+ * ordinary function and therefore not a serializable Server Component prop, and turning one into a
+ * Server Action to make the prop legal would put a network round trip behind rendering a date.
+ */
+export function formatActivityDate(value: string | null): string {
+  if (!value) return 'No activity';
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' }).format(
+    new Date(value),
+  );
+}
