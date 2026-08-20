@@ -10,6 +10,7 @@ import {
   leadStatusLabel,
   messageAuthorLabel,
 } from '@/lib/customers/presentation';
+import { safePageCursor, safeUuid } from '@/lib/customers/input';
 import { loadConversationDetail, loadConversationTranscript } from '@/lib/customers/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -69,21 +70,23 @@ export default async function ConversationDetailPage({
   const { id } = await params;
   const query = await searchParams;
 
-  if (!auth || !workspace.locationId) return <Unavailable />;
+  // A malformed identifier lands in the same place as a foreign or nonexistent one, rather than
+  // reaching the database and returning a parse error that says it was malformed.
+  const conversationId = safeUuid(id);
+  if (!auth || !workspace.locationId || !conversationId) return <Unavailable />;
 
   const detail = await loadConversationDetail(auth.supabase, {
-    conversationId: id,
+    conversationId,
     locationId: workspace.locationId,
   });
   // Foreign, cross-location, and test conversations are all simply unavailable. The page never
   // reveals whether the identifier names something real.
   if (!detail) return <Unavailable />;
 
-  const cursor =
-    query.before && query.beforeId ? { createdAt: query.before, messageId: query.beforeId } : null;
+  const cursor = safePageCursor(query.before, query.beforeId);
   const transcript = await loadConversationTranscript(auth.supabase, {
-    conversationId: id,
-    cursor,
+    conversationId,
+    cursor: cursor ? { createdAt: cursor.timestamp, messageId: cursor.identifier } : null,
     locationId: workspace.locationId,
   });
 

@@ -9,6 +9,7 @@ import {
   leadStatusLabel,
   timelineEventLabel,
 } from '@/lib/customers/presentation';
+import { safeTimelineCursor, safeUuid } from '@/lib/customers/input';
 import { loadCustomerOverview, loadCustomerTimeline } from '@/lib/customers/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -58,10 +59,13 @@ export default async function CustomerDetailPage({ params, searchParams }: Custo
   const { id } = await params;
   const query = await searchParams;
 
-  if (!auth || !workspace.locationId) return <Unavailable />;
+  // A malformed identifier lands in the same place as a foreign or nonexistent one, rather than
+  // reaching the database and returning a parse error that says it was malformed.
+  const contactId = safeUuid(id);
+  if (!auth || !workspace.locationId || !contactId) return <Unavailable />;
 
   const overview = await loadCustomerOverview(auth.supabase, {
-    contactId: id,
+    contactId,
     locationId: workspace.locationId,
   });
 
@@ -69,12 +73,10 @@ export default async function CustomerDetailPage({ params, searchParams }: Custo
   // land in exactly the same place. Nothing distinguishes them.
   if (!overview) return <Unavailable />;
 
-  const cursor =
-    query.after && query.afterId && query.afterKind
-      ? { eventAt: query.after, eventId: query.afterId, eventKind: query.afterKind }
-      : null;
+  // The timeline cursor is all three parts or none; a partial one restarts paging.
+  const cursor = safeTimelineCursor(query.after, query.afterKind, query.afterId);
   const timeline = await loadCustomerTimeline(auth.supabase, {
-    contactId: id,
+    contactId,
     cursor,
     locationId: workspace.locationId,
   });

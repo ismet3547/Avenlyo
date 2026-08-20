@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { safePageCursor } from '@/lib/customers/input';
 import { loadCustomerDirectory } from '@/lib/customers/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -14,7 +15,9 @@ import { CustomerSearch } from './customer-search';
  * every count shown is this location's, never the organization's total.
  */
 interface CustomersPageProps {
-  readonly searchParams: Promise<{ after?: string; afterId?: string; q?: string }>;
+  // No search parameter: a customer search term matches phone and email, so it never travels in a
+  // URL. The search interaction is a server action instead.
+  readonly searchParams: Promise<{ after?: string; afterId?: string }>;
 }
 
 function formatDate(value: string | null): string {
@@ -42,17 +45,13 @@ export default async function CustomersPage({ searchParams }: CustomersPageProps
     );
   }
 
-  const search =
-    typeof params.q === 'string' && params.q.trim().length >= 2 ? params.q.trim() : null;
-  const cursor =
-    params.after && params.afterId
-      ? { contactId: params.afterId, lastActivityAt: params.after }
-      : null;
+  // A malformed or partial cursor restarts paging rather than reaching the database.
+  const cursor = safePageCursor(params.after, params.afterId);
 
   const page = await loadCustomerDirectory(auth.supabase, {
-    cursor,
+    cursor: cursor ? { contactId: cursor.identifier, lastActivityAt: cursor.timestamp } : null,
     locationId: workspace.locationId,
-    search,
+    search: null,
   });
 
   return (
@@ -68,13 +67,11 @@ export default async function CustomersPage({ searchParams }: CustomersPageProps
         this location only.
       </p>
 
-      <CustomerSearch initialValue={search ?? ''} />
+      <CustomerSearch formatDate={formatDate} />
 
       {page.customers.length === 0 ? (
         <p className="mt-8 rounded-xl border border-border bg-white p-6 text-sm text-muted-foreground">
-          {search
-            ? 'No customers match that search at this location.'
-            : 'No customers have interacted with this location yet.'}
+          No customers have interacted with this location yet.
         </p>
       ) : (
         <ul className="mt-6 space-y-3" data-testid="customer-list">
@@ -131,7 +128,6 @@ export default async function CustomersPage({ searchParams }: CustomersPageProps
             query: {
               after: page.nextCursor.lastActivityAt,
               afterId: page.nextCursor.contactId,
-              ...(search ? { q: search } : {}),
             },
           }}
         >

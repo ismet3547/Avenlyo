@@ -6,6 +6,7 @@ import {
   parseChannelFilter,
   parseStatusFilter,
 } from '@/lib/customers/presentation';
+import { safePageCursor } from '@/lib/customers/input';
 import { loadConversationArchive } from '@/lib/customers/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -22,7 +23,6 @@ interface ConversationsPageProps {
     after?: string;
     afterId?: string;
     channel?: string;
-    q?: string;
     status?: string;
   }>;
 }
@@ -70,25 +70,21 @@ export default async function ConversationsPage({ searchParams }: ConversationsP
   // Only canonical values are forwarded; anything else is dropped rather than sent to the database.
   const channel = parseChannelFilter(params.channel);
   const status = parseStatusFilter(params.status);
-  const search =
-    typeof params.q === 'string' && params.q.trim().length >= 2 ? params.q.trim() : null;
-  const cursor =
-    params.after && params.afterId
-      ? { conversationId: params.afterId, lastActivityAt: params.after }
-      : null;
+  // No search parameter at all: a customer search term reaches phone and email, and those do not
+  // belong in a URL. Channel and status are safe to keep, so filters stay linkable.
+  const cursor = safePageCursor(params.after, params.afterId);
 
   const page = await loadConversationArchive(auth.supabase, {
     channel,
-    cursor,
+    cursor: cursor ? { conversationId: cursor.identifier, lastActivityAt: cursor.timestamp } : null,
     locationId: workspace.locationId,
-    search,
+    search: null,
     status,
   });
 
   const filterQuery = {
     ...(channel ? { channel } : {}),
     ...(status ? { status } : {}),
-    ...(search ? { q: search } : {}),
   };
 
   return (

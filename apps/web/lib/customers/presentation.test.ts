@@ -170,3 +170,28 @@ describe('call duration', () => {
     expect(callDurationMinutes('2026-08-20T10:04:00.000Z', '2026-08-20T10:00:00.000Z')).toBeNull();
   });
 });
+
+describe('canonical voice presentation', () => {
+  it('renders the normalized voice channel the read models now return', () => {
+    // Phase 4 stores an inbound voice channel as 'phone'; the read models normalize it to 'voice',
+    // and this is the label an operator sees for a real call.
+    expect(channelLabel('voice')).toBe('Voice');
+  });
+
+  it('accepts voice as a filter value', () => {
+    expect(parseChannelFilter('voice')).toBe('voice');
+  });
+
+  it('does not present an unknown channel as web chat', () => {
+    // The read models report 'unknown' rather than defaulting a missing channel row to web.
+    expect(channelLabel('unknown')).toBe('Conversation');
+    expect(channelLabel(null)).toBe('Conversation');
+    expect(parseChannelFilter('unknown')).toBeNull();
+  });
+
+  it('still labels the raw stored type distinctly if one ever reaches the UI', () => {
+    // Nothing should pass 'phone' now, but if it did it must not silently read as Web chat.
+    expect(channelLabel('phone')).toBe('Phone');
+    expect(channelLabel('phone')).not.toBe('Web chat');
+  });
+});

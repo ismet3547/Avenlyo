@@ -219,6 +219,15 @@ const customerHistoryMigration = readSql(
 const customerHistoryTest = readSql(
   new URL('../../../supabase/tests/database/customer_history_security.test.sql', import.meta.url),
 );
+const customerHistoryHardeningMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260829010000_phase_16_customer_history_hardening.sql',
+    import.meta.url,
+  ),
+);
+const customerHistoryHardeningTest = readSql(
+  new URL('../../../supabase/tests/database/customer_history_hardening.test.sql', import.meta.url),
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -1582,6 +1591,93 @@ describe('customer history migration definition', () => {
       'no customer read model exposes provider identifiers, tokens, or raw metadata',
     ]) {
       expect(customerHistoryTest).toContain(expected);
+    }
+  });
+});
+
+describe('customer history hardening migration definition', () => {
+  it('is additive and leaves the reviewed history migration intact', () => {
+    expect(customerHistoryHardeningMigration).not.toMatch(/drop table/i);
+    expect(customerHistoryHardeningMigration).toContain(
+      'create or replace function public.get_my_conversation_archive',
+    );
+    // The reviewed migration still contains its own definitions; corrections arrive by replacement.
+    expect(customerHistoryMigration).toContain(
+      'create function public.get_my_conversation_archive',
+    );
+  });
+
+  it('closes the raw contact read path', () => {
+    // The Phase 0 policy authorized contacts by contacts.location_id, which is weaker than the
+    // Phase 16 rule and also exposed metadata the read models omit.
+    expect(customerHistoryHardeningMigration).toContain(
+      'revoke select on table public.contacts from authenticated, anon',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'drop policy if exists contacts_select_member on public.contacts',
+    );
+  });
+
+  it('normalizes the canonical voice channel in one place', () => {
+    // Phase 4 stores inbound voice as channel_type 'phone'.
+    expect(customerHistoryHardeningMigration).toContain(
+      'create function public.history_conversation_channel',
+    );
+    expect(customerHistoryHardeningMigration).toContain("when 'phone' then 'voice'");
+    // And the web default is gone: an unknown channel is not declared to be web chat.
+    expect(customerHistoryHardeningMigration).not.toContain(
+      "coalesce(channel.channel_type, 'web')",
+    );
+    expect(customerHistoryHardeningMigration).toContain("else 'unknown'");
+  });
+
+  it('scopes every associated conversation record to the selected location', () => {
+    expect(customerHistoryHardeningMigration).toContain(
+      'and appointment.location_id = target_location_id',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'and call.location_id is not distinct from target_location_id',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'and lead.location_id is not distinct from target_location_id',
+    );
+    expect(customerHistoryHardeningMigration).toContain(
+      'and handoff.location_id is not distinct from target_location_id',
+    );
+  });
+
+  it('refuses a partial pagination cursor', () => {
+    // Half a cursor is not a smaller page: it changes the comparison and can skip or repeat rows.
+    expect(customerHistoryHardeningMigration).toContain(
+      'create function public.require_complete_history_cursor',
+    );
+    expect(customerHistoryHardeningMigration).toContain('History cursor is incomplete');
+    expect(customerHistoryHardeningMigration).toContain(
+      'num_nulls(cursor_event_at, cursor_event_kind, cursor_event_id) not in (0, 3)',
+    );
+  });
+
+  it('keeps the schema compatibility version at 16', () => {
+    // This corrects Phase 16 behaviour inside the same unmerged phase; it adds no capability a
+    // Phase 16 build could not already assume.
+    expect(customerHistoryHardeningMigration).not.toMatch(/set schema_version = 1[^6]/);
+  });
+
+  it('proves the hardening properties it claims', () => {
+    for (const expected of [
+      'a browser client cannot read the contacts table directly',
+      'an activity-less contact whose home location is accessible cannot be fetched directly',
+      'contact metadata is not browser-readable',
+      'trusted SMS ingestion still creates its contact',
+      'trusted voice ingestion still creates its contact',
+      'a phone-channel conversation projects as voice, which is the word the product uses',
+      'the voice filter finds a real Phase 4 voice conversation',
+      'a conversation with no channel row is reported unknown rather than declared web chat',
+      'an appointment recorded at another location is not returned with this conversation',
+      'a call recorded at another location is not returned with this conversation',
+      'a directory cursor missing its identifier is refused',
+    ]) {
+      expect(customerHistoryHardeningTest).toContain(expected);
     }
   });
 });
