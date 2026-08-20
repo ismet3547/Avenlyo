@@ -4,6 +4,12 @@ import { detectSmsKeywordCommand } from '@avenlyo/messaging';
 import type { Database, MessageProcessingJobRow } from '@avenlyo/database';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  classifyDatabaseError,
+  classifyProviderError,
+} from '../../observability/errors.js';
+import type { WorkerObserver } from '../../observability/worker-observer.js';
+
 import type { TwilioOutboundClient } from './twilio.js';
 import type { ConversationAgentService } from './conversation-agent.js';
 
@@ -15,12 +21,14 @@ export class MessageProcessingWorker {
   private stopped = false;
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
+  private tickErrorCode: string | null = null;
   private readonly workerId = `api-${randomUUID()}`;
 
   public constructor(
     private readonly input: {
       readonly agent?: ConversationAgentService;
       readonly concurrency?: number;
+      readonly observer?: WorkerObserver;
       readonly supabase: SupabaseClient<Database>;
       readonly twilio?: TwilioOutboundClient;
     },
@@ -28,6 +36,7 @@ export class MessageProcessingWorker {
 
   public start(): void {
     if (this.stopped || this.timer) return;
+    this.input.observer?.onStart();
     this.schedule(0);
   }
 
@@ -36,6 +45,7 @@ export class MessageProcessingWorker {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.inFlight;
+    this.input.observer?.onStop();
   }
 
   private schedule(delay: number): void {
@@ -49,9 +59,16 @@ export class MessageProcessingWorker {
   private async tick(): Promise<void> {
     if (this.active || this.stopped) return;
     this.active = true;
+    this.tickErrorCode = null;
     this.inFlight = this.run();
     try {
       await this.inFlight;
+      // A tick that finds no work is still a successful tick: "no work" is a healthy component.
+      this.input.observer?.onTick(
+        this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
+      );
+    } catch (error) {
+      this.input.observer?.onTick({ errorCode: classifyProviderError(error), ok: false });
     } finally {
       this.inFlight = null;
       this.active = false;
@@ -60,11 +77,25 @@ export class MessageProcessingWorker {
   }
 
   private async run(): Promise<void> {
-    const { data: jobs, error } = await this.input.supabase.rpc('claim_message_processing_jobs', {
-      target_limit: this.input.concurrency ?? 4,
-      target_worker_id: this.workerId,
-    });
-    if (error || !jobs.length) return;
+    let jobs: readonly MessageProcessingJobRow[];
+    try {
+      const claimed = await this.input.supabase.rpc('claim_message_processing_jobs', {
+        target_limit: this.input.concurrency ?? 4,
+        target_worker_id: this.workerId,
+      });
+      if (claimed.error) {
+        this.tickErrorCode = 'database_unavailable';
+        return;
+      }
+      jobs = claimed.data;
+    } catch (error) {
+      // The claim is a database call, so a thrown transport failure here is a database
+      // outage. Classifying it against the provider boundary would point an operator at
+      // Twilio or OpenAI for a Supabase problem.
+      this.tickErrorCode = classifyDatabaseError(error);
+      return;
+    }
+    if (!jobs.length) return;
     await Promise.all(jobs.map((job) => this.process(job)));
   }
 
@@ -77,6 +108,7 @@ export class MessageProcessingWorker {
       });
     } catch (error) {
       const code = error instanceof Error ? error.name : 'messaging_worker_failure';
+      this.tickErrorCode ??= classifyProviderError(error);
       await this.input.supabase.rpc('retry_message_processing_job', {
         target_error_code: code,
         target_job_id: job.job_id,

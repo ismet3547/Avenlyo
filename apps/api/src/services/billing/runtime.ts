@@ -1,5 +1,7 @@
 import { env, expectedStripeLivemode, isStripeBillingConfigured } from '../../env.js';
 import { createServiceSupabaseClient } from '../../lib/supabase.js';
+import type { RuntimeComponent } from '../../observability/runtime-state.js';
+import type { WorkerObserver } from '../../observability/worker-observer.js';
 
 import { createBillingCatalog } from './catalog.js';
 import { BillingEventWorker } from './event-worker.js';
@@ -7,13 +9,18 @@ import { BillingService } from './billing-service.js';
 import { StripeSdkBillingProvider } from './stripe-provider.js';
 
 export interface BillingRuntime {
+  readonly components: readonly RuntimeComponent[];
   readonly service: BillingService;
   start(): void;
   stop(): Promise<void>;
 }
 
+export interface BillingRuntimeInput {
+  readonly observerFor?: (component: RuntimeComponent) => WorkerObserver;
+}
+
 /** No Stripe client is constructed unless every server-only billing setting is present. */
-export function createBillingRuntime(): BillingRuntime | null {
+export function createBillingRuntime(input: BillingRuntimeInput = {}): BillingRuntime | null {
   const supabase = createServiceSupabaseClient();
   const catalog = createBillingCatalog(env);
   if (
@@ -35,6 +42,11 @@ export function createBillingRuntime(): BillingRuntime | null {
     supabase,
     webOrigin: env.API_CORS_ORIGIN,
   });
-  const worker = new BillingEventWorker(service);
-  return { service, start: () => worker.start(), stop: () => worker.stop() };
+  const worker = new BillingEventWorker(service, undefined, input.observerFor?.('billing_events'));
+  return {
+    components: ['billing_events'],
+    service,
+    start: () => worker.start(),
+    stop: () => worker.stop(),
+  };
 }

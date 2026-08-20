@@ -3,6 +3,12 @@ import { randomUUID } from 'node:crypto';
 import type { Database } from '@avenlyo/database';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import {
+  classifyDatabaseError,
+  classifyProviderError,
+} from '../../observability/errors.js';
+import type { WorkerObserver } from '../../observability/worker-observer.js';
+
 import type { TwilioOutboundClient } from './twilio.js';
 
 const IDLE_POLL_MS = 15_000;
@@ -55,11 +61,13 @@ export class LeadFollowupWorker {
   private stopped = false;
   private timer: NodeJS.Timeout | null = null;
   private inFlight: Promise<void> | null = null;
+  private tickErrorCode: string | null = null;
   private readonly workerId = `lead-followup-${randomUUID()}`;
 
   public constructor(
     private readonly input: {
       readonly concurrency?: number;
+      readonly observer?: WorkerObserver;
       readonly supabase: SupabaseClient<Database>;
       readonly twilio: TwilioOutboundClient;
     },
@@ -67,6 +75,7 @@ export class LeadFollowupWorker {
 
   public start(): void {
     if (this.stopped || this.timer) return;
+    this.input.observer?.onStart();
     this.schedule(0);
   }
 
@@ -75,6 +84,7 @@ export class LeadFollowupWorker {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.inFlight;
+    this.input.observer?.onStop();
   }
 
   private schedule(delay: number): void {
@@ -88,9 +98,16 @@ export class LeadFollowupWorker {
   private async tick(): Promise<void> {
     if (this.active || this.stopped) return;
     this.active = true;
+    this.tickErrorCode = null;
     this.inFlight = this.run();
     try {
       await this.inFlight;
+      // A tick that finds no work is still a successful tick: "no work" is a healthy component.
+      this.input.observer?.onTick(
+        this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
+      );
+    } catch (error) {
+      this.input.observer?.onTick({ errorCode: classifyProviderError(error), ok: false });
     } finally {
       this.inFlight = null;
       this.active = false;
@@ -100,11 +117,20 @@ export class LeadFollowupWorker {
 
   private async run(): Promise<void> {
     const supabase = this.input.supabase as FollowupClient;
-    const { data: jobs, error } = await supabase.rpc('claim_lead_followup_jobs', {
-      target_limit: this.input.concurrency ?? 4,
-      target_worker_id: this.workerId,
-    });
-    if (error || !jobs?.length) return;
+    let jobs: LeadFollowupRpc['claim_lead_followup_jobs']['Returns'] | null;
+    try {
+      const claimed = await supabase.rpc('claim_lead_followup_jobs', {
+        target_limit: this.input.concurrency ?? 4,
+        target_worker_id: this.workerId,
+      });
+      if (claimed.error) return;
+      jobs = claimed.data;
+    } catch (error) {
+      // The claim is a database call; a thrown transport failure is a database outage.
+      this.tickErrorCode = classifyDatabaseError(error);
+      return;
+    }
+    if (!jobs?.length) return;
     await Promise.all(jobs.map((job) => this.process(supabase, job)));
   }
 

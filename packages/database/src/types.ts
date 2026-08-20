@@ -545,6 +545,34 @@ export interface HumanReplyResultRow {
   assigned_display_name: string | null;
 }
 
+export interface PlatformReadinessProbeRow {
+  checked_at: string;
+  schema_version: number;
+}
+
+export interface PlatformRuntimeStatusRow {
+  instance_id: string;
+  service: string;
+  release: string;
+  started_at: string;
+  last_heartbeat_at: string;
+  stopped_at: string | null;
+  component: string | null;
+  component_state: string | null;
+  last_tick_at: string | null;
+  last_success_at: string | null;
+  consecutive_failures: number | null;
+  last_error_code: string | null;
+}
+
+export interface PlatformOperationalMetricRow {
+  metric_group: string;
+  metric: string;
+  value: number;
+  oldest_at: string | null;
+  detail: string | null;
+}
+
 export interface MessageProcessingJobRow {
   job_id: string;
   job_kind: 'inbound_ai' | 'outbound_delivery';
@@ -1196,6 +1224,31 @@ export interface Database {
         };
         Returns: WebChatWidgetConfigurationRow[];
       };
+      platform_readiness_probe: { Args: Record<string, never>; Returns: PlatformReadinessProbeRow[] };
+      get_platform_runtime_status: {
+        Args: Record<string, never>;
+        Returns: PlatformRuntimeStatusRow[];
+      };
+      get_platform_operational_snapshot: {
+        Args: Record<string, never>;
+        Returns: PlatformOperationalMetricRow[];
+      };
+      register_runtime_instance: {
+        Args: { target_instance_id: string; target_service: string; target_release: string };
+        Returns: undefined;
+      };
+      heartbeat_runtime_instance: { Args: { target_instance_id: string }; Returns: undefined };
+      heartbeat_runtime_component: {
+        Args: {
+          target_instance_id: string;
+          target_component: string;
+          target_state: string;
+          target_succeeded: boolean | null;
+          target_error_code?: string | null;
+        };
+        Returns: undefined;
+      };
+      stop_runtime_instance: { Args: { target_instance_id: string }; Returns: undefined };
       claim_message_processing_jobs: {
         Args: { target_worker_id: string; target_limit?: number };
         Returns: MessageProcessingJobRow[];

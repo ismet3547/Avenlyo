@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
+import {
+  classifyDatabaseError,
+  classifyProviderError,
+} from '../../observability/errors.js';
+import type { WorkerObserver } from '../../observability/worker-observer.js';
+
 import type { BillingService } from './billing-service.js';
 import type { StripeWebhookClaim } from './types.js';
 
@@ -18,15 +24,18 @@ export class BillingEventWorker {
   private inFlight: Promise<void> | null = null;
   private stopped = false;
   private timer: NodeJS.Timeout | null = null;
+  private tickErrorCode: string | null = null;
   private readonly workerId = `billing-${randomUUID()}`;
 
   public constructor(
     private readonly service: BillingService,
     private readonly logger?: BillingWorkerLogger,
+    private readonly observer?: WorkerObserver,
   ) {}
 
   public start(): void {
     if (this.stopped || this.timer) return;
+    this.observer?.onStart();
     this.schedule(0);
   }
 
@@ -35,16 +44,24 @@ export class BillingEventWorker {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     await this.inFlight;
+    this.observer?.onStop();
   }
 
   /** Exposed for deterministic worker tests and safe one-shot host execution. */
   public async pollOnce(): Promise<void> {
     if (this.active || this.stopped) return;
     this.active = true;
+    this.tickErrorCode = null;
     this.inFlight = this.run();
     try {
       await this.inFlight;
+      // An empty claim batch is a healthy tick; only a real failure breaks the streak.
+      this.observer?.onTick(
+        this.tickErrorCode ? { errorCode: this.tickErrorCode, ok: false } : { ok: true },
+      );
     } catch (error) {
+      this.tickErrorCode ??= classifyProviderError(error);
+      this.observer?.onTick({ errorCode: this.tickErrorCode, ok: false });
       this.log('Billing event worker batch failed.', error);
     } finally {
       this.inFlight = null;
@@ -62,7 +79,17 @@ export class BillingEventWorker {
   }
 
   private async run(): Promise<void> {
-    const claims = await this.service.claimEvents(this.workerId, 10);
+    let claims: readonly StripeWebhookClaim[];
+    try {
+      claims = await this.service.claimEvents(this.workerId, 10);
+    } catch (error) {
+      // Claiming reads the durable queue. A thrown transport failure here is a database
+      // outage and must not be reported as a Stripe outage. It stays visible in the log and
+      // the next poll is still scheduled.
+      this.tickErrorCode = classifyDatabaseError(error);
+      this.log('Billing event worker could not claim events.', error);
+      return;
+    }
     for (const claim of claims) {
       await this.processClaim(claim);
     }
@@ -73,6 +100,7 @@ export class BillingEventWorker {
       const event = await this.service.retrieveClaimedEvent(claim);
       await this.service.completeEvent(event.id, await this.service.processClaimedEvent(event));
     } catch (error) {
+      this.tickErrorCode ??= classifyProviderError(error);
       try {
         await this.service.failEvent(
           claim.stripeEventId,
