@@ -29,11 +29,16 @@ const navigation: ReadonlyArray<{ href: string; icon: LucideIcon; label: string 
 ];
 
 interface DashboardNavigationProps {
+  attentionCount?: number;
   locationName: string | null;
   organizationName: string;
 }
 
-export function DashboardNavigation({ locationName, organizationName }: DashboardNavigationProps) {
+export function DashboardNavigation({
+  attentionCount = 0,
+  locationName,
+  organizationName,
+}: DashboardNavigationProps) {
   return (
     <aside className="border-b bg-white p-5 md:flex md:min-h-screen md:flex-col md:border-r md:border-b-0">
       <div className="min-w-0">
@@ -56,6 +61,14 @@ export function DashboardNavigation({ locationName, organizationName }: Dashboar
           >
             <Icon aria-hidden="true" className="size-4" />
             {label}
+            {label === 'Inbox' && attentionCount > 0 ? (
+              <span
+                aria-label={`${attentionCount} conversations need attention`}
+                className="ml-auto rounded-full bg-primary px-2 py-0.5 text-[11px] font-semibold text-primary-foreground"
+              >
+                {attentionCount}
+              </span>
+            ) : null}
           </Link>
         ))}
       </nav>
