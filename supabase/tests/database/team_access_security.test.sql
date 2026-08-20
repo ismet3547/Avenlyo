@@ -43,14 +43,16 @@ $$;
 -- Fixture: one completed organization with an owner, an admin, two members,
 -- two locations, plus a second organization to prove tenant isolation.
 -- ---------------------------------------------------------------------------
-insert into auth.users (id, email) values
-  ('a0000000-0000-4000-8000-000000000001', 'owner@example.test'),
-  ('a0000000-0000-4000-8000-000000000002', 'admin@example.test'),
-  ('a0000000-0000-4000-8000-000000000003', 'member@example.test'),
-  ('a0000000-0000-4000-8000-000000000004', 'second@example.test'),
-  ('a0000000-0000-4000-8000-000000000005', 'invited@example.test'),
-  ('a0000000-0000-4000-8000-000000000006', 'stranger@example.test'),
-  ('a0000000-0000-4000-8000-000000000007', 'otherowner@example.test');
+-- Every fixture account has a confirmed address, because acceptance now requires one. The
+-- unconfirmed case has its own dedicated suite rather than being an accident of this fixture.
+insert into auth.users (id, email, email_confirmed_at) values
+  ('a0000000-0000-4000-8000-000000000001', 'owner@example.test', now()),
+  ('a0000000-0000-4000-8000-000000000002', 'admin@example.test', now()),
+  ('a0000000-0000-4000-8000-000000000003', 'member@example.test', now()),
+  ('a0000000-0000-4000-8000-000000000004', 'second@example.test', now()),
+  ('a0000000-0000-4000-8000-000000000005', 'invited@example.test', now()),
+  ('a0000000-0000-4000-8000-000000000006', 'stranger@example.test', now()),
+  ('a0000000-0000-4000-8000-000000000007', 'otherowner@example.test', now());
 
 -- The local stack mirrors auth.users into public.users, so this upserts rather than assuming
 -- the profile row does not exist yet. display_name is what the Inbox renders for an assignee.

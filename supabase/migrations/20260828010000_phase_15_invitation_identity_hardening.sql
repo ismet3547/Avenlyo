@@ -406,7 +406,9 @@ begin
     member.id,
     member.user_id,
     profile.display_name,
-    coalesce(account.email, profile.email),
+    -- auth.users.email is varchar; the declared column is text, so the cast is explicit rather
+    -- than left to type resolution.
+    coalesce(account.email, profile.email)::text,
     member.role,
     member.revoked_at is null,
     member.created_at,
