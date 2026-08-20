@@ -1773,6 +1773,16 @@ describe('phase 17 billing enforcement', () => {
     );
   });
 
+  it('rebases the operational snapshot on the hardened runtime definition', () => {
+    // Re-emitting a function to extend it silently reverts every later correction to it. The
+    // Phase 14 hardening made instance liveness depend on heartbeat freshness rather than on the
+    // absence of stopped_at, and that must survive being extended here.
+    expect(billingEnforcementMigration).toContain(
+      'public.runtime_heartbeat_stale_after()',
+    );
+    expect(billingEnforcementMigration).toContain("'stale_instances'::text");
+  });
+
   it('reports billing suppression as a business diagnostic, not a health signal', () => {
     expect(billingEnforcementMigration).toContain("'billing_suppression'::text");
     for (const metric of [

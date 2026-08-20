@@ -1508,30 +1508,55 @@ $$;
 -- Operational snapshot
 -- ---------------------------------------------------------------------------------------------
 
+-- Rebased on the Phase 14 runtime hardening definition, not the original Phase 14 one: freshness,
+-- not merely the absence of stopped_at, decides whether a process counts as a live replica.
 create or replace function public.get_platform_operational_snapshot()
 returns table (metric_group text, metric text, value bigint, oldest_at timestamptz, detail text)
 language plpgsql stable security definer set search_path = '' as $$
+declare stale_after interval := public.runtime_heartbeat_stale_after();
 begin
   perform public.require_platform_service_role();
 
   return query
-  -- Runtime: an instance counts as active only while it has not stopped and is still reporting.
+  -- Runtime liveness, in three mutually exclusive states.  A running process is not stopped and is
+  -- still reporting; a stale one is not stopped and has gone silent; a stopped one exited on
+  -- purpose and is neither of the first two.
   select 'runtime'::text, 'active_instances'::text,
-    count(*) filter (where instance.stopped_at is null)::bigint,
-    min(instance.started_at) filter (where instance.stopped_at is null),
+    count(*) filter (
+      where instance.stopped_at is null and instance.last_heartbeat_at >= now() - stale_after
+    )::bigint,
+    min(instance.started_at) filter (
+      where instance.stopped_at is null and instance.last_heartbeat_at >= now() - stale_after
+    ),
+    null::text
+  from public.runtime_instances instance
+  union all
+  select 'runtime'::text, 'stale_instances'::text,
+    count(*) filter (
+      where instance.stopped_at is null and instance.last_heartbeat_at < now() - stale_after
+    )::bigint,
+    min(instance.last_heartbeat_at) filter (
+      where instance.stopped_at is null and instance.last_heartbeat_at < now() - stale_after
+    ),
+    null::text
+  from public.runtime_instances instance
+  union all
+  select 'runtime'::text, 'stopped_instances'::text,
+    count(*) filter (where instance.stopped_at is not null)::bigint,
+    min(instance.stopped_at) filter (where instance.stopped_at is not null),
     null::text
   from public.runtime_instances instance
   union all
   select 'runtime'::text, 'release'::text, count(*)::bigint, min(instance.started_at), instance.release
   from public.runtime_instances instance
-  where instance.stopped_at is null
+  where instance.stopped_at is null and instance.last_heartbeat_at >= now() - stale_after
   group by instance.release
   union all
   select 'runtime_component'::text, heartbeat.component, count(*)::bigint,
     min(heartbeat.last_success_at), heartbeat.state
   from public.runtime_component_heartbeats heartbeat
   join public.runtime_instances instance on instance.instance_id = heartbeat.instance_id
-  where instance.stopped_at is null
+  where instance.stopped_at is null and instance.last_heartbeat_at >= now() - stale_after
   group by heartbeat.component, heartbeat.state
 
   -- Message processing jobs.

@@ -5,7 +5,7 @@
 -- provider call and never replays; and everything that is not new paid execution keeps working.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(83);
+select extensions.plan(84);
 
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
@@ -243,12 +243,6 @@ select extensions.is(
   'manage_existing_subscription',
   'the same user acting on the organization they own gets that organization answer, not the other one'
 );
-select extensions.is(
-  (select count(*)::integer from public.billing_checkout_sessions
-   where organization_id = 'bb100000-0000-0000-0000-000000000001'),
-  0,
-  'a checkout intent is never created against the wrong organization'
-);
 select extensions.ok((select pg_temp.error_matches($sql$
   select * from public.begin_my_billing_portal('bb200000-0000-0000-0000-000000000001')
 $sql$, '42501', 'Billing portal is unavailable')),
@@ -258,6 +252,20 @@ select extensions.lives_ok(
   'the same caller reaches the portal for the organization that does have one'
 );
 reset role;
+-- Read the checkout rows as the migration role: the browser has no direct table grant, which is
+-- exactly the Phase 12 guarantee the assertion above depends on.
+select extensions.is(
+  (select count(*)::integer from public.billing_checkout_sessions
+   where organization_id = 'bb100000-0000-0000-0000-000000000001'),
+  0,
+  'a checkout intent is never created against the wrong organization'
+);
+select extensions.is(
+  (select count(*)::integer from public.billing_checkout_sessions
+   where organization_id = 'bb200000-0000-0000-0000-000000000001'),
+  1,
+  'the checkout intent lands on exactly the organization the caller was acting in'
+);
 
 set local role authenticated;
 select set_config('request.jwt.claim.role', 'authenticated', true);
@@ -374,6 +382,10 @@ select extensions.is(
   1,
   'the ordinary AI job is enqueued: suppression is a claim-time decision, not an ingestion one'
 );
+-- Captured once, as the migration role.  Later assertions run as authenticated, and the browser
+-- deliberately cannot reach messaging tables directly.
+create temporary table pg_temp.enforcement_conversation as
+select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01';
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
@@ -439,7 +451,7 @@ select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-000000000001', true);
 select extensions.is(
   (select outcome from public.create_my_human_reply(
-    (select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01'),
+    (select conversation_id from pg_temp.enforcement_conversation),
     'We can help with that.')),
   'billing_unavailable',
   'a human reply returns a stable bounded outcome instead of sending'
@@ -456,14 +468,14 @@ select extensions.is(
 insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type,
   body, metadata, source_channel, author_type, sent_at)
 values ('bb180000-0000-0000-0000-000000000001', 'bb100000-0000-0000-0000-000000000001',
-  'bb110000-0000-0000-0000-000000000001', (select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01'), 'outbound', 'text',
+  'bb110000-0000-0000-0000-000000000001', (select conversation_id from pg_temp.enforcement_conversation), 'outbound', 'text',
   'Queued while entitled', jsonb_build_object('transport', 'sms'), 'sms', 'system', now());
 insert into public.message_deliveries (organization_id, location_id, message_id, provider)
 values ('bb100000-0000-0000-0000-000000000001', 'bb110000-0000-0000-0000-000000000001',
   'bb180000-0000-0000-0000-000000000001', 'twilio');
 insert into public.message_processing_jobs (organization_id, location_id, conversation_id, message_id, job_kind)
 values ('bb100000-0000-0000-0000-000000000001', 'bb110000-0000-0000-0000-000000000001',
-  (select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01'), 'bb180000-0000-0000-0000-000000000001', 'outbound_delivery');
+  (select conversation_id from pg_temp.enforcement_conversation), 'bb180000-0000-0000-0000-000000000001', 'outbound_delivery');
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
@@ -496,7 +508,7 @@ select extensions.is(
 insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type,
   body, metadata, source_channel, author_type, sent_at)
 values ('bb180000-0000-0000-0000-000000000003', 'bb100000-0000-0000-0000-000000000001',
-  'bb110000-0000-0000-0000-000000000001', (select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01'), 'outbound', 'text',
+  'bb110000-0000-0000-0000-000000000001', (select conversation_id from pg_temp.enforcement_conversation), 'outbound', 'text',
   'Straight to the submission claim', jsonb_build_object('transport', 'sms'), 'sms', 'system', now());
 insert into public.message_deliveries (organization_id, location_id, message_id, provider)
 values ('bb100000-0000-0000-0000-000000000001', 'bb110000-0000-0000-0000-000000000001',
@@ -519,14 +531,14 @@ select extensions.is(
 insert into public.messages (id, organization_id, location_id, conversation_id, direction, message_type,
   body, metadata, source_channel, author_type, sent_at)
 values ('bb180000-0000-0000-0000-000000000002', 'bb100000-0000-0000-0000-000000000001',
-  'bb110000-0000-0000-0000-000000000001', (select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01'), 'outbound', 'text',
+  'bb110000-0000-0000-0000-000000000001', (select conversation_id from pg_temp.enforcement_conversation), 'outbound', 'text',
   'Possibly already sent', jsonb_build_object('transport', 'sms'), 'sms', 'system', now());
 insert into public.message_deliveries (organization_id, location_id, message_id, provider, status, error_code)
 values ('bb100000-0000-0000-0000-000000000001', 'bb110000-0000-0000-0000-000000000001',
   'bb180000-0000-0000-0000-000000000002', 'twilio', 'unknown', 'submission_unknown');
 insert into public.message_processing_jobs (organization_id, location_id, conversation_id, message_id, job_kind)
 values ('bb100000-0000-0000-0000-000000000001', 'bb110000-0000-0000-0000-000000000001',
-  (select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01'), 'bb180000-0000-0000-0000-000000000002', 'outbound_delivery');
+  (select conversation_id from pg_temp.enforcement_conversation), 'bb180000-0000-0000-0000-000000000002', 'outbound_delivery');
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
@@ -612,11 +624,6 @@ select extensions.is(
   'no suppressed job is ever re-claimed, so reactivation cannot surprise a customer with an old reply'
 );
 select extensions.is(
-  (select status from public.message_deliveries where message_id = 'bb180000-0000-0000-0000-000000000001'),
-  'suppressed',
-  'a suppressed delivery is not resurrected by reactivation'
-);
-select extensions.is(
   (select is_duplicate from public.bootstrap_inbound_voice_call('evt_bb_voice_1', 'realtime.call.incoming',
     'rtc_bb_1', 'sip_bb_1', '+14155559001', '+14155559101')),
   true,
@@ -633,6 +640,11 @@ select extensions.is(
   (select count(*)::integer from public.calls where external_call_id = 'rtc_bb_1'),
   0,
   'the rejected call identity is never resurrected'
+);
+select extensions.is(
+  (select status from public.message_deliveries where message_id = 'bb180000-0000-0000-0000-000000000001'),
+  'suppressed',
+  'a suppressed delivery is not resurrected by reactivation'
 );
 
 -- Owner configuration is never rewritten by a billing transition.
