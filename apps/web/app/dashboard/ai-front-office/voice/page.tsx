@@ -1,6 +1,8 @@
 import { PhoneCall, Radio, ShieldCheck, UserRoundCheck } from 'lucide-react';
 
 import { VoiceConfigurationForm } from '@/components/voice/voice-configuration-form';
+import { channelAvailabilityLabel, isPausedByBilling } from '@/lib/billing/execution';
+import { loadBillingExecutionSummary } from '@/lib/billing/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
 import { loadRecentVoiceCalls, loadVoiceConfiguration } from '@/lib/voice/service';
@@ -27,13 +29,19 @@ export default async function VoicePage() {
   const canManage = workspace.role === 'owner' || workspace.role === 'admin';
   const auth = await getRequiredAuthContext();
   const locationId = workspace.locationId;
-  const [configuration, calls] =
+  const [configuration, calls, billing] =
     canManage && auth && locationId
       ? await Promise.all([
           loadVoiceConfiguration(auth.supabase, locationId),
           loadRecentVoiceCalls(auth.supabase, locationId),
+          loadBillingExecutionSummary(auth.supabase, workspace.organizationId),
         ])
-      : [null, []];
+      : [null, [], null];
+  // Configuration intent and execution availability are separate facts, and this page reports
+  // both rather than collapsing a billing pause into the owner's own enabled flag. Nothing in
+  // Phase 17 ever sets voice_configurations.enabled to false because of billing.
+  const voiceConfigured = configuration?.enabled ?? false;
+  const voiceEntitled = billing?.voice ?? true;
 
   if (!canManage) {
     return (
@@ -86,8 +94,8 @@ export default async function VoicePage() {
           <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Voice status
           </p>
-          <p className="mt-1 text-lg font-semibold capitalize text-ink">
-            {configuration?.enabled ? 'Enabled' : 'Disabled'}
+          <p className="mt-1 text-lg font-semibold text-ink" data-testid="voice-status">
+            {channelAvailabilityLabel({ configured: voiceConfigured, entitled: voiceEntitled })}
           </p>
         </article>
         <article className="rounded-xl border border-border bg-white p-5 shadow-sm">
@@ -104,6 +112,16 @@ export default async function VoicePage() {
           </p>
         </article>
       </div>
+
+      {isPausedByBilling({ configured: voiceConfigured, entitled: voiceEntitled }) ? (
+        <p
+          className="mt-6 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-900"
+          data-testid="voice-billing-paused"
+        >
+          Voice is configured and stays configured. New inbound calls are not being answered while
+          billing is paused; they resume once billing is active again, with nothing to reconfigure.
+        </p>
+      ) : null}
 
       {!locationId ? (
         <p className="mt-6 rounded-xl border border-border bg-white p-4 text-sm text-muted-foreground shadow-sm">

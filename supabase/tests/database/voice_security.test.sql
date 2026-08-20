@@ -25,6 +25,17 @@ values
   ('61000000-0000-0000-0000-000000000001', 'Voice organization A', 'voice-organization-a', '60000000-0000-0000-0000-000000000001', 'veterinary'),
   ('62000000-0000-0000-0000-000000000001', 'Voice organization B', 'voice-organization-b', '60000000-0000-0000-0000-000000000003', 'medspa');
 
+-- Phase 17 makes production automation require an entitled Core subscription, so every
+-- organization these existing guarantees run against carries one.  Billing is a separate
+-- execution condition: nothing else about the fixtures below changes.
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state) values
+  ('61000000-0000-0000-0000-000000000001', 'cus_entitled_61000000', false, 'active'),
+  ('62000000-0000-0000-0000-000000000001', 'cus_entitled_62000000', false, 'active');
+insert into public.billing_subscriptions (organization_id, stripe_customer_id, stripe_subscription_id,
+  stripe_product_id, stripe_price_id, plan_key, is_supported, stripe_status, livemode) values
+  ('61000000-0000-0000-0000-000000000001', 'cus_entitled_61000000', 'sub_entitled_61000000', 'prod_core', 'price_core', 'core', true, 'active', false),
+  ('62000000-0000-0000-0000-000000000001', 'cus_entitled_62000000', 'sub_entitled_62000000', 'prod_core', 'price_core', 'core', true, 'active', false);
+
 insert into public.locations (id, organization_id, name)
 values
   ('61100000-0000-0000-0000-000000000001', '61000000-0000-0000-0000-000000000001', 'Voice A one'),

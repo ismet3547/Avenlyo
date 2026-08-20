@@ -210,6 +210,16 @@ const invitationIdentityTest = readSql(
     import.meta.url,
   ),
 );
+const billingEnforcementMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260830000000_phase_17_billing_enforcement.sql',
+    import.meta.url,
+  ),
+);
+const billingEnforcementTest = readSql(
+  new URL('../../../supabase/tests/database/billing_enforcement.test.sql', import.meta.url),
+);
+
 const customerHistoryMigration = readSql(
   new URL(
     '../../../supabase/migrations/20260829000000_phase_16_customer_history.sql',
@@ -1678,6 +1688,130 @@ describe('customer history hardening migration definition', () => {
       'a directory cursor missing its identifier is refused',
     ]) {
       expect(customerHistoryHardeningTest).toContain(expected);
+    }
+  });
+});
+
+describe('phase 17 billing enforcement', () => {
+  it('advances the schema compatibility contract to 17', () => {
+    expect(billingEnforcementMigration).toContain('set schema_version = 17');
+  });
+
+  it('derives entitlement from durable projection state and never from a live provider call', () => {
+    expect(billingEnforcementMigration).toContain(
+      'create function public.billing_feature_available',
+    );
+    // No freshness clock anywhere in the predicate: a Stripe outage must not be able to turn into
+    // a mass customer outage, and a webhook backlog can only delay a transition.
+    expect(billingEnforcementMigration).not.toMatch(/last_synced_at\s*[<>]/);
+  });
+
+  it('fails closed on ambiguous or unsupported provider topology', () => {
+    expect(billingEnforcementMigration).toContain(
+      'current_count = 1 and entitled_status_count = 1',
+    );
+    expect(billingEnforcementMigration).toContain('subscription.is_supported');
+    expect(billingEnforcementMigration).toContain("in ('active', 'trialing', 'past_due')");
+    // A scheduled cancellation is not a suspension, so the predicate must not read that flag.
+    expect(billingEnforcementMigration).not.toMatch(/cancel_at_period_end[^\n]*then/);
+  });
+
+  it('keeps every entitlement helper off every callable role', () => {
+    for (const helper of [
+      'public.billing_feature_available(uuid, text)',
+      'public.billing_conversation_feature(uuid)',
+      'public.billing_message_job_blocked(uuid)',
+      'public.billing_sms_compliance_exempt(uuid)',
+    ]) {
+      expect(billingEnforcementMigration).toContain(helper);
+    }
+    // Service identity proves a caller may do backend work, never that a tenant may consume a paid
+    // feature, so no grant restores these to service_role either.
+    expect(billingEnforcementMigration).not.toMatch(
+      /grant execute on function[^;]*billing_feature_available[^;]*service_role/,
+    );
+  });
+
+  it('gives suppressed work a terminal disposition with a bounded reason', () => {
+    expect(billingEnforcementMigration).toContain(
+      "check (status in ('queued', 'processing', 'completed', 'failed', 'suppressed'))",
+    );
+    expect(billingEnforcementMigration).toContain(
+      "check (rejection_reason is null or rejection_reason in ('billing_unavailable'))",
+    );
+    expect(billingEnforcementMigration).toContain("last_error_code = 'billing_unavailable'");
+  });
+
+  it('never rewrites a delivery that may already have crossed the provider boundary', () => {
+    expect(billingEnforcementMigration).toContain("delivery.status = 'queued'");
+    expect(billingEnforcementMigration).toContain("delivery_status is distinct from 'queued'");
+  });
+
+  it('derives the compliance exemption and offers no way to declare one', () => {
+    expect(billingEnforcementMigration).toContain(
+      'create function public.billing_sms_compliance_exempt',
+    );
+    expect(billingEnforcementMigration).toContain("outbound.author_type = 'system'");
+    expect(billingEnforcementMigration).toContain("in ('start', 'help')");
+    // A generic flag would be exactly the browser- or model-settable bypass this must not become.
+    expect(billingEnforcementMigration).not.toMatch(/billing_exempt\s*(boolean|=|,|\))/);
+  });
+
+  it('replaces the obsolete single-admin-organization inference', () => {
+    expect(billingEnforcementMigration).toContain(
+      'drop function public.my_billing_admin_organization();',
+    );
+    for (const action of [
+      'public.begin_my_billing_checkout(\n  target_organization_id uuid,',
+      'public.begin_my_billing_portal(target_organization_id uuid)',
+      'public.begin_my_billing_refresh(target_organization_id uuid)',
+    ]) {
+      expect(billingEnforcementMigration).toContain(action);
+    }
+    expect(billingEnforcementMigration).toContain(
+      'public.require_my_billing_admin(target_organization_id)',
+    );
+  });
+
+  it('rebases the operational snapshot on the hardened runtime definition', () => {
+    // Re-emitting a function to extend it silently reverts every later correction to it. The
+    // Phase 14 hardening made instance liveness depend on heartbeat freshness rather than on the
+    // absence of stopped_at, and that must survive being extended here.
+    expect(billingEnforcementMigration).toContain('public.runtime_heartbeat_stale_after()');
+    expect(billingEnforcementMigration).toContain("'stale_instances'::text");
+  });
+
+  it('reports billing suppression as a business diagnostic, not a health signal', () => {
+    expect(billingEnforcementMigration).toContain("'billing_suppression'::text");
+    for (const metric of [
+      'message_jobs',
+      'sms_deliveries',
+      'reminders',
+      'lead_followups',
+      'voice_rejections',
+    ]) {
+      expect(billingEnforcementMigration).toContain(`'${metric}'::text`);
+    }
+  });
+
+  it('proves the enforcement properties it claims', () => {
+    for (const expected of [
+      'an unknown feature name is never entitled',
+      'past_due normalizes to attention and stays entitled',
+      'two current subscriptions are ambiguous topology and entitle nothing rather than picking one',
+      'an organization with no billing account entitles nothing',
+      'service role is not an entitlement bypass',
+      'a browser cannot mark itself active',
+      'the database authorizes a second administered organization: it answers membership, not selection',
+      'a customer may keep texting an Avenlyo number while the organization subscription is inactive',
+      'the opt-out is durably recorded regardless of billing state',
+      'a human reply returns a stable bounded outcome instead of sending',
+      'unknown stays unknown: billing cannot erase a submission that may already have happened',
+      'an existing authorized session keeps reading its history while billing is unavailable',
+      'no suppressed job is ever re-claimed',
+      'voice configuration survives a full suspend and resume cycle untouched',
+    ]) {
+      expect(billingEnforcementTest).toContain(expected);
     }
   });
 });

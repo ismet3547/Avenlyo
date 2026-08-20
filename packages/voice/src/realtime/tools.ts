@@ -266,7 +266,11 @@ export interface VoiceToolServices {
     ): Promise<{
       readonly missingFields: readonly string[];
       readonly state:
-        'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+        | 'billing_unavailable'
+        | 'needs_human'
+        | 'needs_more_information'
+        | 'needs_clarification'
+        | 'qualified';
     }>;
   };
   requestHumanHelp(
@@ -452,6 +456,12 @@ export class VoiceToolExecutor {
           },
           this.context,
         );
+        // Lead capture entitlement is unavailable, so nothing was persisted. Billing is an
+        // organization configuration issue, never a customer escalation, so no handoff is raised
+        // and the model is told only that the tool is unavailable.
+        if (lead.state === 'billing_unavailable') {
+          return this.store(call.callId, rejected('Lead capture is unavailable right now.'));
+        }
         // A conflict intentionally remains needs_clarification. The trusted industry pack,
         // not the model-visible persistence result, determines urgent review.
         const handoffRequested = requiresUrgentLeadHandoff(

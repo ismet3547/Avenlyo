@@ -7,12 +7,12 @@ This repository contains the Phase 0 foundation, **Phase 1 authenticated onboard
 reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, **Phase 4 inbound
 voice control**, **Phase 5 veterinary ezyVet scheduling**, **Phase 6 Google Calendar scheduling**,
 **Phase 7 unified SMS and web-chat messaging**, **Phase 12 Stripe billing and prospective usage
-metering**, **Phase 13 human handoff operations and the operator inbox**, and **Phase 14 production health and
-operational observability**. It
+metering**, **Phase 13 human handoff operations and the operator inbox**, **Phase 14 production health and
+operational observability**, and **Phase 17 billing entitlement enforcement**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
-empty state. It does not include pricing policy, hard runtime billing enforcement, live customer AI,
-or AI workflows.
+empty state. It does not include pricing tiers, usage quotas, or overage billing: Avenlyo Core is
+the only plan and its usage limits are deliberately unlimited.
 
 ## Prerequisites
 
@@ -55,6 +55,7 @@ Copy-Item apps/api/.env.example apps/api/.env
 | `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication.                |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.                  |
 | `AVENLYO_API_URL`               | Server-only Fastify URL used by the ezyVet management actions.              |
+| `AVENLYO_INTERNAL_BILLING_SECRET` | Server-only, at least 32 characters, shared with the API only. Authenticates which workspace a billing mutation acts on. Never `NEXT_PUBLIC_`. |
 | `OPENAI_API_KEY`                | Optional, server-only; required to publish knowledge or run Agent Test.     |
 | `OPENAI_EMBEDDING_MODEL`        | Optional server-only embedding model. Defaults to `text-embedding-3-small`. |
 | `OPENAI_AGENT_MODEL`            | Optional server-only Responses model. Defaults to `gpt-5.6`.                |
@@ -83,6 +84,7 @@ Copy-Item apps/api/.env.example apps/api/.env
 | `STRIPE_WEBHOOK_SECRET`             | Stripe Billing                       | Server-only Stripe endpoint signing secret (`whsec_...`).                 |
 | `STRIPE_PRODUCT_CORE`               | Stripe Billing                       | Allowlisted Stripe Product ID for source-controlled Avenlyo Core.         |
 | `STRIPE_PRICE_CORE_MONTHLY`         | Stripe Billing                       | Allowlisted Stripe monthly Price ID for Avenlyo Core.                     |
+| `AVENLYO_INTERNAL_BILLING_SECRET`   | Billing mutation routes              | Server-only, at least 32 characters; must equal the web server's value. Authenticates the selected workspace. |
 
 Never commit actual `.env` or `.env.local` files. The API validates its environment once at
 startup; the web app validates its public configuration once when loaded.
@@ -218,8 +220,8 @@ booking model where its connector does not require that external identity.
 ## Production health and operations (Phase 14)
 
 Phase 14 makes the system operable. It adds no customer-facing behaviour: no new AI tool, lead rule,
-reminder policy, handoff workflow, scheduling policy, or billing enforcement. Billing stays
-observational and human ownership stays exactly as Phase 13 defined it.
+reminder policy, handoff workflow, or scheduling policy, and human ownership stays exactly as
+Phase 13 defined it. Billing enforcement arrived separately, in Phase 17.
 
 **Health endpoints.** `GET /health/live` proves the process is serving HTTP and touches nothing else;
 `GET /health` remains a liveness alias so existing probes keep their original meaning.
@@ -616,8 +618,52 @@ billing-address, raw-webhook, or signature data.
 The prospective immutable `billing_usage_events` ledger records answered Voice seconds, outbound
 SMS provider-submission attempts, normal SMS/Web AI text turns, and appointments created through a
 trusted Avenlyo booking intent. It does not backfill historical events or call Stripe Meter Events.
-Billing state is informational in Phase 12: no live customer runtime is hard-gated by subscription
-status, including `past_due`.
+Phase 12 recorded billing truth without acting on it. **Phase 17 enforces it**: a supported Core
+subscription is required before new production customer automation may consume a paid feature.
+
+## Billing entitlement enforcement (Phase 17)
+
+Runtime authorization comes from the last durably applied billing projection, never from a live
+Stripe call, a browser, a cookie, a React prop, or a model. `active` and `attention` are entitled —
+`past_due` is a recoverable payment problem, not a suspension, and a supported Stripe trial counts.
+`inactive`, `review_required`, and `unconfigured` are not; ambiguous or unsupported provider
+topology fails closed rather than being read optimistically.
+
+Entitlement is evaluated at the durable execution claim, so an operation already claimed while
+entitled finishes, and once entitlement is gone no new claim reaches OpenAI, Twilio, Google
+Calendar, or ezyVet. Blocked work terminates deliberately with the bounded reason
+`billing_unavailable` and is never replayed, so restoring billing releases no backlog of old
+replies, reminders, or follow-ups.
+
+Suspension is not a lockout. Customer history stays readable, inbound SMS is still received and
+persisted, STOP still takes effect, operators keep claiming and resolving conversations, and owner
+configuration is never rewritten — a paused Voice number still reads as enabled, because it is.
+Trusted service-role identity proves a worker may do backend work; it is never an entitlement
+bypass. The Phase 3 test agent, onboarding, knowledge configuration, and team management stay
+usable without a subscription.
+
+### Selected-workspace billing boundary
+
+A bearer token proves who is calling. It does not prove which workspace they are operating in, and
+membership cannot supply that either: a user who legitimately administers both Organization A and
+Organization B is an authorized admin of B no matter which one they are selected into. An API that
+accepted an organization from the request body and checked only membership would therefore let the
+same browser act on B while selected into A. The selected workspace is operational scope, not a UI
+preference.
+
+So the selection is signed where it is resolved. The Next.js Server Action runs the Phase 15
+resolver, which revalidates the stored selection against what the database says this user may reach
+right now, then signs the resulting organization together with the acting user and a timestamp using
+`AVENLYO_INTERNAL_BILLING_SECRET`. The API verifies that proof against the user identity it derived
+from the verified token — never anything in the body — and refuses any billing mutation whose
+organization does not match. A missing, expired, tampered, or wrong-organization proof is one fixed
+`BILLING_WORKSPACE_UNVERIFIED` refusal, before the database and before Stripe.
+
+The proof is authenticity, not authorization. The caller's own access token still travels to the
+database, which still proves owner or admin authority for itself, so a valid proof can never make an
+unauthorized user authorized — it only narrows which organization an already-authorized user may act
+on. The secret is server-only on both sides, never `NEXT_PUBLIC_`, never in a URL, and never in a
+response; billing mutations fail closed while it is absent.
 
 ## Inbound Voice (Phase 4)
 

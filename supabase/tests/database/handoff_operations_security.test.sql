@@ -31,6 +31,17 @@ on conflict (id) do update set display_name = excluded.display_name;
 insert into public.organizations (id, name, slug, created_by, primary_industry_id) values
   ('d1000000-0000-0000-0000-000000000001', 'Handoff Organization A', 'handoff-org-a', 'd0000000-0000-0000-0000-000000000001', 'veterinary'),
   ('d2000000-0000-0000-0000-000000000001', 'Handoff Organization B', 'handoff-org-b', 'd0000000-0000-0000-0000-000000000005', 'medspa');
+
+-- Phase 17 makes production automation require an entitled Core subscription, so every
+-- organization these existing guarantees run against carries one.  Billing is a separate
+-- execution condition: nothing else about the fixtures below changes.
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state) values
+  ('d1000000-0000-0000-0000-000000000001', 'cus_entitled_d1000000', false, 'active'),
+  ('d2000000-0000-0000-0000-000000000001', 'cus_entitled_d2000000', false, 'active');
+insert into public.billing_subscriptions (organization_id, stripe_customer_id, stripe_subscription_id,
+  stripe_product_id, stripe_price_id, plan_key, is_supported, stripe_status, livemode) values
+  ('d1000000-0000-0000-0000-000000000001', 'cus_entitled_d1000000', 'sub_entitled_d1000000', 'prod_core', 'price_core', 'core', true, 'active', false),
+  ('d2000000-0000-0000-0000-000000000001', 'cus_entitled_d2000000', 'sub_entitled_d2000000', 'prod_core', 'price_core', 'core', true, 'active', false);
 insert into public.locations (id, organization_id, name) values
   ('d1100000-0000-0000-0000-000000000001', 'd1000000-0000-0000-0000-000000000001', 'Handoff A first location'),
   ('d1200000-0000-0000-0000-000000000001', 'd1000000-0000-0000-0000-000000000001', 'Handoff A second location'),

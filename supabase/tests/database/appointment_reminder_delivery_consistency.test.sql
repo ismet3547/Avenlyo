@@ -11,6 +11,15 @@ insert into public.users (id, email)
 values ('a9700000-0000-0000-0000-000000000001', 'reminder-consistency-owner@example.test') on conflict (id) do nothing;
 insert into public.organizations (id, name, slug, created_by, primary_industry_id)
 values ('a9710000-0000-0000-0000-000000000001', 'Reminder Consistency', 'reminder-consistency', 'a9700000-0000-0000-0000-000000000001', 'veterinary');
+
+-- Phase 17 makes production automation require an entitled Core subscription, so every
+-- organization these existing guarantees run against carries one.  Billing is a separate
+-- execution condition: nothing else about the fixtures below changes.
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state) values
+  ('a9710000-0000-0000-0000-000000000001', 'cus_entitled_a9710000', false, 'active');
+insert into public.billing_subscriptions (organization_id, stripe_customer_id, stripe_subscription_id,
+  stripe_product_id, stripe_price_id, plan_key, is_supported, stripe_status, livemode) values
+  ('a9710000-0000-0000-0000-000000000001', 'cus_entitled_a9710000', 'sub_entitled_a9710000', 'prod_core', 'price_core', 'core', true, 'active', false);
 insert into public.organization_members (id, organization_id, user_id, role)
 values ('a9720000-0000-0000-0000-000000000001', 'a9710000-0000-0000-0000-000000000001', 'a9700000-0000-0000-0000-000000000001', 'owner');
 insert into public.locations (id, organization_id, name, timezone)

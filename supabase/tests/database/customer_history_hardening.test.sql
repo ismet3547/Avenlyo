@@ -38,6 +38,15 @@ insert into public.organizations (id, name, slug, created_by, primary_industry_i
   ('e2000000-0000-4000-8000-000000000001', 'Hardening Org', 'hardening-org',
    'e1000000-0000-4000-8000-000000000001', 'veterinary');
 
+-- Phase 17 makes production automation require an entitled Core subscription, so every
+-- organization these existing guarantees run against carries one.  Billing is a separate
+-- execution condition: nothing else about the fixtures below changes.
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state) values
+  ('e2000000-0000-4000-8000-000000000001', 'cus_entitled_e2000000', false, 'active');
+insert into public.billing_subscriptions (organization_id, stripe_customer_id, stripe_subscription_id,
+  stripe_product_id, stripe_price_id, plan_key, is_supported, stripe_status, livemode) values
+  ('e2000000-0000-4000-8000-000000000001', 'cus_entitled_e2000000', 'sub_entitled_e2000000', 'prod_core', 'price_core', 'core', true, 'active', false);
+
 insert into public.locations (id, organization_id, name) values
   ('e3000000-0000-4000-8000-00000000000a', 'e2000000-0000-4000-8000-000000000001', 'Location A'),
   ('e3000000-0000-4000-8000-00000000000b', 'e2000000-0000-4000-8000-000000000001', 'Location B');

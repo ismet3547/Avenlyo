@@ -51,7 +51,12 @@ export interface VoiceStore {
     readonly urgency: LeadUrgency;
   }): Promise<{
     readonly missingFields: readonly string[];
-    readonly state: 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+    readonly state:
+      | 'billing_unavailable'
+      | 'needs_human'
+      | 'needs_more_information'
+      | 'needs_clarification'
+      | 'qualified';
   }>;
   prepareFollowupConsent?(input: {
     readonly externalCallId: string;
@@ -121,7 +126,12 @@ export class SupabaseVoiceStore implements VoiceStore {
     readonly urgency: LeadUrgency;
   }): Promise<{
     readonly missingFields: readonly string[];
-    readonly state: 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+    readonly state:
+      | 'billing_unavailable'
+      | 'needs_human'
+      | 'needs_more_information'
+      | 'needs_clarification'
+      | 'qualified';
   }> {
     if (!input.triggeringInboundMessageId)
       throw new Error('Lead capture requires a caller transcript.');
@@ -141,7 +151,11 @@ export class SupabaseVoiceStore implements VoiceStore {
           | readonly {
               readonly missing_fields: readonly string[];
               readonly state:
-                'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+                | 'billing_unavailable'
+                | 'needs_human'
+                | 'needs_more_information'
+                | 'needs_clarification'
+                | 'qualified';
             }[]
           | null;
         error: { readonly message: string } | null;

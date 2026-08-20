@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
+import { BILLING_EXECUTION_HEADLINES, type BillingState } from '@/lib/billing/execution';
 import { billingRpc } from '@/lib/billing/service';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
 
@@ -17,9 +18,13 @@ function formatDate(value: string | null): string {
   );
 }
 
-function statusLabel(status: string | null): string {
-  if (!status) return 'Billing not configured';
-  return status.replaceAll('_', ' ');
+/**
+ * Phase 17 made this page describe execution, not just provider status. An owner needs to know
+ * whether customer automation is running, and "past_due" does not answer that: it reads like an
+ * outage when automation is in fact still operating.
+ */
+function executionLabel(state: BillingState | null): string {
+  return BILLING_EXECUTION_HEADLINES[state ?? 'unconfigured'];
 }
 
 function usageRow(label: string, value: number) {
@@ -100,7 +105,8 @@ export default async function BillingPage({
       ) : null}
       {params.existing === 'reconciliation' ? (
         <p className="mt-5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950">
-          Billing is being refreshed from Stripe. Please try again after the current update finishes.
+          Billing is being refreshed from Stripe. Please try again after the current update
+          finishes.
         </p>
       ) : null}
       {overview?.billing_state === 'attention' ? (
@@ -110,8 +116,8 @@ export default async function BillingPage({
       ) : null}
       {overview?.billing_state === 'review_required' ? (
         <p className="mt-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-          Billing needs attention. Refresh status or manage billing in Stripe to resolve the
-          current subscription state.
+          Billing needs attention. Refresh status or manage billing in Stripe to resolve the current
+          subscription state.
         </p>
       ) : null}
 
@@ -125,8 +131,8 @@ export default async function BillingPage({
                   ? 'Subscription needs review'
                   : 'No subscription'}
             </h2>
-            <p className="mt-1 text-sm capitalize text-muted-foreground">
-              {statusLabel(overview?.billing_state ?? null)}
+            <p className="mt-1 text-sm text-muted-foreground" data-testid="billing-execution-state">
+              {executionLabel(overview?.billing_state ?? null)}
             </p>
           </div>
           <div className="flex flex-wrap gap-3">

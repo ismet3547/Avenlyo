@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import { parseEnvironment } from '@avenlyo/shared';
+import { WORKSPACE_PROOF_MIN_SECRET_LENGTH } from '@avenlyo/shared/workspace-proof';
 import { z } from 'zod';
 
 import {
@@ -12,6 +13,10 @@ export const env = parseEnvironment(
   z.object({
     API_CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
     AVENLYO_RELEASE: z.string().trim().min(1).max(120).optional(),
+    // Server-only, and shared with the Next.js server alone. It authenticates the selected
+    // workspace a billing mutation is acting on; it is never an authorization by itself, never
+    // reaches a browser, and is deliberately not prefixed NEXT_PUBLIC_.
+    AVENLYO_INTERNAL_BILLING_SECRET: z.string().min(WORKSPACE_PROOF_MIN_SECRET_LENGTH).optional(),
     API_HOST: z.string().min(1).default('0.0.0.0'),
     API_PORT: z.coerce.number().int().positive().default(4000),
     EZYVET_PARTNER_ID: z.string().min(1).optional(),
