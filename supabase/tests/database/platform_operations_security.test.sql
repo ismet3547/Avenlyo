@@ -333,8 +333,12 @@ select extensions.is(
   1::bigint,
   'a silent instance counts as stale rather than active'
 );
+-- Read through the narrow status function, because service_role has no table grant.
 select extensions.ok(
-  exists (select 1 from public.runtime_instances where instance_id = 'e1000000-0000-4000-8000-000000000004'),
+  exists (
+    select 1 from public.get_platform_runtime_status()
+    where instance_id = 'e1000000-0000-4000-8000-000000000004'
+  ),
   'the stale instance is still retained for diagnosis rather than deleted'
 );
 select extensions.ok(
