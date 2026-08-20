@@ -386,6 +386,10 @@ select extensions.is(
 -- deliberately cannot reach messaging tables directly.
 create temporary table pg_temp.enforcement_conversation as
 select conversation_id from public.messages where external_id = 'SM0000000000000000000000000000bb01';
+-- A temporary table belongs to the role that made it, and the operator assertions below run as
+-- authenticated.  A transaction-local setting is readable by every role and carries the same fact.
+select set_config('avenlyo.enforcement_conversation',
+  (select conversation_id::text from pg_temp.enforcement_conversation), true);
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
@@ -451,7 +455,7 @@ select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-000000000001', true);
 select extensions.is(
   (select outcome from public.create_my_human_reply(
-    (select conversation_id from pg_temp.enforcement_conversation),
+    current_setting('avenlyo.enforcement_conversation')::uuid,
     'We can help with that.')),
   'billing_unavailable',
   'a human reply returns a stable bounded outcome instead of sending'
