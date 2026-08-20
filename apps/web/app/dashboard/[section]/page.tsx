@@ -7,7 +7,6 @@ const sections = {
   customers: 'Customers',
   integrations: 'Integrations',
   'needs-attention': 'Needs Attention',
-  settings: 'Settings',
 } as const;
 
 interface DashboardSectionPageProps {

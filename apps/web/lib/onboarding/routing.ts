@@ -23,6 +23,23 @@ export class MultipleWorkspacesError extends Error {
   }
 }
 
+/**
+ * The workspace this account is still setting up, if any.
+ *
+ * Only an owner reaches onboarding, and an owner has at most one workspace in progress. Someone who
+ * owns an unfinished workspace and has also accepted an invitation elsewhere legitimately has two
+ * contexts, and refusing to resolve that is what used to make onboarding unreachable for them.
+ */
+function findOnboardingContext(
+  contexts: readonly TenantContext[],
+): TenantContext | null {
+  return (
+    contexts.find(
+      (candidate) => candidate.role === 'owner' && candidate.onboardingStatus !== 'completed',
+    ) ?? null
+  );
+}
+
 export function resolveTenantContexts(contexts: readonly TenantContext[]): TenantResolution {
   if (contexts.length === 0) {
     return { kind: 'none' };
@@ -48,6 +65,10 @@ export async function ensureSingleTenantContext(
   }
 
   if (resolution.kind === 'multiple') {
+    // A workspace still being set up is the only thing onboarding can act on. Anything else means
+    // this account has finished contexts and belongs in the selector, not here.
+    const inProgress = findOnboardingContext(resolution.contexts);
+    if (inProgress) return inProgress;
     throw new MultipleWorkspacesError();
   }
 

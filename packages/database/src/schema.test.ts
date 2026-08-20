@@ -192,6 +192,24 @@ const runtimeHardeningMigration = readSql(
     import.meta.url,
   ),
 );
+const teamAccessMigration = readSql(
+  new URL('../../../supabase/migrations/20260828000000_phase_15_team_access.sql', import.meta.url),
+);
+const teamAccessTest = readSql(
+  new URL('../../../supabase/tests/database/team_access_security.test.sql', import.meta.url),
+);
+const invitationIdentityMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260828010000_phase_15_invitation_identity_hardening.sql',
+    import.meta.url,
+  ),
+);
+const invitationIdentityTest = readSql(
+  new URL(
+    '../../../supabase/tests/database/invitation_identity_security.test.sql',
+    import.meta.url,
+  ),
+);
 
 describe('foundation migration definition', () => {
   it('does not contain blanket FOR ALL tenant policies', () => {
@@ -1133,7 +1151,7 @@ describe('platform operations migration definition', () => {
 
   it('ships executable coverage for the platform boundary and aggregation', () => {
     for (const expected of [
-      'the deployed schema advertises the Phase 14 compatibility version',
+      'the deployed schema advertises the current compatibility version',
       'the trusted backend has no broad runtime instance write grant',
       'an authenticated caller cannot write runtime state directly',
       'every platform function pins an empty search path',
@@ -1226,7 +1244,7 @@ describe('runtime hardening migration definition', () => {
     // The merged migration counted every not-stopped row; the follow-up replaces the whole
     // function so the corrected definition is the only one a fresh database ever applies.
     expect(platformOperationsMigration).toContain(
-      "count(*) filter (where instance.stopped_at is null)::bigint",
+      'count(*) filter (where instance.stopped_at is null)::bigint',
     );
     expect(runtimeHardeningMigration).toContain(
       'create or replace function public.get_platform_operational_snapshot()',
@@ -1252,8 +1270,200 @@ describe('runtime hardening migration definition', () => {
     expect(runtimeHardeningMigration).toContain(
       'create function public.runtime_heartbeat_stale_after()',
     );
-    expect(runtimeHardeningMigration).toContain(
-      String.raw`select interval ` + "'100 seconds'",
+    expect(runtimeHardeningMigration).toContain(String.raw`select interval ` + "'100 seconds'");
+  });
+});
+
+describe('team access migration definition', () => {
+  it('is additive and rewrites no merged migration', () => {
+    expect(teamAccessMigration).not.toMatch(/drop table/i);
+    expect(teamAccessMigration).not.toMatch(/alter table[\s\S]{0,80}drop column/i);
+    // Authorization helpers are replaced in place, which is how a merged definition is corrected
+    // without editing the migration a deployed database already applied.
+    expect(teamAccessMigration).toContain(
+      'create or replace function public.is_organization_member',
     );
+    expect(teamAccessMigration).toContain(
+      'create or replace function public.has_location_write_access',
+    );
+  });
+
+  it('makes membership revocation soft so historical attribution survives', () => {
+    expect(teamAccessMigration).toContain('add column revoked_at timestamptz');
+    expect(teamAccessMigration).toContain('add column revoked_by_user_id uuid');
+    // action_logs, handoffs, and appointment intents all carry foreign keys to this row.
+    expect(teamAccessMigration).not.toMatch(/delete from public\.organization_members/);
+    expect(teamAccessMigration).toContain('organization_members_revocation_consistent');
+    // Ownership transfer is a separate future workflow, so an owner is never revoked and an
+    // organization can never be left without an administrator.
+    expect(teamAccessMigration).toContain('organization_members_owner_not_revoked');
+  });
+
+  it('applies active-membership semantics to every authorization helper it replaces', () => {
+    for (const helper of [
+      'is_organization_member',
+      'is_organization_admin',
+      'is_organization_owner',
+      'has_location_access',
+      'has_location_write_access',
+      'get_my_tenant_context',
+      'require_knowledge_manager_organization',
+      'get_ezyvet_backend_authorization',
+      'get_google_backend_authorization',
+      'get_or_resume_staff_appointment_change_intent',
+      'set_sms_phone_number_enabled_for_user',
+      'get_sms_phone_number_for_user',
+      'my_billing_admin_organization',
+      'bootstrap_workspace',
+      'require_owned_onboarding_organization',
+    ]) {
+      expect(teamAccessMigration).toContain(`create or replace function public.${helper}`);
+    }
+    expect(teamAccessMigration).toMatch(/revoked_at is null/);
+  });
+
+  it('stores an invitation token only as a hash', () => {
+    expect(teamAccessMigration).toContain('token_hash text not null unique');
+    expect(teamAccessMigration).toContain("check (token_hash ~ '^[0-9a-f]{64}$')");
+    // 32 random bytes generated at the database boundary, never chosen by a browser.
+    expect(teamAccessMigration).toContain("encode(extensions.gen_random_bytes(32), 'hex')");
+    expect(teamAccessMigration).toContain(
+      "encode(extensions.digest(plaintext_token, 'sha256'), 'hex')",
+    );
+    // No column could hold the plaintext even by accident.
+    expect(teamAccessMigration).not.toMatch(/token text not null/);
+  });
+
+  it('binds an invitation to one normalized identity with a bounded lifetime', () => {
+    expect(teamAccessMigration).toContain('email_normalized = lower(btrim(email_normalized))');
+    expect(teamAccessMigration).toContain("select interval '7 days'");
+    // At most one live bearer link per organization and email at any moment.
+    expect(teamAccessMigration).toContain('organization_invitations_pending_email_key');
+    expect(teamAccessMigration).toContain('where accepted_at is null and revoked_at is null');
+    expect(teamAccessMigration).toContain("check (role in ('admin', 'member'))");
+  });
+
+  it('withdraws direct client mutation of membership tables', () => {
+    expect(teamAccessMigration).toContain(
+      'revoke insert, update, delete on table public.organization_members from authenticated, anon',
+    );
+    expect(teamAccessMigration).toContain(
+      'revoke insert, update, delete on table public.organization_member_locations from authenticated, anon',
+    );
+    expect(teamAccessMigration).toContain(
+      'drop policy if exists organization_members_insert_admin',
+    );
+    // No broad service-role grant stands in for the permission matrix.
+    expect(teamAccessMigration).not.toMatch(
+      /grant (insert|update|delete|all)[\s\S]{0,60}to service_role/,
+    );
+  });
+
+  it('grants team RPCs to authenticated callers only', () => {
+    expect(teamAccessMigration).toContain(
+      'grant execute on function\n  public.create_my_organization_invitation(uuid, text, text, uuid[]),',
+    );
+    expect(teamAccessMigration).toContain('to authenticated;');
+    // Acceptance derives identity from auth.uid(), so a backend role must not be able to run it.
+    expect(teamAccessMigration).toContain(
+      'revoke all on function\n  public.create_my_organization_invitation(uuid, text, text, uuid[]),',
+    );
+  });
+
+  it('advances the schema compatibility contract to 15', () => {
+    expect(teamAccessMigration).toContain('set schema_version = 15');
+  });
+
+  it('proves the security properties it claims', () => {
+    for (const expected of [
+      'a browser client cannot insert a membership row',
+      'a revoked member immediately loses organization membership',
+      'the plaintext token is never what is stored',
+      'no action log contains the plaintext invitation token',
+      'no action log contains an invitation email address',
+      'acceptance is refused when the authenticated email is not the invited one',
+      'reissuing revokes the previous invitation',
+      'an admin cannot invite another admin',
+      'an owner cannot be revoked, so an organization always keeps an administrator',
+      'the membership row survives, so historical attribution keeps its foreign key',
+      'revocation does not auto-resolve the handoff',
+      'revocation does not resume the AI',
+      'an owner can still release work abandoned by a revoked member',
+    ]) {
+      expect(teamAccessTest).toContain(expected);
+    }
+  });
+});
+
+describe('invitation identity hardening migration definition', () => {
+  it('is additive and leaves the reviewed team access migration intact', () => {
+    expect(invitationIdentityMigration).not.toMatch(/drop table/i);
+    expect(invitationIdentityMigration).not.toMatch(/alter table[\s\S]{0,80}drop column/i);
+    // The reviewed migration still contains its own definitions; corrections arrive by replacement.
+    expect(teamAccessMigration).toContain(
+      'create function public.accept_my_organization_invitation',
+    );
+    expect(invitationIdentityMigration).toContain(
+      'create or replace function public.accept_my_organization_invitation',
+    );
+  });
+
+  it('requires a confirmed address before an invitation can be accepted', () => {
+    // Proving which address an account claims is not proof it owns the mailbox.
+    expect(invitationIdentityMigration).toContain('account.email_confirmed_at is not null');
+    expect(invitationIdentityMigration).toContain("'verified_email_required'::text");
+    expect(invitationIdentityMigration).toContain(
+      'create function public.confirmed_account_email(target_user_id uuid)',
+    );
+  });
+
+  it('resolves member identity from the account rather than the profile mirror', () => {
+    expect(invitationIdentityMigration).toContain(
+      'create function public.organization_has_active_member_email',
+    );
+    expect(invitationIdentityMigration).toContain(
+      'join auth.users as account on account.id = member.user_id',
+    );
+    // The mirror is display data; nothing authorizes from it.
+    expect(invitationIdentityMigration).not.toMatch(
+      /join public\.users as profile[\s\S]{0,200}normalize_team_email\(profile\.email\)/,
+    );
+  });
+
+  it('never lets acceptance rewrite an active membership', () => {
+    expect(invitationIdentityMigration).toContain(
+      'if membership_id is not null and not membership_revoked then',
+    );
+    expect(invitationIdentityMigration).toContain("'already_member'::text");
+    // Only a revoked membership may be reactivated.
+    expect(invitationIdentityMigration).toContain('member.revoked_at is not null');
+  });
+
+  it('keeps the identity helpers off every callable boundary', () => {
+    expect(invitationIdentityMigration).toContain(
+      'revoke all on function\n  public.confirmed_account_email(uuid),\n  public.organization_has_active_member_email(uuid, text)\n  from public, anon, authenticated, service_role;',
+    );
+    // No new RPC exposes auth.users, and none is granted to service_role.
+    expect(invitationIdentityMigration).not.toMatch(
+      /grant execute[\s\S]{0,200}confirmed_account_email/,
+    );
+    expect(invitationIdentityMigration).not.toMatch(/to service_role/);
+    expect(invitationIdentityMigration).not.toMatch(/email_confirmed_at[\s\S]{0,40}returns table/);
+  });
+
+  it('proves the identity properties it claims', () => {
+    for (const expected of [
+      'an unconfirmed account cannot accept an invitation to its own address',
+      'the current auth address identifies the active member',
+      'the stale mirror address is not treated as a member identity',
+      'the active admin was not demoted by presenting a member invitation',
+      'the active member keeps the location scope they were actually granted',
+      'the owner role survives an invitation that would have set it to admin',
+      'the owner cannot demote themself by accepting a member invitation',
+      'a revoked member is reactivated by a fresh invitation',
+      'reactivation replaces the old scope with exactly the invitation scope',
+    ]) {
+      expect(invitationIdentityTest).toContain(expected);
+    }
   });
 });

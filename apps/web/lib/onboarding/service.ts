@@ -12,6 +12,10 @@ interface OnboardingRpcCaller {
     data: unknown[] | null;
     error: { message: string } | null;
   }>;
+  (
+    name: 'get_my_workspace_context',
+    args: { target_organization_id: string; target_location_id: string | null },
+  ): PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>;
   (name: 'bootstrap_workspace'): PromiseLike<{
     data: unknown[] | null;
     error: { message: string } | null;
@@ -141,6 +145,25 @@ export async function loadTenantContexts(
     onboardingRpc(supabase)('get_my_tenant_context'),
   );
   return z.array(tenantContextRowSchema).parse(rows).map(mapTenantContext);
+}
+
+/**
+ * The complete context for one selected location, or null when the caller may not use it.
+ *
+ * Null is the important case: it means the selection was authorized when it was stored and is not
+ * now, so the caller has to re-resolve rather than continue with identifiers that have gone stale.
+ */
+export async function loadWorkspaceContext(
+  supabase: AvenlyoSupabaseClient,
+  organizationId: string,
+  locationId: string | null,
+): Promise<TenantContext | null> {
+  const { data, error } = await onboardingRpc(supabase)('get_my_workspace_context', {
+    target_location_id: locationId,
+    target_organization_id: organizationId,
+  });
+  if (error || !data || data.length === 0) return null;
+  return mapTenantContext(data[0]);
 }
 
 export async function ensureWorkspaceContext(

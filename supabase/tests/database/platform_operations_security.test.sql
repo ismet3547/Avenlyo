@@ -16,11 +16,11 @@ $$;
 -- Schema compatibility contract.
 select extensions.is(
   (select schema_version from public.platform_schema_contract),
-  14,
-  'the deployed schema advertises the Phase 14 compatibility version'
+  15,
+  'the deployed schema advertises the current compatibility version'
 );
 select extensions.ok((select pg_temp.error_matches($sql$
-  insert into public.platform_schema_contract (id, schema_version) values (false, 15)
+  insert into public.platform_schema_contract (id, schema_version) values (false, 16)
 $sql$, '23514', 'platform_schema_contract_id_check')), 'the schema contract is a singleton by construction');
 select extensions.is(
   (select count(*)::integer from public.platform_schema_contract),
@@ -110,7 +110,7 @@ set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select schema_version from public.platform_readiness_probe()),
-  14,
+  15,
   'the readiness probe reports the deployed schema version'
 );
 select extensions.ok(
