@@ -29,6 +29,70 @@ export interface TenantContextRow {
   onboarding_completed_at: string | null;
 }
 
+/** Roles an invitation may grant. Owner is deliberately absent: ownership transfer is not an
+ * invitation side effect. */
+export type InvitationRole = 'admin' | 'member';
+
+/** Derived from timestamps rather than a stored status column, so the two cannot disagree. */
+export type InvitationState = 'pending' | 'accepted' | 'revoked' | 'expired';
+
+export interface OrganizationInvitationRow {
+  invitation_id: string | null;
+  /** Returned exactly once, at creation. Never present in any read model. */
+  invitation_token: string | null;
+  email_normalized: string;
+  role: InvitationRole;
+  expires_at: string | null;
+  outcome: 'created' | 'already_member';
+}
+
+export interface InvitationAcceptanceRow {
+  organization_id: string | null;
+  organization_name: string | null;
+  membership_role: InvitationRole | null;
+  outcome:
+    | 'accepted'
+    | 'already_accepted'
+    | 'expired'
+    | 'invalid'
+    | 'invalid_scope'
+    | 'revoked'
+    | 'wrong_account';
+}
+
+export interface TeamMutationRow {
+  outcome: string;
+}
+
+/** One row per team member or invitation. The discriminator keeps a single bounded read. */
+export interface OrganizationTeamRow {
+  record_kind: 'invitation' | 'member';
+  record_id: string;
+  member_user_id: string | null;
+  display_name: string | null;
+  email: string | null;
+  role: MemberRole;
+  is_active: boolean;
+  joined_at: string;
+  expires_at: string | null;
+  invitation_state: InvitationState | null;
+  location_ids: string[];
+  location_names: string[];
+  /** Live human work this member is holding. A count only, never conversation content. */
+  active_work_count: number;
+}
+
+export interface WorkspaceContextRow {
+  organization_id: string;
+  organization_name: string;
+  membership_id: string;
+  membership_role: MemberRole;
+  location_id: string | null;
+  location_name: string | null;
+  onboarding_status: OnboardingStatus | null;
+  onboarding_step: OnboardingStep | null;
+}
+
 export interface KnowledgeImportRow {
   import_id: string;
   status: string;
@@ -690,6 +754,10 @@ export interface Database {
     Tables: EmptyRecord;
     Views: EmptyRecord;
     Functions: {
+      accept_my_organization_invitation: {
+        Args: { target_token: string };
+        Returns: InvitationAcceptanceRow[];
+      };
       advance_onboarding_website: {
         Args: EmptyRecord;
         Returns: OnboardingStep;
@@ -701,6 +769,43 @@ export interface Database {
       complete_onboarding: {
         Args: EmptyRecord;
         Returns: string;
+      };
+      create_my_organization_invitation: {
+        Args: {
+          target_organization_id: string;
+          target_email: string;
+          target_role: InvitationRole;
+          target_location_ids?: string[];
+        };
+        Returns: OrganizationInvitationRow[];
+      };
+      get_my_organization_team: {
+        Args: { target_organization_id: string };
+        Returns: OrganizationTeamRow[];
+      };
+      get_my_workspace_contexts: {
+        Args: EmptyRecord;
+        Returns: WorkspaceContextRow[];
+      };
+      get_my_workspace_context: {
+        Args: { target_organization_id: string; target_location_id: string | null };
+        Returns: TenantContextRow[];
+      };
+      revoke_my_organization_invitation: {
+        Args: { target_invitation_id: string };
+        Returns: TeamMutationRow[];
+      };
+      revoke_my_organization_member: {
+        Args: { target_membership_id: string };
+        Returns: TeamMutationRow[];
+      };
+      update_my_organization_member_access: {
+        Args: {
+          target_membership_id: string;
+          target_role: InvitationRole;
+          target_location_ids?: string[];
+        };
+        Returns: TeamMutationRow[];
       };
       get_my_tenant_context: {
         Args: EmptyRecord;
@@ -1224,7 +1329,10 @@ export interface Database {
         };
         Returns: WebChatWidgetConfigurationRow[];
       };
-      platform_readiness_probe: { Args: Record<string, never>; Returns: PlatformReadinessProbeRow[] };
+      platform_readiness_probe: {
+        Args: Record<string, never>;
+        Returns: PlatformReadinessProbeRow[];
+      };
       get_platform_runtime_status: {
         Args: Record<string, never>;
         Returns: PlatformRuntimeStatusRow[];

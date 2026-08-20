@@ -231,7 +231,7 @@ client hammering that provider on every load-balancer check. Provider execution 
 durable queues and is read through `ops:status`, not through a health check.
 
 **Schema compatibility.** The database advertises a version through `platform_schema_contract`, and
-the application requires at least version 14. Readiness fails when the deployed schema is older than
+the application requires at least version 15. Readiness fails when the deployed schema is older than
 the running build needs, and deliberately accepts a newer additive schema so an application rollback
 can still serve.
 
@@ -535,12 +535,51 @@ Industry → Business → Location and hours → Website preview → Review → 
 ```
 
 Only the three IDs exported by `@avenlyo/industries` are accepted. Website import is intentionally
-a preview only, and the dashboard contains empty states rather than fabricated data. The current
-MVP automatically selects the tenant when a user belongs to exactly one organization; a future
-organization switcher is outside Phase 1.
+a preview only, and the dashboard contains empty states rather than fabricated data. A user who
+belongs to exactly one workspace is still taken straight there; someone with several chooses one
+explicitly (see Team access below).
 
 GitHub Actions runs the full application validation on pull requests to `main`. A separate database
 security job starts Supabase, resets all migrations from scratch, and executes the pgTAP suites.
+
+## Team access and workspace selection (Phase 15)
+
+An owner invites staff from **Settings → Team & access**. Avenlyo creates a secure link and shows it
+once; nothing is emailed from the product, and the same durable link would work unchanged if a later
+phase adds delivery.
+
+```text
+Owner creates invitation → copies link → invited person signs in or signs up
+→ invitation accepted, bound to their email → membership and location scope applied atomically
+```
+
+**The link is a credential.** The token is 32 random bytes generated in the database, and only its
+SHA-256 digest is stored, so a database disclosure yields no working links. It expires after seven
+days, and it is bound to one normalized email address: a leaked link is useless to anyone who cannot
+authenticate as the invited identity. Inviting the same address again revokes the previous link in
+the same transaction, so two live links for one person never coexist. A lost link is replaced by
+reissuing, never recovered — no read model can return it.
+
+**Roles are unchanged.** Owner, admin, member. An owner may invite and manage admins and members; an
+admin may invite and manage members only, because an admin inviting another admin is self-escalation
+by proxy. Nobody is managed into or out of the owner role: ownership transfer is a deliberate future
+workflow, and until it exists every organization keeps at least one owner by database constraint.
+
+**Removing access is soft and immediate.** `action_logs`, `handoffs`, and appointment intents all
+carry foreign keys to the membership row, so deleting it would erase who actually did that work. The
+row stays and is marked revoked; location assignments are cleared. Every authorization helper counts
+active membership only, so the next request is refused — no sign-out, no token refresh. Nothing is
+auto-resolved and the AI is never resumed: work the person was holding stays assigned to them until
+an owner or admin uses **Release** in the Inbox and another teammate **Claims** it.
+
+**Selection is a preference, never authority.** The chosen workspace lives in an HttpOnly cookie that
+holds only a context key — no role, because a role can change. Every request revalidates the
+selection against current membership, so a revoked membership or an unassigned location simply stops
+matching and the user re-resolves. A single-workspace account never sees a selector.
+
+Team mutations go through narrow authenticated RPCs. Direct client insert, update, and delete on
+`organization_members` and `organization_member_locations` were withdrawn in this phase, so the
+permission matrix is enforced by PostgreSQL rather than by which button the page renders.
 
 ## Billing foundation (Phase 12)
 

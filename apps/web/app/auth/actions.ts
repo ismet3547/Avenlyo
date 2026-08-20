@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
 import { getSafeAuthError } from '@/lib/auth/errors';
+import { authLinkWithNext, safeNextDestination } from '@/lib/auth/next-destination';
 import type { FormActionState } from '@/lib/forms/state';
 import { env } from '@/lib/supabase/config';
 import { createServerSupabaseClient } from '@/lib/supabase/server';
@@ -13,6 +14,16 @@ const credentialsSchema = z.object({
   email: z.string().trim().email('Enter a valid email address.'),
   password: z.string().min(8, 'Password must be at least eight characters.'),
 });
+
+/**
+ * Where to send the user once authenticated. Never trusted as given: an unsafe value is dropped
+ * rather than corrected, so a crafted link cannot bounce a freshly signed-in user off-origin.
+ */
+function continuationFrom(formData: FormData): string {
+  const requested = formData.get('next');
+  const safe = safeNextDestination(typeof requested === 'string' ? requested : null);
+  return safe ? `/auth/continue?next=${encodeURIComponent(safe)}` : '/auth/continue';
+}
 
 const signUpSchema = credentialsSchema
   .extend({ confirmPassword: z.string() })
@@ -63,7 +74,8 @@ export async function signInAction(
     return { status: 'error', message: getSafeAuthError(error.code) };
   }
 
-  redirect('/onboarding');
+  // The continuation resolver decides where this account belongs; sign-in does not guess.
+  redirect(continuationFrom(formData));
 }
 
 export async function signUpAction(
@@ -86,10 +98,17 @@ export async function signUpAction(
   }
 
   const origin = await getApplicationOrigin();
+  const requestedNext = formData.get('next');
+  // Confirmation happens in a later request, possibly from a mail client, so the destination has to
+  // survive in the callback URL. It is validated here and again when the callback runs.
+  const callbackPath = authLinkWithNext(
+    '/auth/callback',
+    typeof requestedNext === 'string' ? requestedNext : null,
+  );
   const { data, error } = await supabase.auth.signUp({
     email: result.data.email,
     password: result.data.password,
-    options: { emailRedirectTo: `${origin}/auth/callback` },
+    options: { emailRedirectTo: `${origin}${callbackPath}` },
   });
 
   if (error) {
@@ -97,7 +116,7 @@ export async function signUpAction(
   }
 
   if (data.session) {
-    redirect('/onboarding');
+    redirect(continuationFrom(formData));
   }
 
   return {

@@ -30,12 +30,15 @@ const navigation: ReadonlyArray<{ href: string; icon: LucideIcon; label: string 
 
 interface DashboardNavigationProps {
   attentionCount?: number;
+  /** True only when this account can actually reach more than one workspace. */
+  canSwitchWorkspace?: boolean;
   locationName: string | null;
   organizationName: string;
 }
 
 export function DashboardNavigation({
   attentionCount = 0,
+  canSwitchWorkspace = false,
   locationName,
   organizationName,
 }: DashboardNavigationProps) {
@@ -51,6 +54,17 @@ export function DashboardNavigation({
         </Link>
         <p className="mt-5 truncate text-sm font-semibold text-ink">{organizationName}</p>
         <p className="truncate text-xs text-muted-foreground">{locationName ?? 'Workspace'}</p>
+        {/* Shown only when there is genuinely somewhere else to go. A single-workspace account
+            gets no extra chrome. */}
+        {canSwitchWorkspace ? (
+          <Link
+            className="mt-2 inline-flex text-xs font-semibold text-primary hover:underline"
+            data-testid="workspace-switcher"
+            href="/workspace/select"
+          >
+            Switch workspace
+          </Link>
+        ) : null}
       </div>
       <nav aria-label="Dashboard" className="mt-8 space-y-1">
         {navigation.map(({ href, icon: Icon, label }) => (
