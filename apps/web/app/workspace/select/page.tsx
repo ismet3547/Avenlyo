@@ -2,7 +2,11 @@ import { redirect } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
-import { workspaceOptionKey } from '@/lib/workspace/selection';
+import {
+  actionableWorkspaces,
+  workspaceOptionKey,
+  type WorkspaceOption,
+} from '@/lib/workspace/selection';
 import { loadWorkspaceOptions } from '@/lib/workspace/service';
 
 import { selectWorkspaceAction } from './actions';
@@ -24,15 +28,15 @@ export default async function WorkspaceSelectPage({ searchParams }: SelectPagePr
   }
 
   const { error } = await searchParams;
-  const options = (await loadWorkspaceOptions(auth.supabase)).filter(
-    (option) => option.onboardingStatus === 'completed',
-  );
+  // Every context the user can actually go to, which includes a workspace they own and have not
+  // finished setting up. Listing only completed ones left that workspace unreachable.
+  const options = actionableWorkspaces(await loadWorkspaceOptions(auth.supabase));
 
   if (options.length === 0) {
     redirect('/auth/continue');
   }
 
-  const byOrganization = new Map<string, typeof options>();
+  const byOrganization = new Map<string, WorkspaceOption[]>();
   for (const option of options) {
     const existing = byOrganization.get(option.organizationId) ?? [];
     existing.push(option);
@@ -76,7 +80,13 @@ export default async function WorkspaceSelectPage({ searchParams }: SelectPagePr
                     <form action={selectWorkspaceAction}>
                       <input name="workspaceKey" type="hidden" value={workspaceOptionKey(option)} />
                       <Button className="w-full justify-between" type="submit" variant="outline">
-                        <span>{option.locationName ?? 'Workspace'}</span>
+                        {/* An unfinished workspace is named by what is left to do, not by a
+                            location that may not mean anything yet. */}
+                        <span>
+                          {option.onboardingStatus === 'completed'
+                            ? (option.locationName ?? 'Workspace')
+                            : 'Finish setup'}
+                        </span>
                         <span aria-hidden>→</span>
                       </Button>
                     </form>

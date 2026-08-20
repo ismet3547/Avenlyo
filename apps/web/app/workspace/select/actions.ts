@@ -30,5 +30,8 @@ export async function selectWorkspaceAction(formData: FormData): Promise<never> 
   }
 
   await writeWorkspaceSelection(selection);
-  redirect('/dashboard');
+  // The continuation resolver decides where this context belongs: a finished workspace goes to the
+  // dashboard, one still in setup goes to its persisted onboarding step. Redirecting straight to
+  // /dashboard would push an unfinished workspace into a surface that assumes it is finished.
+  redirect('/auth/continue');
 }

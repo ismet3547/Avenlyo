@@ -210,10 +210,12 @@ const acceptanceRowSchema = z.object({
   outcome: z.enum([
     'accepted',
     'already_accepted',
+    'already_member',
     'expired',
     'invalid',
     'invalid_scope',
     'revoked',
+    'verified_email_required',
     'wrong_account',
   ]),
 });

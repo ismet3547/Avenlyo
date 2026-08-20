@@ -5,10 +5,12 @@ import { invitationMessage, type InvitationOutcome } from './invitation-messages
 const OUTCOMES: readonly InvitationOutcome[] = [
   'accepted',
   'already_accepted',
+  'already_member',
   'expired',
   'invalid',
   'invalid_scope',
   'revoked',
+  'verified_email_required',
   'wrong_account',
 ];
 
@@ -25,18 +27,29 @@ describe('invitation messages', () => {
     }
   });
 
-  it('treats acceptance and replay as success and everything else as an error', () => {
-    expect(invitationMessage('accepted').tone).toBe('success');
-    expect(invitationMessage('already_accepted').tone).toBe('success');
+  it('treats every outcome that means "you have access" as success', () => {
+    // already_member is a success: the person has access, and presenting an invitation must never
+    // change the role or locations they already hold.
+    for (const outcome of ['accepted', 'already_accepted', 'already_member'] as const) {
+      expect(invitationMessage(outcome).tone).toBe('success');
+    }
     for (const outcome of [
       'expired',
       'invalid',
       'invalid_scope',
       'revoked',
+      'verified_email_required',
       'wrong_account',
     ] as const) {
       expect(invitationMessage(outcome).tone).toBe('error');
     }
+  });
+
+  it('tells an unconfirmed account what to do without naming the invitation', () => {
+    const message = invitationMessage('verified_email_required');
+    expect(message.body).toContain('Confirm your email');
+    // Still says nothing about who was invited or which workspace is involved.
+    expect(`${message.title} ${message.body}`).not.toMatch(/@/);
   });
 
   it('never reveals who was invited or which workspace is involved', () => {

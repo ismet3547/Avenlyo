@@ -28,6 +28,13 @@ const MESSAGES: Readonly<Record<InvitationOutcome, InvitationMessage>> = {
     title: 'Already accepted',
     tone: 'success',
   },
+  // Not a failure: the person already has access, and presenting an invitation must never change
+  // the role or locations they already hold.
+  already_member: {
+    body: 'You already have access to this workspace. Continue to your workspace.',
+    title: 'Already a member',
+    tone: 'success',
+  },
   expired: {
     body: 'This invitation link has expired. Ask the person who invited you to send a new one.',
     title: 'Invitation expired',
@@ -48,6 +55,12 @@ const MESSAGES: Readonly<Record<InvitationOutcome, InvitationMessage>> = {
   revoked: {
     body: 'This invitation was withdrawn. Ask the person who invited you to send a new one.',
     title: 'Invitation withdrawn',
+    tone: 'error',
+  },
+  // The account exists but has not proved it owns the address, so its identity is unproven.
+  verified_email_required: {
+    body: 'Confirm your email address first, then open this invitation link again.',
+    title: 'Email confirmation required',
     tone: 'error',
   },
   // Says nothing about which address was invited.

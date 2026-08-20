@@ -21,7 +21,11 @@ export async function AcceptInvitation({ token }: { readonly token: string }) {
   try {
     const result = await acceptInvitation(auth.supabase, token);
     outcome = invitationMessage(result.outcome);
-    accepted = result.outcome === 'accepted' || result.outcome === 'already_accepted';
+    // Every outcome that means "you have access" continues the same way.
+    accepted =
+      result.outcome === 'accepted' ||
+      result.outcome === 'already_accepted' ||
+      result.outcome === 'already_member';
   } catch {
     // A raw PostgreSQL or Supabase message would leak schema detail to a bearer-token holder.
     outcome = invitationMessage('invalid');

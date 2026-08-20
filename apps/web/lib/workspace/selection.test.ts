@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   findSelectedOption,
   hasMultipleWorkspaces,
+  isActionableWorkspace,
   parseWorkspaceSelection,
   resolveWorkspace,
   workspaceOptionKey,
@@ -108,7 +109,7 @@ describe('workspace resolution', () => {
     expect(resolution).toEqual({ kind: 'resolved', option: remaining });
   });
 
-  it('offers a switcher only when more than one usable context exists', () => {
+  it('offers a switcher only when there is another actionable context', () => {
     expect(hasMultipleWorkspaces([option()])).toBe(false);
     expect(
       hasMultipleWorkspaces([
@@ -116,9 +117,17 @@ describe('workspace resolution', () => {
         option({ locationId: LOCATION_TWO, locationName: 'South' }),
       ]),
     ).toBe(true);
-    expect(hasMultipleWorkspaces([option(), option({ onboardingStatus: 'in_progress' })])).toBe(
-      false,
-    );
+    // An unfinished workspace the user owns is somewhere they can go, so it counts.
+    expect(
+      hasMultipleWorkspaces([option(), option({ onboardingStatus: 'in_progress', role: 'owner' })]),
+    ).toBe(true);
+    // An unfinished organization somebody was invited into is not, and cannot exist anyway.
+    expect(
+      hasMultipleWorkspaces([
+        option(),
+        option({ onboardingStatus: 'in_progress', role: 'member' }),
+      ]),
+    ).toBe(false);
   });
 });
 
@@ -150,5 +159,82 @@ describe('selection keys', () => {
     const assigned = option({ role: 'member' });
     const forged = parseWorkspaceSelection(`${ORG_A}:${LOCATION_TWO}`);
     expect(findSelectedOption([assigned], forged)).toBeNull();
+  });
+});
+
+describe('an unfinished workspace stays reachable', () => {
+  const completed = option({
+    organizationId: ORG_B,
+    organizationName: 'Org B',
+    role: 'member',
+  });
+  const inProgressOwner = option({
+    locationName: 'Main location',
+    onboardingStatus: 'in_progress',
+    onboardingStep: 'business',
+    organizationName: 'Org A',
+    role: 'owner',
+  });
+
+  it('offers both when one workspace is finished and another is still being set up', () => {
+    // The case that previously stranded a user: they could work in the finished workspace but had
+    // no route back to the one they own and had not finished.
+    const resolution = resolveWorkspace([completed, inProgressOwner], null);
+
+    expect(resolution.kind).toBe('select');
+    if (resolution.kind !== 'select') return;
+    expect(resolution.options).toHaveLength(2);
+    expect(resolution.options.map((entry) => entry.organizationName).sort()).toEqual([
+      'Org A',
+      'Org B',
+    ]);
+  });
+
+  it('routes a selected finished workspace to the dashboard', () => {
+    const resolution = resolveWorkspace([completed, inProgressOwner], {
+      locationId: completed.locationId,
+      organizationId: ORG_B,
+    });
+    expect(resolution).toEqual({ kind: 'resolved', option: completed });
+  });
+
+  it('routes a selected unfinished workspace to its persisted onboarding step', () => {
+    // Never into a dashboard, which assumes a finished workspace.
+    const resolution = resolveWorkspace([completed, inProgressOwner], {
+      locationId: inProgressOwner.locationId,
+      organizationId: ORG_A,
+    });
+    expect(resolution).toEqual({ kind: 'onboarding', option: inProgressOwner });
+    if (resolution.kind !== 'onboarding') return;
+    expect(resolution.option.onboardingStep).toBe('business');
+  });
+
+  it('shows the switcher while working in the finished workspace', () => {
+    // Counting only completed contexts hid the switcher and made the unfinished one unreachable.
+    expect(hasMultipleWorkspaces([completed, inProgressOwner])).toBe(true);
+  });
+
+  it('treats a lone unfinished owner workspace as the destination, with no selector', () => {
+    expect(resolveWorkspace([inProgressOwner], null)).toEqual({
+      kind: 'onboarding',
+      option: inProgressOwner,
+    });
+    expect(hasMultipleWorkspaces([inProgressOwner])).toBe(false);
+  });
+
+  it('does not treat an invited role in an unfinished organization as actionable', () => {
+    // Invitations are refused before onboarding completes, so this should not exist; if it somehow
+    // does, it is not a place anyone can work.
+    const invitedIntoIncomplete = option({
+      onboardingStatus: 'in_progress',
+      onboardingStep: 'location',
+      organizationId: ORG_B,
+      role: 'member',
+    });
+    expect(isActionableWorkspace(invitedIntoIncomplete)).toBe(false);
+    expect(resolveWorkspace([completed, invitedIntoIncomplete], null)).toEqual({
+      kind: 'resolved',
+      option: completed,
+    });
   });
 });

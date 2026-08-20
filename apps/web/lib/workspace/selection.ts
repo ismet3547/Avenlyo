@@ -93,6 +93,27 @@ export function findSelectedOption(
 }
 
 /**
+ * Whether a context is somewhere the user can actually go right now.
+ *
+ * A completed workspace is obviously actionable. So is a workspace the user owns and has not
+ * finished setting up: finishing it is real work with a real destination. Treating only completed
+ * contexts as actionable stranded exactly that case — someone who owns an unfinished workspace and
+ * was also invited to a finished one could work in the second but had no route back to the first.
+ *
+ * An invited admin or member in an incomplete organization is not actionable and cannot exist
+ * anyway, because invitations are refused before onboarding completes.
+ */
+export function isActionableWorkspace(option: WorkspaceOption): boolean {
+  return option.onboardingStatus === 'completed' || option.role === 'owner';
+}
+
+export function actionableWorkspaces(
+  options: readonly WorkspaceOption[],
+): readonly WorkspaceOption[] {
+  return options.filter(isActionableWorkspace);
+}
+
+/**
  * The one place that decides where an authenticated user goes.
  *
  * A stale selection is never followed. If the stored context is no longer in the caller's authorized
@@ -109,30 +130,32 @@ export function resolveWorkspace(
 
   const selected = findSelectedOption(options, selection);
   if (selected) {
+    // A selected workspace that is still being set up goes to its persisted onboarding step, never
+    // into a dashboard that assumes a finished workspace.
     return selected.onboardingStatus === 'completed'
       ? { kind: 'resolved', option: selected }
       : { kind: 'onboarding', option: selected };
   }
 
-  // An owner still finishing setup has exactly one place to be, and sending them to a selector
-  // instead of their next onboarding step would be a dead end.
-  const incomplete = options.filter((option) => option.onboardingStatus !== 'completed');
-  const usable = options.filter((option) => option.onboardingStatus === 'completed');
+  const actionable = actionableWorkspaces(options);
 
-  if (usable.length === 1 && incomplete.length === 0) {
-    const only = usable[0];
-    return only ? { kind: 'resolved', option: only } : { kind: 'none' };
+  if (actionable.length === 1) {
+    const only = actionable[0];
+    if (!only) return { kind: 'none' };
+    // One destination means no choice to make, whether it is finished or still in setup.
+    return only.onboardingStatus === 'completed'
+      ? { kind: 'resolved', option: only }
+      : { kind: 'onboarding', option: only };
   }
 
-  if (usable.length === 0) {
-    const first = incomplete[0];
-    return first ? { kind: 'onboarding', option: first } : { kind: 'none' };
+  if (actionable.length === 0) {
+    return { kind: 'none' };
   }
 
-  return { kind: 'select', options: usable };
+  return { kind: 'select', options: actionable };
 }
 
 /** True when the dashboard should offer a switcher at all. One context needs no clutter. */
 export function hasMultipleWorkspaces(options: readonly WorkspaceOption[]): boolean {
-  return options.filter((option) => option.onboardingStatus === 'completed').length > 1;
+  return actionableWorkspaces(options).length > 1;
 }

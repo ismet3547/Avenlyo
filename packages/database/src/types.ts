@@ -53,10 +53,14 @@ export interface InvitationAcceptanceRow {
   outcome:
     | 'accepted'
     | 'already_accepted'
+    /** The caller is already an active member; acceptance changes nothing. */
+    | 'already_member'
     | 'expired'
     | 'invalid'
     | 'invalid_scope'
     | 'revoked'
+    /** The account has not confirmed its email address, so its identity is unproven. */
+    | 'verified_email_required'
     | 'wrong_account';
 }
 
