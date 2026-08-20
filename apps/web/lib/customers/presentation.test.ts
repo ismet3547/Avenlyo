@@ -59,10 +59,15 @@ describe('message author attribution', () => {
 describe('delivery truth', () => {
   it('presents each canonical state without softening it', () => {
     expect(deliveryLabel('queued')).toBe('Queued');
+    expect(deliveryLabel('submitting')).toBe('Sending');
+    // Accepted by the provider is not the same as sent, and the wording keeps them apart.
+    expect(deliveryLabel('submitted')).toBe('Submitted to carrier');
     expect(deliveryLabel('sent')).toBe('Sent');
     expect(deliveryLabel('delivered')).toBe('Delivered');
     expect(deliveryLabel('failed')).toBe('Failed');
     expect(deliveryLabel('undelivered')).toBe('Undelivered');
+    // A deliberate non-send, usually consent. Not a failure.
+    expect(deliveryLabel('suppressed')).toBe('Not sent');
   });
 
   it('keeps an unknown delivery visibly ambiguous', () => {
@@ -81,14 +86,17 @@ describe('delivery truth', () => {
   });
 
   it('always carries words, so state is never conveyed by colour alone', () => {
+    // The full canonical set after Phase 7 transport hardening.
     for (const status of [
       'queued',
-      'sending',
+      'submitting',
+      'submitted',
       'sent',
       'delivered',
       'failed',
       'undelivered',
       'unknown',
+      'suppressed',
     ]) {
       expect(deliveryLabel(status)?.length).toBeGreaterThan(0);
     }

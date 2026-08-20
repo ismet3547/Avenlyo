@@ -927,7 +927,7 @@ begin
     from public.message_deliveries as record
     where record.organization_id = message.organization_id
       and record.message_id = message.id
-    order by record.status_rank desc, record.updated_at desc
+    order by record.updated_at desc
     limit 1
   ) as delivery on true
   where message.organization_id = organization

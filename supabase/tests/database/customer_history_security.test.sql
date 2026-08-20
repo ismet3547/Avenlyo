@@ -149,11 +149,11 @@ insert into public.messages
 
 -- Durable delivery truth, including the deliberately ambiguous state.
 insert into public.message_deliveries
-  (organization_id, location_id, message_id, provider, status, status_rank, provider_message_id) values
+  (organization_id, location_id, message_id, provider, status, provider_message_id) values
   ('c2000000-0000-4000-8000-000000000001', 'c3000000-0000-4000-8000-00000000000a',
-   'c8000000-0000-4000-8000-000000000002', 'twilio', 'delivered', 4, 'SM_fixture_delivered'),
+   'c8000000-0000-4000-8000-000000000002', 'twilio', 'delivered', 'SM_fixture_delivered'),
   ('c2000000-0000-4000-8000-000000000001', 'c3000000-0000-4000-8000-00000000000a',
-   'c8000000-0000-4000-8000-000000000003', 'twilio', 'unknown', 1, 'SM_fixture_unknown');
+   'c8000000-0000-4000-8000-000000000003', 'twilio', 'unknown', 'SM_fixture_unknown');
 
 -- Calls, appointments, and leads split across both locations for the same person.
 insert into public.calls

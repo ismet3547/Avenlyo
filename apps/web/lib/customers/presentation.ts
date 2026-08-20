@@ -104,8 +104,12 @@ const DELIVERY_LABELS: Readonly<Record<string, string>> = {
   delivered: 'Delivered',
   failed: 'Failed',
   queued: 'Queued',
-  sending: 'Sending',
+  // "Submitted" means the provider accepted the request, which is not the same as sent.
+  submitted: 'Submitted to carrier',
+  submitting: 'Sending',
   sent: 'Sent',
+  // Suppressed is a deliberate non-send, usually consent. It is not a failure.
+  suppressed: 'Not sent',
   undelivered: 'Undelivered',
   unknown: 'Delivery unconfirmed',
 };
@@ -123,6 +127,8 @@ export function deliveryTone(status: string | null | undefined): DeliveryTone {
     case 'delivered':
     case 'sent':
       return 'success';
+    case 'suppressed':
+      return 'warning';
     case 'failed':
     case 'undelivered':
       return 'failed';
