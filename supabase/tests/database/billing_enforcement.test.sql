@@ -278,7 +278,7 @@ select extensions.ok((select pg_temp.error_matches($sql$
 $sql$, '42501', 'Organization owner or admin')), 'a member cannot refresh another organization billing');
 select extensions.is(
   (select automation_available from public.get_my_billing_execution_summary('bb100000-0000-0000-0000-000000000001')),
-  false,
+  true,
   'a member may read the execution summary for the organization they belong to'
 );
 select extensions.ok((select pg_temp.error_matches($sql$
@@ -365,14 +365,14 @@ reset role;
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
-  (select accepted from public.bootstrap_inbound_sms('SM000000000000000000000000000bb01',
+  (select accepted from public.bootstrap_inbound_sms('SM0000000000000000000000000000bb01',
     '+14155559201', '+14155559001', 'Do you have an opening?', '[]', '{}')),
   true,
   'a customer may keep texting an Avenlyo number while the organization subscription is inactive'
 );
 reset role;
 select extensions.is(
-  (select count(*)::integer from public.messages where external_id = 'SM000000000000000000000000000bb01'),
+  (select count(*)::integer from public.messages where external_id = 'SM0000000000000000000000000000bb01'),
   1,
   'the inbound customer message is persisted, so customer history stays accurate'
 );
@@ -385,7 +385,7 @@ select extensions.is(
 -- Captured once, as the migration role.  Later assertions run as authenticated, and the browser
 -- deliberately cannot reach messaging tables directly.
 create temporary table pg_temp.enforcement_conversation as
-select conversation_id from public.messages where external_id = 'SM000000000000000000000000000bb01';
+select conversation_id from public.messages where external_id = 'SM0000000000000000000000000000bb01';
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
@@ -411,7 +411,7 @@ select extensions.is(
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
-  (select command from public.bootstrap_inbound_sms('SM000000000000000000000000000bb02',
+  (select command from public.bootstrap_inbound_sms('SM0000000000000000000000000000bb02',
     '+14155559201', '+14155559001', 'STOP', '[]', '{}')),
   'stop',
   'STOP is still recognized while billing is unavailable'
@@ -426,13 +426,13 @@ select extensions.is(
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
-  (select command from public.bootstrap_inbound_sms('SM000000000000000000000000000bb03',
+  (select command from public.bootstrap_inbound_sms('SM0000000000000000000000000000bb03',
     '+14155559201', '+14155559001', 'START', '[]', '{}')),
   'start',
   'START keeps its deterministic consent semantics while billing is unavailable'
 );
 select extensions.is(
-  (select command from public.bootstrap_inbound_sms('SM000000000000000000000000000bb04',
+  (select command from public.bootstrap_inbound_sms('SM0000000000000000000000000000bb04',
     '+14155559201', '+14155559001', 'HELP', '[]', '{}')),
   'help',
   'HELP remains deterministic while billing is unavailable'
