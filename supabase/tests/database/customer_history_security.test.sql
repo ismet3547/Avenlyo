@@ -774,8 +774,8 @@ select extensions.ok(
   'a browser client cannot delete a contact'
 );
 select extensions.ok(
-  has_table_privilege('authenticated', 'public.contacts', 'select'),
-  'contact reads survive, because tenant-scoped joins legitimately need them'
+  not has_table_privilege('authenticated', 'public.contacts', 'select'),
+  'the raw contact table is not a read path either, so the read models are the whole surface'
 );
 select extensions.ok(
   not exists (

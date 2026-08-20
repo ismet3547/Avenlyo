@@ -323,7 +323,7 @@ select extensions.is(
   'location-scoped member sees an authorized customer conversation at their assigned location'
 );
 select extensions.is(
-  (select count(*)::integer from public.conversations conversation join public.contacts contact on contact.organization_id = conversation.organization_id and contact.id = conversation.contact_id where conversation.organization_id = '91000000-0000-0000-0000-000000000001' and conversation.location_id = '91100000-0000-0000-0000-000000000001' and conversation.mode = 'customer' and contact.phone = '+14155550101'),
+  (select count(*)::integer from public.conversations conversation where conversation.organization_id = '91000000-0000-0000-0000-000000000001' and conversation.location_id = '91100000-0000-0000-0000-000000000001' and conversation.mode = 'customer' and conversation.contact_id is not null),
   1,
   'location-scoped member can directly read the authorized operational customer conversation'
 );
@@ -374,7 +374,11 @@ select extensions.lives_ok(
   'owner can take over a permitted conversation through the audited RPC'
 );
 select extensions.is(
-  (select conversation.ai_mode from public.conversations conversation join public.contacts contact on contact.organization_id = conversation.organization_id and contact.id = conversation.contact_id where contact.phone = '+14155550101'),
+  (select conversation.ai_mode from public.conversations conversation
+   where conversation.id = (
+     select queue.conversation_id from public.get_my_inbox_conversations('91100000-0000-0000-0000-000000000001') queue
+     where queue.contact_phone = '+14155550101' limit 1
+   )),
   'human',
   'takeover stops automatic replies for the conversation'
 );

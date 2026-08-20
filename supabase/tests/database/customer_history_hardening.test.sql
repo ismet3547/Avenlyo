@@ -181,16 +181,9 @@ reset role;
 -- ---------------------------------------------------------------------------
 -- Closing the browser read must not close the paths that create contacts. Both run inside
 -- SECURITY DEFINER functions, so they never needed the authenticated grant.
-set local role service_role;
-select set_config('request.jwt.claim.role', 'service_role', true);
-
-insert into public.phone_numbers (id, organization_id, location_id, phone_number, status)
+insert into public.phone_numbers (id, organization_id, location_id, phone_number, status, sms_enabled)
 values ('e5000000-0000-4000-8000-000000000002', 'e2000000-0000-4000-8000-000000000001',
-        'e3000000-0000-4000-8000-00000000000a', '+15405558002', 'active');
-reset role;
-
-update public.phone_numbers set sms_enabled = true
-where id = 'e5000000-0000-4000-8000-000000000002';
+        'e3000000-0000-4000-8000-00000000000a', '+15405558002', 'active', true);
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
