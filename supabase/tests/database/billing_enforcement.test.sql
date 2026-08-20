@@ -230,18 +230,25 @@ reset role;
 -- Multi-organization billing actions
 -- ============================================================================================
 
+-- What the database is asked here is deliberately narrow: may this user act on this organization
+-- at all.  It is not, and must not be, the selected-workspace authority.  The same administrator
+-- passes for both A and B below precisely because they legitimately administer both, which is why
+-- binding a billing mutation to the workspace actually selected happens one layer up, at the HTTP
+-- boundary, where the Next.js server signs the selection it resolved.  The database check remains
+-- the floor: no proof can make an unauthorized caller authorized here.
+
 set local role authenticated;
 select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', 'bb000000-0000-0000-0000-000000000001', true);
 select extensions.is(
   (select action from public.begin_my_billing_checkout('bb200000-0000-0000-0000-000000000001', 'core')),
   'create_checkout',
-  'a user who administers a second organization can start its checkout: the exactly-one assumption is gone'
+  'the database authorizes a second administered organization: it answers membership, not selection'
 );
 select extensions.is(
   (select action from public.begin_my_billing_checkout('bb100000-0000-0000-0000-000000000001', 'core')),
   'manage_existing_subscription',
-  'the same user acting on the organization they own gets that organization answer, not the other one'
+  'the database answers per organization asked, so the HTTP layer decides which one may be asked'
 );
 select extensions.ok((select pg_temp.error_matches($sql$
   select * from public.begin_my_billing_portal('bb200000-0000-0000-0000-000000000001')

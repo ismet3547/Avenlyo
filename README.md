@@ -55,6 +55,7 @@ Copy-Item apps/api/.env.example apps/api/.env
 | `NEXT_PUBLIC_SUPABASE_URL`      | Supabase project URL; required to enable web authentication.                |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous/publishable key; required with the URL.                  |
 | `AVENLYO_API_URL`               | Server-only Fastify URL used by the ezyVet management actions.              |
+| `AVENLYO_INTERNAL_BILLING_SECRET` | Server-only, at least 32 characters, shared with the API only. Authenticates which workspace a billing mutation acts on. Never `NEXT_PUBLIC_`. |
 | `OPENAI_API_KEY`                | Optional, server-only; required to publish knowledge or run Agent Test.     |
 | `OPENAI_EMBEDDING_MODEL`        | Optional server-only embedding model. Defaults to `text-embedding-3-small`. |
 | `OPENAI_AGENT_MODEL`            | Optional server-only Responses model. Defaults to `gpt-5.6`.                |
@@ -83,6 +84,7 @@ Copy-Item apps/api/.env.example apps/api/.env
 | `STRIPE_WEBHOOK_SECRET`             | Stripe Billing                       | Server-only Stripe endpoint signing secret (`whsec_...`).                 |
 | `STRIPE_PRODUCT_CORE`               | Stripe Billing                       | Allowlisted Stripe Product ID for source-controlled Avenlyo Core.         |
 | `STRIPE_PRICE_CORE_MONTHLY`         | Stripe Billing                       | Allowlisted Stripe monthly Price ID for Avenlyo Core.                     |
+| `AVENLYO_INTERNAL_BILLING_SECRET`   | Billing mutation routes              | Server-only, at least 32 characters; must equal the web server's value. Authenticates the selected workspace. |
 
 Never commit actual `.env` or `.env.local` files. The API validates its environment once at
 startup; the web app validates its public configuration once when loaded.
@@ -639,6 +641,29 @@ configuration is never rewritten — a paused Voice number still reads as enable
 Trusted service-role identity proves a worker may do backend work; it is never an entitlement
 bypass. The Phase 3 test agent, onboarding, knowledge configuration, and team management stay
 usable without a subscription.
+
+### Selected-workspace billing boundary
+
+A bearer token proves who is calling. It does not prove which workspace they are operating in, and
+membership cannot supply that either: a user who legitimately administers both Organization A and
+Organization B is an authorized admin of B no matter which one they are selected into. An API that
+accepted an organization from the request body and checked only membership would therefore let the
+same browser act on B while selected into A. The selected workspace is operational scope, not a UI
+preference.
+
+So the selection is signed where it is resolved. The Next.js Server Action runs the Phase 15
+resolver, which revalidates the stored selection against what the database says this user may reach
+right now, then signs the resulting organization together with the acting user and a timestamp using
+`AVENLYO_INTERNAL_BILLING_SECRET`. The API verifies that proof against the user identity it derived
+from the verified token — never anything in the body — and refuses any billing mutation whose
+organization does not match. A missing, expired, tampered, or wrong-organization proof is one fixed
+`BILLING_WORKSPACE_UNVERIFIED` refusal, before the database and before Stripe.
+
+The proof is authenticity, not authorization. The caller's own access token still travels to the
+database, which still proves owner or admin authority for itself, so a valid proof can never make an
+unauthorized user authorized — it only narrows which organization an already-authorized user may act
+on. The secret is server-only on both sides, never `NEXT_PUBLIC_`, never in a URL, and never in a
+response; billing mutations fail closed while it is absent.
 
 ## Inbound Voice (Phase 4)
 

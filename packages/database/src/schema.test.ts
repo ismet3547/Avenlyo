@@ -1777,9 +1777,7 @@ describe('phase 17 billing enforcement', () => {
     // Re-emitting a function to extend it silently reverts every later correction to it. The
     // Phase 14 hardening made instance liveness depend on heartbeat freshness rather than on the
     // absence of stopped_at, and that must survive being extended here.
-    expect(billingEnforcementMigration).toContain(
-      'public.runtime_heartbeat_stale_after()',
-    );
+    expect(billingEnforcementMigration).toContain('public.runtime_heartbeat_stale_after()');
     expect(billingEnforcementMigration).toContain("'stale_instances'::text");
   });
 
@@ -1804,7 +1802,7 @@ describe('phase 17 billing enforcement', () => {
       'an organization with no billing account entitles nothing',
       'service role is not an entitlement bypass',
       'a browser cannot mark itself active',
-      'a user who administers a second organization can start its checkout',
+      'the database authorizes a second administered organization: it answers membership, not selection',
       'a customer may keep texting an Avenlyo number while the organization subscription is inactive',
       'the opt-out is durably recorded regardless of billing state',
       'a human reply returns a stable bounded outcome instead of sending',

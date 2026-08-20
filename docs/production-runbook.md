@@ -241,6 +241,19 @@ rewrites a state that may already have crossed a provider boundary, and booking 
 reconciliation stay available so a prior attempt's outcome can still be discovered and persisted.
 Recovery may perform a read-only provider reconciliation; it never creates a replacement booking.
 
+**Billing mutations and the selected workspace.** Checkout, Portal, and Refresh are bound to the
+workspace the caller is selected into, not merely to an organization they administer. The Next.js
+server signs the resolved selection with `AVENLYO_INTERNAL_BILLING_SECRET` and the API verifies it
+against the identity in the bearer token. Both servers must hold the same value, it must be at
+least 32 characters, and it must never carry a `NEXT_PUBLIC_` name.
+
+If owners report that Subscribe, Manage billing, or Refresh status does nothing, check that secret
+on both sides first: a mismatch or an unset value fails these three routes closed with
+`BILLING_WORKSPACE_UNVERIFIED` and touches neither the database nor Stripe. Nothing else in the
+product depends on it — Voice, SMS, Web Chat, reminders, follow-ups, readiness, and every read
+surface are unaffected. Rotate it by setting the new value on both servers; in-flight proofs expire
+within two minutes, so a brief overlap is all a rolling deploy needs.
+
 **Operational reading.** `pnpm ops:status` reports a `billing_suppression` metric group — message
 jobs, SMS deliveries, reminders, follow-ups, and voice rejections. These are global aggregates with
 no tenant, location, customer, or message identity, and they are business-state diagnostics: a
