@@ -52,9 +52,12 @@ insert into auth.users (id, email) values
   ('a0000000-0000-4000-8000-000000000006', 'stranger@example.test'),
   ('a0000000-0000-4000-8000-000000000007', 'otherowner@example.test');
 
+-- The local stack mirrors auth.users into public.users, so this upserts rather than assuming
+-- the profile row does not exist yet. display_name is what the Inbox renders for an assignee.
 insert into public.users (id, email, display_name)
 select id, email, split_part(email, '@', 1) from auth.users
-where id::text like 'a0000000-0000-4000-8000-%';
+where id::text like 'a0000000-0000-4000-8000-%'
+on conflict (id) do update set email = excluded.email, display_name = excluded.display_name;
 
 insert into public.organizations (id, name, slug, created_by, primary_industry_id) values
   ('b0000000-0000-4000-8000-000000000001', 'Team Org', 'team-org',
