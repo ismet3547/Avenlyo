@@ -214,18 +214,20 @@ begin
       sum(candidate.calls)::integer as call_count,
       sum(candidate.appointments)::integer as appointment_count
     from (
-      select contact_id, min(created_at) as first_at, max(activity_at) as last_at,
+      select conversation.contact_id, min(conversation.created_at) as first_at,
+        max(conversation.activity_at) as last_at,
         count(*)::integer as conversations, 0 as calls, 0 as appointments
-      from production_conversations group by contact_id
+      from production_conversations as conversation group by conversation.contact_id
       union all
-      select contact_id, min(activity_at), max(activity_at), 0, count(*)::integer, 0
-      from production_calls group by contact_id
+      select call.contact_id, min(call.activity_at), max(call.activity_at), 0, count(*)::integer, 0
+      from production_calls as call group by call.contact_id
       union all
-      select contact_id, min(created_at), max(activity_at), 0, 0, count(*)::integer
-      from location_appointments group by contact_id
+      select appointment.contact_id, min(appointment.created_at), max(appointment.activity_at),
+        0, 0, count(*)::integer
+      from location_appointments as appointment group by appointment.contact_id
       union all
-      select contact_id, min(created_at), max(updated_at), 0, 0, 0
-      from location_leads group by contact_id
+      select lead.contact_id, min(lead.created_at), max(lead.updated_at), 0, 0, 0
+      from location_leads as lead group by lead.contact_id
     ) as candidate
     group by candidate.contact_id
   ),
