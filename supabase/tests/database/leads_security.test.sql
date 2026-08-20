@@ -23,6 +23,17 @@ insert into auth.users (id, email) values
 insert into public.organizations (id, name, slug, created_by, primary_industry_id) values
   ('e1000000-0000-0000-0000-000000000001', 'Lead A', 'lead-a', 'e0000000-0000-0000-0000-000000000001', 'veterinary'),
   ('e2000000-0000-0000-0000-000000000001', 'Lead B', 'lead-b', 'e0000000-0000-0000-0000-000000000003', 'auto-repair');
+
+-- Phase 17 makes production automation require an entitled Core subscription, so every
+-- organization these existing guarantees run against carries one.  Billing is a separate
+-- execution condition: nothing else about the fixtures below changes.
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state) values
+  ('e1000000-0000-0000-0000-000000000001', 'cus_entitled_e1000000', false, 'active'),
+  ('e2000000-0000-0000-0000-000000000001', 'cus_entitled_e2000000', false, 'active');
+insert into public.billing_subscriptions (organization_id, stripe_customer_id, stripe_subscription_id,
+  stripe_product_id, stripe_price_id, plan_key, is_supported, stripe_status, livemode) values
+  ('e1000000-0000-0000-0000-000000000001', 'cus_entitled_e1000000', 'sub_entitled_e1000000', 'prod_core', 'price_core', 'core', true, 'active', false),
+  ('e2000000-0000-0000-0000-000000000001', 'cus_entitled_e2000000', 'sub_entitled_e2000000', 'prod_core', 'price_core', 'core', true, 'active', false);
 insert into public.locations (id, organization_id, name, timezone) values
   ('e1100000-0000-0000-0000-000000000001', 'e1000000-0000-0000-0000-000000000001', 'Lead A one', 'UTC'),
   ('e1200000-0000-0000-0000-000000000001', 'e1000000-0000-0000-0000-000000000001', 'Lead A two', 'UTC'),

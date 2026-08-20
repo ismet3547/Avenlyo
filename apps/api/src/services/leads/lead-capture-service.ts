@@ -26,7 +26,7 @@ interface LeadCaptureRpc {
       | readonly {
           readonly missing_fields: readonly string[];
           readonly state:
-            'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+            'billing_unavailable' | 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
         }[]
       | null;
     readonly error: { readonly message: string } | null;
@@ -49,7 +49,7 @@ export class LeadCaptureService {
     readonly urgency: LeadUrgency;
   }): Promise<{
     readonly missingFields: readonly string[];
-    readonly state: 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+    readonly state: 'billing_unavailable' | 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
   }> {
     if (!input.inboundMessageId)
       throw new Error('Lead capture requires an inbound customer message.');

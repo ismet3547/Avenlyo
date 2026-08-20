@@ -21,6 +21,15 @@ insert into auth.users (id, email) values
   ('f0000000-0000-0000-0000-000000000002', 'followup-member@example.test');
 insert into public.organizations (id, name, slug, created_by, primary_industry_id) values
   ('f1000000-0000-0000-0000-000000000001', 'Follow-up Org', 'followup-org', 'f0000000-0000-0000-0000-000000000001', 'veterinary');
+
+-- Phase 17 makes production automation require an entitled Core subscription, so every
+-- organization these existing guarantees run against carries one.  Billing is a separate
+-- execution condition: nothing else about the fixtures below changes.
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state) values
+  ('f1000000-0000-0000-0000-000000000001', 'cus_entitled_f1000000', false, 'active');
+insert into public.billing_subscriptions (organization_id, stripe_customer_id, stripe_subscription_id,
+  stripe_product_id, stripe_price_id, plan_key, is_supported, stripe_status, livemode) values
+  ('f1000000-0000-0000-0000-000000000001', 'cus_entitled_f1000000', 'sub_entitled_f1000000', 'prod_core', 'price_core', 'core', true, 'active', false);
 insert into public.locations (id, organization_id, name, timezone, business_hours) values
   ('f1100000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000001', 'Main clinic', 'UTC', '{"monday":{"open":"00:00","close":"23:59","closed":false},"tuesday":{"open":"00:00","close":"23:59","closed":false},"wednesday":{"open":"00:00","close":"23:59","closed":false},"thursday":{"open":"00:00","close":"23:59","closed":false},"friday":{"open":"00:00","close":"23:59","closed":false},"saturday":{"open":"00:00","close":"23:59","closed":false},"sunday":{"open":"00:00","close":"23:59","closed":false}}'),
   ('f1200000-0000-0000-0000-000000000001', 'f1000000-0000-0000-0000-000000000001', 'Other clinic', 'UTC', '{"monday":{"open":"00:00","close":"23:59","closed":false},"tuesday":{"open":"00:00","close":"23:59","closed":false},"wednesday":{"open":"00:00","close":"23:59","closed":false},"thursday":{"open":"00:00","close":"23:59","closed":false},"friday":{"open":"00:00","close":"23:59","closed":false},"saturday":{"open":"00:00","close":"23:59","closed":false},"sunday":{"open":"00:00","close":"23:59","closed":false}}');

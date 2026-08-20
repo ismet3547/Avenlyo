@@ -70,7 +70,7 @@ export interface AgentToolServices {
       context: AgentExecutionContext,
     ): Promise<{
       readonly state:
-        'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+        'billing_unavailable' | 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
       readonly missingFields: readonly string[];
     }>;
   };

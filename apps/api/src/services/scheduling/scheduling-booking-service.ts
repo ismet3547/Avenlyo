@@ -223,6 +223,11 @@ export class SchedulingBookingService {
     if (claim.state === 'completed') return { outcome: 'booked' as const };
     if (claim.state === 'provider_state_unknown') return { outcome: 'unknown' as const };
     if (claim.state === 'configuration_changed') return { outcome: 'unavailable' as const };
+    // The claim refused to authorize a new provider write because appointments entitlement is
+    // unavailable. It is a plain unavailable, not an unknown: the intent never reached 'booking',
+    // no lease was taken, and nothing was sent to the scheduling provider. The model and the
+    // customer see the ordinary "cannot book right now" answer with no billing detail.
+    if (claim.state === 'billing_unavailable') return { outcome: 'unavailable' as const };
     try {
       if (claim.state === 'provider_success_pending_persistence')
         return this.persistProviderSuccess(input.bookingIntentId);

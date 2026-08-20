@@ -34,6 +34,15 @@ insert into auth.users (id, email) values ('a9000000-0000-0000-0000-000000000001
 insert into public.users (id, email) values ('a9000000-0000-0000-0000-000000000001', 'reminder-reliability-owner@example.test') on conflict (id) do nothing;
 insert into public.organizations (id, name, slug, created_by, primary_industry_id)
 values ('a9100000-0000-0000-0000-000000000001', 'Reminder Reliability', 'reminder-reliability', 'a9000000-0000-0000-0000-000000000001', 'veterinary');
+
+-- Phase 17 makes production automation require an entitled Core subscription, so every
+-- organization these existing guarantees run against carries one.  Billing is a separate
+-- execution condition: nothing else about the fixtures below changes.
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state) values
+  ('a9100000-0000-0000-0000-000000000001', 'cus_entitled_a9100000', false, 'active');
+insert into public.billing_subscriptions (organization_id, stripe_customer_id, stripe_subscription_id,
+  stripe_product_id, stripe_price_id, plan_key, is_supported, stripe_status, livemode) values
+  ('a9100000-0000-0000-0000-000000000001', 'cus_entitled_a9100000', 'sub_entitled_a9100000', 'prod_core', 'price_core', 'core', true, 'active', false);
 insert into public.locations (id, organization_id, name, timezone) values
   ('a9110000-0000-0000-0000-000000000001', 'a9100000-0000-0000-0000-000000000001', 'Reminder Reliability One', 'UTC'),
   ('a9120000-0000-0000-0000-000000000001', 'a9100000-0000-0000-0000-000000000001', 'Reminder Reliability Two', 'UTC');

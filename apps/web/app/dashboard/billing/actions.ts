@@ -6,6 +6,15 @@ import { redirect } from 'next/navigation';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
 
+/**
+ * Every billing action operates on the workspace the caller is currently selected into.
+ *
+ * The organization is resolved server-side by the trusted workspace resolver, which revalidates
+ * the stored selection against what the database says this user may reach on this request. It is
+ * never read from a form field, a query parameter, or a cookie-declared role, and the database
+ * proves owner/admin authority on it again before any billing row is touched. An owner of A who
+ * also administers B therefore acts on exactly the one they are looking at.
+ */
 async function callBillingApi(
   path: '/v1/billing/checkout' | '/v1/billing/portal' | '/v1/billing/refresh',
 ) {
@@ -17,8 +26,12 @@ async function callBillingApi(
   const { data } = await auth.supabase.auth.getSession();
   if (!data.session?.access_token) throw new Error('Authentication is required.');
   return fetch(`${process.env.AVENLYO_API_URL ?? 'http://localhost:4000'}${path}`, {
+    body: JSON.stringify({ organizationId: workspace.organizationId }),
     cache: 'no-store',
-    headers: { Authorization: `Bearer ${data.session.access_token}` },
+    headers: {
+      Authorization: `Bearer ${data.session.access_token}`,
+      'Content-Type': 'application/json',
+    },
     method: 'POST',
   });
 }

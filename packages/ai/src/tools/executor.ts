@@ -132,6 +132,12 @@ export class ControlledToolExecutor implements ToolExecutor {
           },
           context,
         );
+        // Lead capture entitlement is unavailable, so nothing was persisted. This is not a
+        // customer escalation: billing is an organization configuration issue, so no handoff is
+        // raised, and the model is told only that the tool is unavailable.
+        if (lead.state === 'billing_unavailable') {
+          return rejected(call, 'Lead capture is unavailable right now.');
+        }
         // The persisted result can be needs_clarification when facts conflict. Urgency review
         // remains a source-controlled policy decision and must not depend on that result state.
         const requiresHandoff = requiresUrgentLeadHandoff(this.industry, parsed.data.urgency);
