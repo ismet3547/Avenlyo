@@ -298,6 +298,51 @@ signal onto it first so de-duplication cannot downgrade urgent work, and resolve
 rows with a `superseded_by_migration` audit. No handoff row and no historical attribution is
 deleted.
 
+**One ownership lock.** Ownership mutations used to take row locks in two different orders: claim
+locked the handoff and then the conversation, while manual takeover and human reply locked the
+conversation and then the handoff, which permitted a real two-session deadlock. Every mutation that
+can touch active handoff assignment, `conversations.ai_mode`, or `conversations.assigned_user_id`
+now calls `lock_conversation_ownership` first, taking the same per-conversation advisory
+transaction lock — the key handoff coalescing already used — before any row lock. Handoff-id RPCs
+read identity without mutating, derive the trusted conversation, take the lock, re-read the
+authoritative rows under row locks, revalidate authorization and ownership, and only then mutate,
+so access that changed while a call waited cannot be exercised against stale authority. Deadlock
+retry is not control flow, and there is no in-memory coordination.
+
+**Creation pauses automation.** A durable active customer handoff now guarantees
+`conversations.ai_mode = 'human'` because `persist_active_conversation_handoff` owns that
+invariant for SMS, web chat, deterministic media handling, voice, and any future trusted caller —
+no caller has to remember it. Requesting a person never assigns one: `assigned_user_id` stays null
+until a claim or manual takeover. The same function also rejects an organization, location, and
+conversation that do not form one durable scope, even when no source message or call is bound.
+`conversation.human_takeover` is written by one central helper and only when it performs a real
+ai → human transition, so handoff replay, urgency escalation, coalescing onto an already-human
+conversation, and claim replay add nothing.
+
+**Human ownership beats queued automation.** The send boundary suppresses a queued AI SMS whenever
+a person owns the conversation — a manual takeover with no handoff, or a resolved episode whose
+conversation is still human-owned, both count, not just an assigned active handoff. Ownership is
+deliberately not inferred from `ai_mode` alone, so the intended handoff acknowledgement produced
+during the request-human turn still sends while the episode is unclaimed. Anything that already
+crossed the provider boundary keeps its provider truth untouched.
+
+**Recovery in the UI.** Operator actions are viewer-capability aware. A normal member sees a
+teammate's handoff read-only; an owner or admin is additionally offered Release and Resolve, and
+Resume AI on a human-owned conversation with no active episode. Recovery stays Release then Claim:
+an owner/admin is never offered Reply or Claim over the current owner, because neither would
+transfer ownership honestly. The server remains the authority; the UI only decides what to show.
+
+**Counting ownership once.** The `Mine` filter and the `Assigned to you` count share one SQL
+predicate, so a manual takeover with no handoff appears in both, a resolved handoff whose
+conversation is still assigned stays counted until release or resume, and a conversation is never
+counted twice.
+
+**Concurrency testing.** pgTAP runs one session in one transaction, so a true two-session lock-cycle
+test is not possible without adding fragile infrastructure, and none was added. Instead the protocol
+is explicit in code, and the suite asserts structurally that every ownership mutation calls
+`lock_conversation_ownership` and calls it before its first row lock, alongside exhaustive
+state-transition coverage.
+
 **Refresh.** The Inbox runs a bounded 12-second client refresh that pauses while the tab is hidden,
 and the navigation attention badge is a single tenant- and location-scoped read per dashboard
 render. Phase 13 adds no websocket platform, no staff notifications, and no billing enforcement.

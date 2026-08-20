@@ -1,4 +1,4 @@
-import type { HandoffQueueRow, InboxMessageRow } from '@avenlyo/database';
+import type { HandoffQueueRow, InboxMessageRow, MemberRole } from '@avenlyo/database';
 
 export const QUEUE_FILTERS = [
   { label: 'Urgent', value: 'urgent' },
@@ -130,19 +130,39 @@ const NO_ACTIONS: OperatorActions = {
   ownedByOther: false,
 };
 
-/** Only the transitions the server would actually accept are offered to the operator. */
-export function operatorActions(row: HandoffQueueRow): OperatorActions {
+export interface OperatorViewer {
+  readonly canOverrideOwnership: boolean;
+}
+
+/** Owner/admin recovery is a server rule; this only decides whether to offer it in the UI. */
+export function operatorViewerFromRole(role: MemberRole): OperatorViewer {
+  return { canOverrideOwnership: role === 'owner' || role === 'admin' };
+}
+
+/**
+ * Only the transitions the server would actually accept are offered to the operator. Recovery of a
+ * teammate's work is deliberately Release then Claim: an owner/admin never replies over the current
+ * owner and never claims on top of them, because neither would transfer ownership honestly.
+ */
+export function operatorActions(row: HandoffQueueRow, viewer: OperatorViewer): OperatorActions {
   const textCapable = row.channel_type === 'sms' || row.channel_type === 'web';
   if (row.handoff_is_active) {
     if (row.handoff_assigned_to_me) {
       return { ...NO_ACTIONS, canRelease: true, canReply: textCapable, canResolve: true };
     }
-    if (row.handoff_is_assigned) return { ...NO_ACTIONS, ownedByOther: true };
+    if (row.handoff_is_assigned) {
+      return {
+        ...NO_ACTIONS,
+        canRelease: viewer.canOverrideOwnership,
+        canResolve: viewer.canOverrideOwnership,
+        ownedByOther: true,
+      };
+    }
     return { ...NO_ACTIONS, canClaim: true };
   }
   if (row.ai_mode === 'human') {
     if (row.conversation_is_assigned && !row.conversation_assigned_to_me) {
-      return { ...NO_ACTIONS, ownedByOther: true };
+      return { ...NO_ACTIONS, canResumeAi: viewer.canOverrideOwnership, ownedByOther: true };
     }
     return { ...NO_ACTIONS, canReply: textCapable, canResumeAi: true };
   }

@@ -10,10 +10,13 @@ import {
   handoffQueuePriority,
   normalizeQueueFilter,
   operatorActions,
+  operatorViewerFromRole,
   sortQueueRows,
 } from './queue-view';
 
 const NOW = Date.parse('2026-08-19T12:00:00.000Z');
+const MEMBER = operatorViewerFromRole('member');
+const ADMIN = operatorViewerFromRole('admin');
 
 function minutesAgo(minutes: number): string {
   return new Date(NOW - minutes * 60_000).toISOString();
@@ -218,7 +221,7 @@ describe('customer waiting derivation', () => {
 
 describe('state-driven operator actions', () => {
   it('offers only Claim on an unassigned active handoff', () => {
-    const actions = operatorActions(activeHandoffRow('a', 'urgent', 5));
+    const actions = operatorActions(activeHandoffRow('a', 'urgent', 5), MEMBER);
 
     expect(actions.canClaim).toBe(true);
     expect(actions.canReply).toBe(false);
@@ -235,6 +238,7 @@ describe('state-driven operator actions', () => {
         handoff_is_assigned: true,
         handoff_status: 'acknowledged',
       }),
+      MEMBER,
     );
 
     expect(actions).toEqual({
@@ -256,6 +260,7 @@ describe('state-driven operator actions', () => {
         handoff_is_assigned: true,
         handoff_status: 'acknowledged',
       }),
+      MEMBER,
     );
 
     expect(actions.ownedByOther).toBe(true);
@@ -271,6 +276,7 @@ describe('state-driven operator actions', () => {
         handoff_assigned_to_me: true,
         handoff_is_assigned: true,
       }),
+      MEMBER,
     );
     const resolved = operatorActions(
       queueRow({
@@ -281,6 +287,7 @@ describe('state-driven operator actions', () => {
         handoff_is_active: false,
         handoff_status: 'resolved',
       }),
+      MEMBER,
     );
 
     expect(active.canResumeAi).toBe(false);
@@ -289,8 +296,8 @@ describe('state-driven operator actions', () => {
   });
 
   it('offers Take over only while automation still owns the conversation', () => {
-    expect(operatorActions(queueRow()).canTakeOver).toBe(true);
-    expect(operatorActions(queueRow({ ai_mode: 'human' })).canTakeOver).toBe(false);
+    expect(operatorActions(queueRow(), MEMBER).canTakeOver).toBe(true);
+    expect(operatorActions(queueRow({ ai_mode: 'human' }), MEMBER).canTakeOver).toBe(false);
   });
 
   it('does not offer a text reply on a voice conversation', () => {
@@ -302,6 +309,7 @@ describe('state-driven operator actions', () => {
         handoff_is_assigned: true,
         handoff_source: 'voice',
       }),
+      MEMBER,
     );
 
     expect(actions.canReply).toBe(false);
@@ -315,6 +323,7 @@ describe('state-driven operator actions', () => {
         conversation_assigned_name: 'Blake Operator',
         conversation_is_assigned: true,
       }),
+      MEMBER,
     );
 
     expect(actions).toEqual({
@@ -326,6 +335,68 @@ describe('state-driven operator actions', () => {
       canTakeOver: false,
       ownedByOther: true,
     });
+  });
+});
+
+describe('owner and admin ownership recovery', () => {
+  const teammateHandoff = activeHandoffRow('a0000000-0000-4000-8000-000000000000', 'normal', 5, {
+    handoff_assigned_name: 'Blake Operator',
+    handoff_assigned_to_me: false,
+    handoff_is_assigned: true,
+    handoff_status: 'acknowledged',
+  });
+  const teammateConversation = queueRow({
+    ai_mode: 'human',
+    conversation_assigned_name: 'Blake Operator',
+    conversation_is_assigned: true,
+  });
+
+  it('maps membership role to the recovery capability', () => {
+    expect(operatorViewerFromRole('owner').canOverrideOwnership).toBe(true);
+    expect(operatorViewerFromRole('admin').canOverrideOwnership).toBe(true);
+    expect(operatorViewerFromRole('member').canOverrideOwnership).toBe(false);
+  });
+
+  it('keeps a teammate handoff read-only for a normal member', () => {
+    const actions = operatorActions(teammateHandoff, MEMBER);
+
+    expect(actions.canRelease).toBe(false);
+    expect(actions.canResolve).toBe(false);
+    expect(actions.canReply).toBe(false);
+    expect(actions.canClaim).toBe(false);
+    expect(actions.ownedByOther).toBe(true);
+  });
+
+  it('offers release and resolve on a teammate handoff to an owner or admin', () => {
+    const actions = operatorActions(teammateHandoff, ADMIN);
+
+    expect(actions.canRelease).toBe(true);
+    expect(actions.canResolve).toBe(true);
+    expect(actions.ownedByOther).toBe(true);
+  });
+
+  it('never lets an owner or admin reply over or claim on top of the current owner', () => {
+    const actions = operatorActions(teammateHandoff, ADMIN);
+
+    expect(actions.canReply).toBe(false);
+    expect(actions.canClaim).toBe(false);
+    expect(actions.canTakeOver).toBe(false);
+  });
+
+  it('withholds Resume AI on a teammate conversation from a normal member', () => {
+    const actions = operatorActions(teammateConversation, MEMBER);
+
+    expect(actions.canResumeAi).toBe(false);
+    expect(actions.canReply).toBe(false);
+    expect(actions.ownedByOther).toBe(true);
+  });
+
+  it('offers Resume AI on a teammate conversation to an owner or admin', () => {
+    const actions = operatorActions(teammateConversation, ADMIN);
+
+    expect(actions.canResumeAi).toBe(true);
+    expect(actions.canReply).toBe(false);
+    expect(actions.ownedByOther).toBe(true);
   });
 });
 

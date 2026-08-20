@@ -20,6 +20,7 @@ import {
   formatWaitingDuration,
   normalizeQueueFilter,
   operatorActions,
+  operatorViewerFromRole,
   sortQueueRows,
 } from './queue-view';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
@@ -129,7 +130,9 @@ export default async function InboxPage({
       : [];
 
   const now = Date.now();
-  const actions = selected ? operatorActions(selected) : null;
+  // Owner/admin recovery is offered in the UI only because the server already permits it.
+  const viewer = operatorViewerFromRole(workspace.role);
+  const actions = selected ? operatorActions(selected, viewer) : null;
   const detailWaiting = selected
     ? deriveCustomerWaiting(messages)
     : { since: null, waiting: false };
@@ -397,7 +400,9 @@ export default async function InboxPage({
                     </p>
                     {actions.ownedByOther ? (
                       <p className="mt-2 text-xs font-semibold text-amber-900">
-                        Read only while a teammate owns this handoff.
+                        {viewer.canOverrideOwnership
+                          ? 'A teammate owns this handoff. Release it to hand the work back to the queue.'
+                          : 'Read only while a teammate owns this handoff.'}
                       </p>
                     ) : null}
                   </div>
@@ -407,7 +412,7 @@ export default async function InboxPage({
                   <p className="mt-4 rounded-xl border border-border bg-muted/50 p-3 text-xs font-semibold text-muted-foreground">
                     {assigneeLabel(false, selected.conversation_assigned_name) ??
                       'Owned by a teammate'}{' '}
-                    · read only
+                    · {viewer.canOverrideOwnership ? 'recovery available' : 'read only'}
                   </p>
                 ) : null}
               </header>
