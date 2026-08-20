@@ -760,8 +760,8 @@ begin
 
   -- The send boundary reads ownership, so it queues behind ownership mutations on the same
   -- conversation before it takes the delivery row lock. No lock cycle is possible.
-  select message.conversation_id into locked_conversation_id
-  from public.messages message where message.id = target_message_id;
+  select source_message.conversation_id into locked_conversation_id
+  from public.messages source_message where source_message.id = target_message_id;
   if locked_conversation_id is not null then
     perform public.lock_conversation_ownership(locked_conversation_id);
   end if;
