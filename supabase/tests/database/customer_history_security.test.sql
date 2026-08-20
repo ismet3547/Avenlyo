@@ -200,10 +200,18 @@ insert into public.handoffs
    'c1000000-0000-4000-8000-000000000004', now() - interval '90 minutes',
    now() - interval '90 minutes', now() - interval '95 minutes');
 
+insert into public.phone_numbers (id, organization_id, location_id, phone_number, status) values
+  ('cd000000-0000-4000-8000-00000000000a', 'c2000000-0000-4000-8000-000000000001',
+   'c3000000-0000-4000-8000-00000000000a', '+15405559001', 'active'),
+  ('cd000000-0000-4000-8000-00000000000b', 'c2000000-0000-4000-8000-000000000001',
+   'c3000000-0000-4000-8000-00000000000b', '+15405559002', 'active');
+
+-- Blake opted out at Location B. Robin has no opt-out anywhere, which is what the overview asserts.
 insert into public.messaging_contact_preferences
-  (organization_id, contact_id, channel_type, status, opted_out_at)
-values ('c2000000-0000-4000-8000-000000000001', 'c6000000-0000-4000-8000-000000000002',
-        'sms', 'opted_out', now() - interval '1 day');
+  (organization_id, location_id, contact_id, channel_type, status, opted_out_at, sender_phone_number_id)
+values ('c2000000-0000-4000-8000-000000000001', 'c3000000-0000-4000-8000-00000000000b',
+        'c6000000-0000-4000-8000-000000000002', 'sms', 'opted_out',
+        now() - interval '1 day', 'cd000000-0000-4000-8000-00000000000b');
 
 -- Foreign organization activity, to prove the boundary from the outside.
 insert into public.conversations

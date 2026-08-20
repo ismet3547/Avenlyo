@@ -249,15 +249,19 @@ begin
     latest_lead.status,
     -- Consent is read from its own durable record, never inferred from having a phone number or
     -- having replied once.
-    coalesce(preference.status = 'opted_out', false)
+    coalesce(preference.opted_out, false)
   from activity
   join public.contacts as contact
     on contact.organization_id = organization and contact.id = activity.contact_id
   left join latest_lead on latest_lead.contact_id = activity.contact_id
-  left join public.messaging_contact_preferences as preference
-    on preference.organization_id = organization
-    and preference.contact_id = activity.contact_id
-    and preference.channel_type = 'sms'
+  left join lateral (
+    select bool_or(preference.status = 'opted_out') as opted_out
+    from public.messaging_contact_preferences as preference
+    where preference.organization_id = organization
+      and preference.location_id = target_location_id
+      and preference.contact_id = activity.contact_id
+      and preference.channel_type = 'sms'
+  ) as preference on true
   where (
     normalized_search is null
     or contact.first_name ilike '%' || normalized_search || '%'
@@ -401,7 +405,7 @@ begin
     (select id from location_leads order by created_at desc, id desc limit 1),
     upcoming.id, upcoming.title, upcoming.status, upcoming.starts_at,
     recent.id, recent.title, recent.status, recent.starts_at,
-    coalesce(preference.status = 'opted_out', false),
+    coalesce(preference.opted_out, false),
     preference.opted_out_at,
     (select count(*)::integer from active_handoffs),
     -- Urgent wins when several are open, because that is the one an operator needs to see.
@@ -423,10 +427,15 @@ begin
     order by appointment.starts_at desc
     limit 1
   ) as recent on true
-  left join public.messaging_contact_preferences as preference
-    on preference.organization_id = organization
-    and preference.contact_id = contact.id
-    and preference.channel_type = 'sms'
+  left join lateral (
+    select bool_or(preference.status = 'opted_out') as opted_out,
+      max(preference.opted_out_at) as opted_out_at
+    from public.messaging_contact_preferences as preference
+    where preference.organization_id = organization
+      and preference.location_id = target_location_id
+      and preference.contact_id = contact.id
+      and preference.channel_type = 'sms'
+  ) as preference on true
   where contact.organization_id = organization and contact.id = target_contact_id;
 end;
 $$;

@@ -1519,6 +1519,9 @@ describe('customer history migration definition', () => {
 
   it('reads consent from its own record and never mutates anything', () => {
     expect(customerHistoryMigration).toContain('public.messaging_contact_preferences');
+    // Consent is a property of the messaging route, so the lookup is scoped to this location
+    // rather than showing one location a decision made at another.
+    expect(customerHistoryMigration).toContain('preference.location_id = target_location_id');
     // Read-only by construction: no write of any kind, and no action log for viewing history.
     expect(customerHistoryMigration).not.toMatch(/insert into public\.action_logs/);
     expect(customerHistoryMigration).not.toMatch(
