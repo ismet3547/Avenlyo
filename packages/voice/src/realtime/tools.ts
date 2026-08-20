@@ -266,7 +266,11 @@ export interface VoiceToolServices {
     ): Promise<{
       readonly missingFields: readonly string[];
       readonly state:
-        'billing_unavailable' | 'needs_human' | 'needs_more_information' | 'needs_clarification' | 'qualified';
+        | 'billing_unavailable'
+        | 'needs_human'
+        | 'needs_more_information'
+        | 'needs_clarification'
+        | 'qualified';
     }>;
   };
   requestHumanHelp(

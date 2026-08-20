@@ -29,6 +29,7 @@ function HostedChatWidgetContents() {
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
   const [body, setBody] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   useEffect(() => {
     const expectedOrigin = parentOrigin;
@@ -97,7 +98,14 @@ function HostedChatWidgetContents() {
       headers: { 'Content-Type': 'text/plain', 'X-Avenlyo-Chat-Token': token },
       method: 'POST',
     });
-    if (!response.ok) setError('Your message could not be sent.');
+    // The API answers a declined message with one generic rejection, and the visitor is shown one
+    // generic sentence. Nothing about payment, subscription, Stripe, or billing state reaches a
+    // customer of the business: from outside, a paused organization looks exactly like any other
+    // temporarily unavailable chat.
+    if (!response.ok) {
+      setUnavailable(true);
+      setError('Chat is temporarily unavailable.');
+    }
   }
 
   return (
@@ -120,27 +128,33 @@ function HostedChatWidgetContents() {
           </p>
         ))}
       </div>
-      {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
-      <form
-        className="mt-4 flex gap-2"
-        onSubmit={(event) => {
-          void send(event);
-        }}
-      >
-        <input
-          className="min-w-0 flex-1 rounded-md border border-border px-3 py-2"
-          maxLength={2000}
-          onChange={(event) => setBody(event.target.value)}
-          placeholder="Type a message"
-          value={body}
-        />
-        <button
-          className="rounded-md bg-primary px-3 py-2 font-semibold text-primary-foreground"
-          type="submit"
+      {error ? (
+        <p className="mt-2 text-xs text-muted-foreground" data-testid="chat-unavailable">
+          {error}
+        </p>
+      ) : null}
+      {unavailable ? null : (
+        <form
+          className="mt-4 flex gap-2"
+          onSubmit={(event) => {
+            void send(event);
+          }}
         >
-          Send
-        </button>
-      </form>
+          <input
+            className="min-w-0 flex-1 rounded-md border border-border px-3 py-2"
+            maxLength={2000}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="Type a message"
+            value={body}
+          />
+          <button
+            className="rounded-md bg-primary px-3 py-2 font-semibold text-primary-foreground"
+            type="submit"
+          >
+            Send
+          </button>
+        </form>
+      )}
     </main>
   );
 }

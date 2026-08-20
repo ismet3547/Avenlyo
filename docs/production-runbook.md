@@ -180,8 +180,73 @@ A signed Stripe event is durably accepted the moment it is verified, so a backlo
 `billing_events` means the worker has not processed events yet — not that events were lost.
 
 Inspect `pending`, `processing`, `failed`, and the oldest age. **Do not mark events processed to
-clear the queue**: that discards billing truth. Billing remains observational in the product, so a
-backlog never blocks Voice, SMS, Web Chat, appointments, or the Inbox.
+clear the queue**: that discards billing truth, and since Phase 17 it would also change what
+customer automation is permitted to do.
+
+A backlog delays a billing transition; it does not by itself mutate product state, and the runtime
+never pings Stripe to compensate. Whatever billing state was last durably applied is the one that
+controls new entitlement claims until the worker catches up. If a backlog is holding a customer in
+the wrong state, fix the worker: let reconciliation apply provider truth.
+
+## Billing entitlement enforcement (Phase 17)
+
+Billing is no longer observational. The last durably applied billing projection controls whether a
+new customer-automation claim may cross into paid provider or model work.
+
+**Entitlement matrix.** One organization, one billing account, one Avenlyo Core subscription. Every
+Core feature — voice, sms, web_chat, appointments, lead_capture, reminders, lead_followups —
+answers together:
+
+| Normalized billing state | New paid automation | Why                                                                   |
+| ------------------------ | ------------------- | --------------------------------------------------------------------- |
+| `active`                 | allowed             | supported Core subscription, provider status active or trialing       |
+| `attention`              | allowed             | `past_due` is a recoverable payment problem, not a suspension         |
+| `inactive`               | unavailable         | `unpaid`, `paused`, `incomplete`, or no current subscription          |
+| `review_required`        | unavailable         | unsupported product, unknown status, or several current subscriptions |
+| `unconfigured`           | unavailable         | no billing account                                                    |
+
+A supported Stripe trial is entitled. A subscription with `cancel_at_period_end` set stays entitled
+until the provider actually moves it to a terminal state. Ambiguous topology always fails closed;
+Avenlyo never guesses that one of several subscriptions is probably the right one.
+
+**Where it is decided.** At the durable execution claim, inside the same transaction that takes the
+claim: the message-job claim, the Twilio submission claim, the inbound voice bootstrap, the web-chat
+session and message RPCs, the booking provider-write claim, the reminder due-work claim, the
+follow-up claim, and automated lead capture. Nothing calls Stripe to answer it, so Stripe
+reachability is not part of health, readiness, or any per-message, per-call, or per-booking
+decision, and a Stripe outage cannot suspend otherwise-active customers.
+
+**What suspension blocks.** New AI replies, new outbound SMS, new inbound voice sessions, new web
+chat sessions and visitor messages, new automated bookings, new reminders, new follow-ups, new
+automated lead capture, and new staff replies to customers.
+
+**What keeps working.** Everything that is not new paid execution. Dashboard, Customers, Customer
+360, Conversations, transcripts, Leads, Appointments, Inbox and Team all stay readable. Claim,
+Release, Resolve and Take over stay available, so operators can still clean up existing work.
+Inbound SMS is still received and persisted, so customer history stays accurate. STOP always takes
+effect, and START and HELP keep their deterministic consent semantics — consent handling runs at
+ingestion, before entitlement is ever consulted. Owners and admins keep configuring Voice, Web Chat,
+SMS routing and scheduling integrations; a billing transition never rewrites a configuration flag.
+
+**Terminal suppression, and no replay.** Blocked work is not failed and not retried: it reaches a
+deliberate terminal disposition with the bounded reason `billing_unavailable` — a `suppressed`
+message job, a `suppressed` delivery, a `skipped` reminder or follow-up, a `rejected` voice webhook
+event. Suppressed work is never re-claimed, so reactivating billing releases no backlog: no old AI
+reply, reminder, follow-up, or staff message is sent afterwards. Reactivation permits new eligible
+work only.
+
+**Ambiguous provider truth is untouchable.** An `unknown` SMS delivery, a `provider_state_unknown`
+booking, and a `provider_success_pending_persistence` booking all keep their meaning. Billing never
+rewrites a state that may already have crossed a provider boundary, and booking recovery and
+reconciliation stay available so a prior attempt's outcome can still be discovered and persisted.
+Recovery may perform a read-only provider reconciliation; it never creates a replacement booking.
+
+**Operational reading.** `pnpm ops:status` reports a `billing_suppression` metric group — message
+jobs, SMS deliveries, reminders, follow-ups, and voice rejections. These are global aggregates with
+no tenant, location, customer, or message identity, and they are business-state diagnostics: a
+non-zero value is a correctly declined operation, not a process, database, or provider failure. A
+worker that suppresses unentitled work is healthy and reports a successful heartbeat. One
+organization's inactive subscription never makes `/health/ready` answer 503.
 
 ## Safe restart expectations
 

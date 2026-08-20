@@ -1,5 +1,7 @@
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
 
+import type { BillingExecutionSummary } from './execution';
+
 export interface BillingOverviewRow {
   readonly billing_attention: boolean;
   readonly billing_state: 'active' | 'attention' | 'inactive' | 'review_required' | 'unconfigured';
@@ -40,6 +42,28 @@ interface BillingRpcCaller {
     readonly data: readonly BillingUsageSummaryRow[] | null;
     readonly error: { readonly message: string } | null;
   }>;
+  (
+    name: 'get_my_billing_execution_summary',
+    args: { readonly target_organization_id: string },
+  ): PromiseLike<{
+    readonly data: readonly BillingExecutionSummary[] | null;
+    readonly error: { readonly message: string } | null;
+  }>;
+}
+
+/**
+ * The execution summary any authorized member may read. A failure returns null rather than
+ * throwing: a billing read must never be able to take the dashboard down, and "we do not know"
+ * is safely rendered as no banner at all.
+ */
+export async function loadBillingExecutionSummary(
+  client: AvenlyoSupabaseClient,
+  organizationId: string,
+): Promise<BillingExecutionSummary | null> {
+  const response = await billingRpc(client)('get_my_billing_execution_summary', {
+    target_organization_id: organizationId,
+  });
+  return response.error ? null : (response.data?.[0] ?? null);
 }
 
 /** Keeps the generated Supabase type boundary narrow while billing RPCs are additive. */

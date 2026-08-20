@@ -7,12 +7,12 @@ This repository contains the Phase 0 foundation, **Phase 1 authenticated onboard
 reviewed website knowledge ingestion**, **Phase 3 controlled AI agent testing**, **Phase 4 inbound
 voice control**, **Phase 5 veterinary ezyVet scheduling**, **Phase 6 Google Calendar scheduling**,
 **Phase 7 unified SMS and web-chat messaging**, **Phase 12 Stripe billing and prospective usage
-metering**, **Phase 13 human handoff operations and the operator inbox**, and **Phase 14 production health and
-operational observability**. It
+metering**, **Phase 13 human handoff operations and the operator inbox**, **Phase 14 production health and
+operational observability**, and **Phase 17 billing entitlement enforcement**. It
 provides the monorepo, application shells, multi-tenant database foundation, industry-pack
 contracts, Supabase authentication, resumable tenant onboarding, and a real tenant-aware dashboard
-empty state. It does not include pricing policy, hard runtime billing enforcement, live customer AI,
-or AI workflows.
+empty state. It does not include pricing tiers, usage quotas, or overage billing: Avenlyo Core is
+the only plan and its usage limits are deliberately unlimited.
 
 ## Prerequisites
 
@@ -218,8 +218,8 @@ booking model where its connector does not require that external identity.
 ## Production health and operations (Phase 14)
 
 Phase 14 makes the system operable. It adds no customer-facing behaviour: no new AI tool, lead rule,
-reminder policy, handoff workflow, scheduling policy, or billing enforcement. Billing stays
-observational and human ownership stays exactly as Phase 13 defined it.
+reminder policy, handoff workflow, or scheduling policy, and human ownership stays exactly as
+Phase 13 defined it. Billing enforcement arrived separately, in Phase 17.
 
 **Health endpoints.** `GET /health/live` proves the process is serving HTTP and touches nothing else;
 `GET /health` remains a liveness alias so existing probes keep their original meaning.
@@ -616,8 +616,29 @@ billing-address, raw-webhook, or signature data.
 The prospective immutable `billing_usage_events` ledger records answered Voice seconds, outbound
 SMS provider-submission attempts, normal SMS/Web AI text turns, and appointments created through a
 trusted Avenlyo booking intent. It does not backfill historical events or call Stripe Meter Events.
-Billing state is informational in Phase 12: no live customer runtime is hard-gated by subscription
-status, including `past_due`.
+Phase 12 recorded billing truth without acting on it. **Phase 17 enforces it**: a supported Core
+subscription is required before new production customer automation may consume a paid feature.
+
+## Billing entitlement enforcement (Phase 17)
+
+Runtime authorization comes from the last durably applied billing projection, never from a live
+Stripe call, a browser, a cookie, a React prop, or a model. `active` and `attention` are entitled —
+`past_due` is a recoverable payment problem, not a suspension, and a supported Stripe trial counts.
+`inactive`, `review_required`, and `unconfigured` are not; ambiguous or unsupported provider
+topology fails closed rather than being read optimistically.
+
+Entitlement is evaluated at the durable execution claim, so an operation already claimed while
+entitled finishes, and once entitlement is gone no new claim reaches OpenAI, Twilio, Google
+Calendar, or ezyVet. Blocked work terminates deliberately with the bounded reason
+`billing_unavailable` and is never replayed, so restoring billing releases no backlog of old
+replies, reminders, or follow-ups.
+
+Suspension is not a lockout. Customer history stays readable, inbound SMS is still received and
+persisted, STOP still takes effect, operators keep claiming and resolving conversations, and owner
+configuration is never rewritten — a paused Voice number still reads as enabled, because it is.
+Trusted service-role identity proves a worker may do backend work; it is never an entitlement
+bypass. The Phase 3 test agent, onboarding, knowledge configuration, and team management stay
+usable without a subscription.
 
 ## Inbound Voice (Phase 4)
 

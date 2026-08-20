@@ -195,6 +195,10 @@ export function conversationTitle(row: HandoffQueueRow): string {
 export const QUEUE_ACTION_MESSAGES: Readonly<Record<string, string>> = {
   already_claimed: 'Another teammate already owns this conversation.',
   already_resolved: 'This handoff was already resolved.',
+  // Phase 17. Deliberately says who can fix it and nothing else: no Stripe customer or
+  // subscription identifier, no provider error, and no billing state category reaches an
+  // operator who cannot act on it anyway.
+  billing_unavailable: 'Customer messaging is paused. Ask an owner or admin to review billing.',
   not_active: 'This handoff is no longer active.',
   owned_by_other: 'Another teammate owns this conversation.',
   reply_failed: 'That reply could not be sent. Check the conversation transport and try again.',

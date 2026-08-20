@@ -1,6 +1,8 @@
 import { Code2, Globe2, MessageSquareText } from 'lucide-react';
 
 import { saveWebChatWidgetAction } from './actions';
+import { isPausedByBilling } from '@/lib/billing/execution';
+import { loadBillingExecutionSummary } from '@/lib/billing/service';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { env } from '@/lib/supabase/config';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
@@ -24,6 +26,17 @@ export default async function WebChatPage() {
           })
         ).data?.[0]
       : null;
+  const billing =
+    canManage && auth
+      ? await loadBillingExecutionSummary(auth.supabase, workspace.organizationId)
+      : null;
+  // Owners keep configuring origins, welcome text, and the enabled flag while billing is paused:
+  // configuration is not execution. The enabled checkbox therefore still shows what the owner
+  // chose, and the pause is reported next to it instead of overwriting it.
+  const widgetPausedByBilling = isPausedByBilling({
+    configured: widget?.enabled ?? false,
+    entitled: billing?.web_chat ?? true,
+  });
   const appUrl = env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
   const apiUrl = env.NEXT_PUBLIC_AVENLYO_API_URL ?? 'http://localhost:4000';
   const snippet = widget
@@ -59,6 +72,15 @@ export default async function WebChatPage() {
         The first-party iframe uses an opaque, expiring visitor token and accepts messages only from
         the exact HTTPS origins configured here.
       </p>
+      {widgetPausedByBilling ? (
+        <p
+          className="mt-6 rounded-xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-900"
+          data-testid="web-chat-billing-paused"
+        >
+          Website chat is enabled and stays enabled. New visitor conversations are not being started
+          while billing is paused; they resume once billing is active again.
+        </p>
+      ) : null}
       <form
         action={saveWebChatWidgetAction}
         className="mt-8 rounded-2xl border border-border bg-white p-5 shadow-sm sm:p-6"
