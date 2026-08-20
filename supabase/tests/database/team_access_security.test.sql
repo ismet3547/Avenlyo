@@ -814,10 +814,9 @@ select extensions.ok(
   $sql$, '23503', 'organization_invitation_locations_location_fk')),
   'a foreign location cannot be attached to an invitation'
 );
-select extensions.is(
-  (select schema_version from public.platform_schema_contract),
-  15,
-  'the deployed schema advertises the Phase 15 compatibility version'
+select extensions.ok(
+  (select schema_version >= 15 from public.platform_schema_contract),
+  'the deployed schema is at least the version Phase 15 requires'
 );
 
 -- ---------------------------------------------------------------------------

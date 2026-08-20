@@ -88,38 +88,37 @@ insert into public.contacts (id, organization_id, location_id, first_name, last_
 
 -- Robin at Location A: two production conversations, one test conversation that must stay hidden.
 insert into public.conversations
-  (id, organization_id, location_id, contact_id, channel_id, mode, status, ai_mode, last_message_at, created_at) values
+  (id, organization_id, location_id, contact_id, channel_id, mode, status, ai_mode, last_message_at,
+   created_at, test_owner_user_id) values
   ('c7000000-0000-4000-8000-00000000000a', 'c2000000-0000-4000-8000-000000000001',
    'c3000000-0000-4000-8000-00000000000a', 'c6000000-0000-4000-8000-000000000001',
    'c5000000-0000-4000-8000-00000000000a', 'customer', 'open', 'human',
-   now() - interval '1 hour', now() - interval '2 days'),
+   now() - interval '1 hour', now() - interval '2 days', null),
   ('c7000000-0000-4000-8000-00000000000c', 'c2000000-0000-4000-8000-000000000001',
    'c3000000-0000-4000-8000-00000000000a', 'c6000000-0000-4000-8000-000000000001',
    'c5000000-0000-4000-8000-00000000000c', 'customer', 'closed', 'ai',
-   now() - interval '5 days', now() - interval '6 days'),
+   now() - interval '5 days', now() - interval '6 days', null),
   -- Robin at Location B.
   ('c7000000-0000-4000-8000-00000000000b', 'c2000000-0000-4000-8000-000000000001',
    'c3000000-0000-4000-8000-00000000000b', 'c6000000-0000-4000-8000-000000000001',
    'c5000000-0000-4000-8000-00000000000b', 'customer', 'open', 'ai',
-   now() - interval '2 hours', now() - interval '3 days'),
+   now() - interval '2 hours', now() - interval '3 days', null),
   -- A test-agent conversation at Location A. Synthetic activity is not customer history.
   ('c7000000-0000-4000-8000-00000000000d', 'c2000000-0000-4000-8000-000000000001',
    'c3000000-0000-4000-8000-00000000000a', 'c6000000-0000-4000-8000-000000000001',
    'c5000000-0000-4000-8000-00000000000a', 'test', 'open', 'ai',
-   now(), now()),
+   now(), now(), 'c1000000-0000-4000-8000-000000000001'),
   -- An anonymous web visitor at Location A: legitimate, with no customer identity.
   ('c7000000-0000-4000-8000-00000000000e', 'c2000000-0000-4000-8000-000000000001',
    'c3000000-0000-4000-8000-00000000000a', null,
    'c5000000-0000-4000-8000-00000000000c', 'customer', 'open', 'ai',
-   now() - interval '30 minutes', now() - interval '1 day'),
+   now() - interval '30 minutes', now() - interval '1 day', null),
   -- Blake, only at Location B.
   ('c7000000-0000-4000-8000-00000000000f', 'c2000000-0000-4000-8000-000000000001',
    'c3000000-0000-4000-8000-00000000000b', 'c6000000-0000-4000-8000-000000000002',
    'c5000000-0000-4000-8000-00000000000b', 'customer', 'open', 'ai',
-   now() - interval '4 hours', now() - interval '4 days');
+   now() - interval '4 hours', now() - interval '4 days', null);
 
-update public.conversations set test_owner_user_id = 'c1000000-0000-4000-8000-000000000001'
-where id = 'c7000000-0000-4000-8000-00000000000d';
 
 -- Transcript at Location A, covering every author type and a durable delivery outcome.
 insert into public.messages
@@ -815,10 +814,9 @@ select extensions.ok(
   ),
   'every customer history function pins an empty search path'
 );
-select extensions.is(
-  (select schema_version from public.platform_schema_contract),
-  16,
-  'the deployed schema advertises the Phase 16 compatibility version'
+select extensions.ok(
+  (select schema_version >= 16 from public.platform_schema_contract),
+  'the deployed schema is at least the version Phase 16 requires'
 );
 
 select * from extensions.finish();

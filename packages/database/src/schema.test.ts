@@ -1160,7 +1160,7 @@ describe('platform operations migration definition', () => {
 
   it('ships executable coverage for the platform boundary and aggregation', () => {
     for (const expected of [
-      'the deployed schema advertises the current compatibility version',
+      'the deployed schema is at least the version Phase 14 requires',
       'the trusted backend has no broad runtime instance write grant',
       'an authenticated caller cannot write runtime state directly',
       'every platform function pins an empty search path',
