@@ -1,6 +1,7 @@
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from 'node:http';
 import { connect as netConnect, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';
 
 import { CrawlPolicyError } from '../crawler/types';
 import { authorizeEgress, parseEgressAuthority, type EgressPolicyOptions } from './egress-policy';
@@ -76,13 +77,14 @@ export class EgressProxy {
   private readonly origins = new Set<string>();
   private readonly rejections: EgressRejection[] = [];
   private readonly server: Server;
-  private readonly sockets = new Set<Socket>();
+  private readonly sockets = new Set<Duplex>();
   private requests = 0;
 
   public constructor(private readonly options: EgressProxyOptions = {}) {
     this.limits = options.limits ?? defaultEgressProxyLimits;
     this.server = createServer((request, response) => {
-      void this.handleRequest(request, response.socket);
+      // A response with no socket has already lost its connection; there is nothing to relay onto.
+      if (response.socket) void this.handleRequest(request, response.socket);
     });
     this.server.on('connect', (request, socket, head) => {
       void this.handleConnect(request, socket, head);
@@ -105,7 +107,11 @@ export class EgressProxy {
   }
 
   public stats(): EgressProxyStats {
-    return { origins: this.origins.size, rejected: this.rejections.length, requests: this.requests };
+    return {
+      origins: this.origins.size,
+      rejected: this.rejections.length,
+      requests: this.requests,
+    };
   }
 
   public rejectionLog(): readonly EgressRejection[] {
@@ -118,7 +124,7 @@ export class EgressProxy {
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
 
-  private track(socket: Socket): void {
+  private track(socket: Duplex): void {
     this.sockets.add(socket);
     socket.once('close', () => this.sockets.delete(socket));
   }
@@ -146,7 +152,7 @@ export class EgressProxy {
 
   private async handleConnect(
     request: IncomingMessage,
-    clientSocket: Socket,
+    clientSocket: Duplex,
     head: Buffer,
   ): Promise<void> {
     const target = parseEgressAuthority(request.url ?? '', 443);
@@ -189,7 +195,7 @@ export class EgressProxy {
     });
   }
 
-  private async handleRequest(request: IncomingMessage, clientSocket: Socket): Promise<void> {
+  private async handleRequest(request: IncomingMessage, clientSocket: Duplex): Promise<void> {
     let requestUrl: URL;
     try {
       // A proxied plain-HTTP request carries an absolute URL. A relative one is a direct request
@@ -245,7 +251,9 @@ export class EgressProxy {
             )
             .concat('connection: close')
             .join('\r\n');
-          clientSocket.write(`HTTP/1.1 ${status} ${upstreamResponse.statusMessage ?? ''}\r\n${headers}\r\n\r\n`);
+          clientSocket.write(
+            `HTTP/1.1 ${status} ${upstreamResponse.statusMessage ?? ''}\r\n${headers}\r\n\r\n`,
+          );
           upstreamResponse.pipe(clientSocket);
         },
       );

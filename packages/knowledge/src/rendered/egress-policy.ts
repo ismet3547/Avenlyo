@@ -1,6 +1,11 @@
 import { isIP } from 'node:net';
 
-import { isPublicAddress, resolveHostname, type DnsResolver, type ResolvedAddress } from '../crawler/dns-policy';
+import {
+  isPublicAddress,
+  resolveHostname,
+  type DnsResolver,
+  type ResolvedAddress,
+} from '../crawler/dns-policy';
 import { CrawlPolicyError } from '../crawler/types';
 
 /**

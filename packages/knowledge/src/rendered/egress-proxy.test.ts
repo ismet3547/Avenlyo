@@ -46,10 +46,7 @@ async function startOrigin(handler?: (host: string | undefined) => void): Promis
 }
 
 /** Issues an absolute-form proxied HTTP request, the shape a browser sends to a proxy. */
-function proxiedGet(
-  proxyPort: number,
-  target: string,
-): Promise<{ status: number; body: string }> {
+function proxiedGet(proxyPort: number, target: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const request = httpRequest(
       {
@@ -134,14 +131,17 @@ describe('proxied HTTP requests', () => {
     await expect(proxiedGet(proxyPort, '/internal')).resolves.toMatchObject({ status: 400 });
   });
 
-  it.each(['https', 'ftp', 'file'])('refuses the %s scheme on the plain request path', async (scheme) => {
-    proxy = new EgressProxy({ isAddressAllowed: allowLoopback, resolve: openResolver });
-    const proxyPort = await proxy.listen();
+  it.each(['https', 'ftp', 'file'])(
+    'refuses the %s scheme on the plain request path',
+    async (scheme) => {
+      proxy = new EgressProxy({ isAddressAllowed: allowLoopback, resolve: openResolver });
+      const proxyPort = await proxy.listen();
 
-    await expect(proxiedGet(proxyPort, `${scheme}://fixture.test/x`)).resolves.toMatchObject({
-      status: 403,
-    });
-  });
+      await expect(proxiedGet(proxyPort, `${scheme}://fixture.test/x`)).resolves.toMatchObject({
+        status: 403,
+      });
+    },
+  );
 });
 
 describe('proxied CONNECT tunnels', () => {
@@ -219,16 +219,16 @@ describe('import-wide egress budgets', () => {
     });
     const proxyPort = await proxy.listen();
 
-    await expect(
-      proxiedGet(proxyPort, `http://first.test:${originPort}/`),
-    ).resolves.toMatchObject({ status: 200 });
+    await expect(proxiedGet(proxyPort, `http://first.test:${originPort}/`)).resolves.toMatchObject({
+      status: 200,
+    });
     // The same origin again is fine; a second distinct one is not.
     await expect(
       proxiedGet(proxyPort, `http://first.test:${originPort}/other`),
     ).resolves.toMatchObject({ status: 200 });
-    await expect(
-      proxiedGet(proxyPort, `http://second.test:${originPort}/`),
-    ).resolves.toMatchObject({ status: 403 });
+    await expect(proxiedGet(proxyPort, `http://second.test:${originPort}/`)).resolves.toMatchObject(
+      { status: 403 },
+    );
     expect(proxy.stats().origins).toBe(1);
   });
 
