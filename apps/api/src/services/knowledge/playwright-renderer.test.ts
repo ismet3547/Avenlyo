@@ -143,7 +143,11 @@ describe('rendered capability', () => {
     expect(path === undefined || typeof path === 'string').toBe(true);
   });
 
-  it('honours an explicitly configured executable path', () => {
-    expect(renderedCapabilityExecutablePath('/opt/chromium')).toBe('/opt/chromium');
+  it('reports no capability for a configured path that does not exist', () => {
+    // A path is not a browser. Reporting capability from the path alone made CI believe it could
+    // render and fail at launch instead of skipping.
+    expect(
+      renderedCapabilityExecutablePath('/opt/definitely-not-installed/chromium'),
+    ).toBeUndefined();
   });
 });

@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+
 import {
   CrawlPolicyError,
   EgressProxy,
@@ -41,7 +43,14 @@ export interface PlaywrightRendererOptions {
  * instead of discovering the gap halfway through one.
  */
 export function renderedCapabilityExecutablePath(explicit?: string): string | undefined {
-  if (explicit) return explicit;
+  const candidate = explicit ?? safeDefaultExecutablePath();
+  // `executablePath()` reports where a browser *would* live, whether or not one was installed, so
+  // the path alone is not capability. Checking the file is what makes a host without Chromium a
+  // deterministic "cannot render" answer instead of a launch failure discovered mid-import.
+  return candidate && existsSync(candidate) ? candidate : undefined;
+}
+
+function safeDefaultExecutablePath(): string | undefined {
   try {
     return chromium.executablePath();
   } catch {
