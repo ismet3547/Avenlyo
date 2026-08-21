@@ -355,6 +355,15 @@ grant execute on function
   public.recover_stale_knowledge_imports(integer)
   to service_role;
 
+-- The new worker reports its own heartbeat, so the component domain has to admit it. Readiness
+-- reads these rows, and a component that cannot be recorded would be a scheduler nobody can see.
+alter table public.runtime_component_heartbeats
+  drop constraint runtime_component_heartbeats_component_check,
+  add constraint runtime_component_heartbeats_component_check check (component in (
+    'message_processing', 'appointment_reminders', 'lead_followups', 'billing_events',
+    'knowledge_imports'
+  ));
+
 -- The Phase 18 application depends on the claim contract above.
 update public.platform_schema_contract
 set schema_version = 18, updated_at = now()
