@@ -93,7 +93,12 @@ export class EgressProxy {
     this.server.on('connection', (socket) => {
       this.track(socket);
       socket.setTimeout(this.limits.socketIdleMs, () => socket.destroy());
+      // Every accepted socket needs an error listener from the moment it exists. A peer that resets
+      // before a handler attaches its own would otherwise be an uncaught exception, and an uncaught
+      // socket error takes the whole worker process down.
+      socket.on('error', () => socket.destroy());
     });
+    this.server.on('clientError', (_error, socket) => socket.destroy());
   }
 
   /** Binds to loopback only, so nothing outside this machine can use the proxy as an open relay. */
@@ -172,6 +177,7 @@ export class EgressProxy {
       // Upstream sockets are tracked alongside client sockets so closing the proxy tears down both
       // halves of every tunnel. An untracked half keeps the peer alive past the end of the import.
       this.track(upstream);
+      upstream.on('error', () => upstream.destroy());
     } catch (error) {
       this.record(
         error instanceof CrawlPolicyError ? error.code : 'limit_exceeded',
@@ -254,11 +260,15 @@ export class EgressProxy {
           clientSocket.write(
             `HTTP/1.1 ${status} ${upstreamResponse.statusMessage ?? ''}\r\n${headers}\r\n\r\n`,
           );
+          // A peer that resets mid-body is ordinary; it must not become an uncaught exception.
+          upstreamResponse.on('error', () => clientSocket.destroy());
           upstreamResponse.pipe(clientSocket);
         },
       );
       upstream.once('error', () => clientSocket.destroy());
       upstream.once('timeout', () => upstream.destroy());
+      clientSocket.on('error', () => upstream.destroy());
+      request.on('error', () => upstream.destroy());
       request.pipe(upstream);
     } catch (error) {
       this.record(

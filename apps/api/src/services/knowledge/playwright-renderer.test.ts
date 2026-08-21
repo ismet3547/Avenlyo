@@ -34,7 +34,9 @@ afterEach(async () => {
     closing.closeAllConnections();
     await new Promise<void>((resolve) => closing.close(() => resolve()));
   }
-});
+  // Closing Chromium, the proxy, and the fixture is genuinely slow on a loaded machine, and the
+  // default hook budget is shorter than a browser shutdown.
+}, 60_000);
 
 /** Serves a shell whose only useful text is written by script, exactly like a client-rendered app. */
 async function startFixture(pages: Readonly<Record<string, string>>): Promise<number> {
