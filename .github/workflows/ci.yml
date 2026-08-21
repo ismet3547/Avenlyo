@@ -81,7 +81,7 @@ jobs:
       # playwright-core never downloads a browser, so the binary is provided explicitly here and
       # nowhere else. Ordinary installs and the application job stay free of a Chromium download.
       - name: Install Chromium
-        run: pnpm --filter @avenlyo/api exec playwright install --with-deps chromium
+        run: pnpm --filter @avenlyo/api exec playwright-core install --with-deps chromium
 
       - name: Require a usable Chromium
         run: pnpm --filter @avenlyo/api exec node --input-type=module -e "import { chromium } from 'playwright-core'; import { existsSync } from 'node:fs'; const path = chromium.executablePath(); if (!existsSync(path)) { console.error('Chromium is required for the rendered browser security suite.'); process.exit(1); } console.log('Chromium present.');"
