@@ -2,10 +2,8 @@
 
 import { useActionState } from 'react';
 
-import {
-  knowledgeInitialActionState,
-  updateKnowledgeDraftAction,
-} from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { updateKnowledgeDraftAction } from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { knowledgeInitialActionState } from '@/app/dashboard/ai-front-office/knowledge/action-state';
 import type { KnowledgeDraftDocument } from '@/lib/knowledge/types';
 
 export function DraftDocumentForm({

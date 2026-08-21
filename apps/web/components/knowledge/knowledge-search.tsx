@@ -2,10 +2,8 @@
 
 import { useActionState } from 'react';
 
-import {
-  knowledgeInitialActionState,
-  searchKnowledgeAction,
-} from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { searchKnowledgeAction } from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { knowledgeInitialActionState } from '@/app/dashboard/ai-front-office/knowledge/action-state';
 
 export function KnowledgeSearch({ disabled }: { disabled: boolean }) {
   const [state, action, isPending] = useActionState(

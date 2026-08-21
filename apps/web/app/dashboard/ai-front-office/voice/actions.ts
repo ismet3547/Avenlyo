@@ -7,14 +7,7 @@ import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
 import { saveVoiceConfiguration, VoiceConfigurationError } from '@/lib/voice/service';
 
-export interface VoiceConfigurationActionState {
-  readonly message?: string;
-  readonly status: 'error' | 'idle' | 'success';
-}
-
-export const initialVoiceConfigurationActionState: VoiceConfigurationActionState = {
-  status: 'idle',
-};
+import type { VoiceConfigurationActionState } from './action-state';
 
 const voiceSchema = z.enum([
   'alloy',

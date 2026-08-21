@@ -2,10 +2,8 @@
 
 import { useActionState } from 'react';
 
-import {
-  knowledgeInitialActionState,
-  publishKnowledgeImportAction,
-} from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { publishKnowledgeImportAction } from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { knowledgeInitialActionState } from '@/app/dashboard/ai-front-office/knowledge/action-state';
 
 export function PublishKnowledgeButton({
   importId,
