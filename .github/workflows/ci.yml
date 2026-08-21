@@ -89,12 +89,12 @@ jobs:
       # No public website, no DNS, no petrandevu.com: every fixture is served from loopback, the OS
       # sandbox stays enabled, and certificate errors are never ignored.
       - name: Rendered browser security suite
-        run: pnpm vitest run apps/api/src/services/knowledge packages/knowledge/src/rendered --reporter=verbose
+        run: pnpm vitest run --config vitest.chromium.config.ts --reporter=verbose
 
       # A skipped security test is a security test that did not run. The suite is required to
       # execute every case, so the guard fails the job if any were skipped.
       - name: Fail if any rendered security test was skipped
-        run: pnpm vitest run apps/api/src/services/knowledge --reporter=json --outputFile=rendered-report.json && node -e "const r=require('./rendered-report.json'); const skipped=r.testResults.flatMap(f=>f.assertionResults).filter(a=>a.status!=='passed'); if(skipped.length){console.error('Rendered security tests did not all run:', skipped.map(a=>a.title)); process.exit(1);} console.log('All', r.numTotalTests, 'rendered tests executed.');"
+        run: pnpm vitest run --config vitest.chromium.config.ts --reporter=json --outputFile=rendered-report.json && node -e "const r=require('./rendered-report.json'); const notRun=r.testResults.flatMap(f=>f.assertionResults).filter(a=>a.status!=='passed'); if(notRun.length||!r.numTotalTests){console.error('Rendered security tests did not all run:', notRun.map(a=>a.title)); process.exit(1);} console.log('All', r.numTotalTests, 'rendered tests executed.');"
 
   database-security:
     name: Database security tests

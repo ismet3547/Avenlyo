@@ -12,6 +12,10 @@ export default defineConfig({
     },
   },
   test: {
+    // The real-Chromium suite is deliberately excluded here and run by its own config in a
+    // dedicated CI job. Left in, it both skipped on hosts without a browser — which is a security
+    // test that did not run — and starved the rest of the suite on hosts with one.
+    exclude: ['**/node_modules/**', '**/*.chromium.test.ts'],
     include: ['apps/**/*.test.{ts,tsx}', 'packages/*/src/**/*.test.ts'],
     environment: 'node',
     coverage: {
