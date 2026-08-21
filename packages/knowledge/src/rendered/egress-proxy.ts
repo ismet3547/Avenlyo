@@ -33,6 +33,21 @@ export interface EgressProxyLimits {
   readonly socketIdleMs: number;
 }
 
+/**
+ * Headers that describe one hop of a connection rather than the response itself. A relay that
+ * copies them forward is describing framing it did not keep.
+ */
+const hopByHopHeaders: ReadonlySet<string> = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
 export const defaultEgressProxyLimits: EgressProxyLimits = {
   maxOrigins: 25,
   maxRequests: 400,
@@ -74,9 +89,8 @@ export class EgressProxy {
     });
     // A hostile page can open sockets it never uses; none of them may outlive the import.
     this.server.on('connection', (socket) => {
-      this.sockets.add(socket);
+      this.track(socket);
       socket.setTimeout(this.limits.socketIdleMs, () => socket.destroy());
-      socket.once('close', () => this.sockets.delete(socket));
     });
   }
 
@@ -102,6 +116,11 @@ export class EgressProxy {
     for (const socket of this.sockets) socket.destroy();
     this.sockets.clear();
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
+  }
+
+  private track(socket: Socket): void {
+    this.sockets.add(socket);
+    socket.once('close', () => this.sockets.delete(socket));
   }
 
   /**
@@ -144,6 +163,9 @@ export class EgressProxy {
         host: destination.addresses[0]!.address,
         port: destination.port,
       });
+      // Upstream sockets are tracked alongside client sockets so closing the proxy tears down both
+      // halves of every tunnel. An untracked half keeps the peer alive past the end of the import.
+      this.track(upstream);
     } catch (error) {
       this.record(
         error instanceof CrawlPolicyError ? error.code : 'limit_exceeded',
@@ -190,7 +212,10 @@ export class EgressProxy {
       const pinned = destination.addresses[0]!;
       const upstream = httpRequest(
         {
-          headers: { ...request.headers, host: request.headers.host ?? requestUrl.host },
+          // Host is taken from the URL policy validated, never from the client's own header. A
+          // client that sends a Host disagreeing with its request line is describing a different
+          // destination to the origin than the one that was authorised here.
+          headers: { ...request.headers, host: requestUrl.host },
           host: requestUrl.hostname,
           // The connection is pinned to the validated address while the request keeps the original
           // Host, exactly as the static fetcher does.
@@ -205,7 +230,12 @@ export class EgressProxy {
         },
         (upstreamResponse) => {
           const status = upstreamResponse.statusCode ?? 502;
+          // Node has already decoded any chunked framing into this stream, so the hop-by-hop
+          // headers that described the original framing must not be copied forward: relaying
+          // `transfer-encoding: chunked` alongside a decoded body produces bytes no client can
+          // parse. Connection close delimits the relayed response instead, which needs no framing.
           const headers = Object.entries(upstreamResponse.headers)
+            .filter(([key]) => !hopByHopHeaders.has(key.toLowerCase()))
             .flatMap(([key, value]) =>
               Array.isArray(value)
                 ? value.map((entry) => `${key}: ${entry}`)
@@ -213,6 +243,7 @@ export class EgressProxy {
                   ? []
                   : [`${key}: ${value}`],
             )
+            .concat('connection: close')
             .join('\r\n');
           clientSocket.write(`HTTP/1.1 ${status} ${upstreamResponse.statusMessage ?? ''}\r\n${headers}\r\n\r\n`);
           upstreamResponse.pipe(clientSocket);
