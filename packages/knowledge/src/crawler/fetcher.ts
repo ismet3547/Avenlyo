@@ -1,6 +1,7 @@
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
+import type { LookupFunction } from 'node:net';
 
 import { resolvePublicAddresses, type DnsResolver, type ResolvedAddress } from './dns-policy';
 import type { CrawlDownloadBudget } from './download-budget';
@@ -37,6 +38,33 @@ function headerValue(headers: IncomingHttpHeaders, name: string): string | undef
 function contentTypeIsHtml(headers: IncomingHttpHeaders): boolean {
   const value = headerValue(headers, 'content-type');
   return Boolean(value && /^(text\/html|application\/xhtml\+xml)(?:;|$)/i.test(value));
+}
+
+/**
+ * Pins Node's connection to one already validated DNS answer, without touching anything else about
+ * the request: the hostname stays intact, so Host, TLS SNI, and certificate verification all still
+ * use the original public hostname rather than the address the socket dials.
+ *
+ * The callback contract is the part that is easy to get wrong. Node hands the lookup an options
+ * object, and on modern connection paths it asks for `{ hints: 0, all: true }` because
+ * `autoSelectFamily` needs the full candidate list. When `all` is set the callback must answer with
+ * an array of `{ address, family }`; answering with the scalar `(address, family)` form leaves the
+ * array argument undefined and Node rejects the connection with `ERR_INVALID_IP_ADDRESS` before a
+ * socket is ever opened. Every HTTPS crawl of a real hostname failed that way on Node 22, which
+ * surfaced as a bounded `request_failed` and was indistinguishable from a site being unreachable.
+ *
+ * Only the shape of the answer changes. Exactly one address is offered — the one the DNS policy
+ * already validated as globally routable — so Node never learns any other candidate and cannot
+ * fall back to its own resolver.
+ */
+export function pinnedLookup(address: ResolvedAddress): LookupFunction {
+  return (_hostname, options, callback) => {
+    if (options.all === true) {
+      callback(null, [{ address: address.address, family: address.family }]);
+      return;
+    }
+    callback(null, address.address, address.family);
+  };
 }
 
 /**
@@ -84,8 +112,7 @@ export const nodePinnedTransport: PinnedTransport = {
             'user-agent': 'AvenlyoBot/0.1 (+https://avenlyo.com)',
             accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1',
           },
-          lookup: (_hostname, _options, callback) =>
-            callback(null, address.address, address.family),
+          lookup: pinnedLookup(address),
           rejectUnauthorized: true,
           servername: url.hostname,
           timeout: timeoutMs,
