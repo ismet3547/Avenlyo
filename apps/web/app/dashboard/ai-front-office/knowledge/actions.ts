@@ -15,15 +15,7 @@ import {
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
 
-import type { KnowledgeSearchMatch } from '@/lib/knowledge/types';
-
-export interface KnowledgeActionState {
-  readonly matches?: readonly KnowledgeSearchMatch[];
-  readonly message?: string;
-  readonly status: 'error' | 'idle' | 'success';
-}
-
-const initialState: KnowledgeActionState = { status: 'idle' };
+import type { KnowledgeActionState } from './action-state';
 
 function errorState(message: string): KnowledgeActionState {
   return { message, status: 'error' };
@@ -54,14 +46,17 @@ export async function startKnowledgeImportAction(
 
   const context = await getKnowledgeActionContext();
   if (!context) return errorState('Only organization owners and admins can import knowledge.');
+
+  // Only the import is inside the error boundary. `redirect` reports success by throwing a control
+  // signal, so leaving it in the try turned every successful import into a knowledge error and
+  // stranded the operator on the form with a message about a job that had actually run.
+  let importId: string;
   try {
-    const importId = await importWebsiteKnowledge(
+    importId = await importWebsiteKnowledge(
       context.supabase,
       parsed.data.rootUrl,
       context.workspace.locationId,
     );
-    revalidatePath('/dashboard/ai-front-office/knowledge');
-    redirect(`/dashboard/ai-front-office/knowledge/imports/${importId}`);
   } catch (error) {
     return errorState(
       error instanceof KnowledgeServiceError
@@ -69,6 +64,9 @@ export async function startKnowledgeImportAction(
         : 'Knowledge import could not be completed.',
     );
   }
+
+  revalidatePath('/dashboard/ai-front-office/knowledge');
+  redirect(`/dashboard/ai-front-office/knowledge/imports/${importId}`);
 }
 
 export async function updateKnowledgeDraftAction(
@@ -157,5 +155,3 @@ export async function searchKnowledgeAction(
     );
   }
 }
-
-export { initialState as knowledgeInitialActionState };

@@ -2,10 +2,8 @@
 
 import { useActionState } from 'react';
 
-import {
-  initialVoiceConfigurationActionState,
-  saveVoiceConfigurationAction,
-} from '@/app/dashboard/ai-front-office/voice/actions';
+import { saveVoiceConfigurationAction } from '@/app/dashboard/ai-front-office/voice/actions';
+import { initialVoiceConfigurationActionState } from '@/app/dashboard/ai-front-office/voice/action-state';
 import type { VoiceConfigurationView } from '@/lib/voice/types';
 
 const voices = [

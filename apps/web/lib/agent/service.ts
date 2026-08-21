@@ -11,14 +11,11 @@ import type { Json } from '@avenlyo/database';
 import { searchKnowledge } from '@/lib/knowledge/service';
 import { knowledgeServerEnv } from '@/lib/knowledge/config';
 import type { TenantContext } from '@/lib/onboarding/types';
+import { createRpcGuards, type RpcError } from '@/lib/supabase/rpc';
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
 
 import type { AgentTestTurn } from './types';
 import type { SubmissionDisposition } from './submission';
-
-interface RpcError {
-  message: string;
-}
 
 interface AgentRpcCaller {
   (
@@ -110,13 +107,10 @@ function agentRpc(client: AvenlyoSupabaseClient): AgentRpcCaller {
   return client.rpc.bind(client);
 }
 
-async function requireRpc<Result>(
-  request: PromiseLike<{ data: Result | null; error: RpcError | null }>,
-): Promise<Result> {
-  const { data, error } = await request;
-  if (error || data === null) throw new AgentTestServiceError();
-  return data;
-}
+// `complete_agent_test_turn`, `fail_agent_test_turn`, and `record_agent_test_knowledge_search` are
+// `returns void` in SQL, so PostgREST answers a success with null data. They go through
+// requireVoidRpc; everything that is contractually required to return rows keeps the strict guard.
+const { requireRpcData, requireVoidRpc } = createRpcGuards(() => new AgentTestServiceError());
 
 export class AgentTestServiceError extends Error {
   public constructor(
@@ -213,7 +207,7 @@ export async function createAgentTestConversation(
   if (!workspace.locationId) {
     throw new AgentTestServiceError('Choose a location before starting an Agent Test.');
   }
-  const rows = await requireRpc(
+  const rows = await requireRpcData(
     agentRpc(client)('create_agent_test_conversation', {
       target_location_id: workspace.locationId,
     }),
@@ -236,7 +230,7 @@ export async function runAgentTestTurn(
   }
 
   const model = knowledgeServerEnv.OPENAI_AGENT_MODEL;
-  const started = await requireRpc(
+  const started = await requireRpcData(
     agentRpc(client)('begin_agent_test_turn', {
       customer_message: userMessage,
       model_name: model,
@@ -252,7 +246,7 @@ export async function runAgentTestTurn(
       throw new AgentTestServiceError('This test conversation is already processing a message.');
     }
     const persisted = (
-      await requireRpc(
+      await requireRpcData(
         agentRpc(client)('get_agent_test_turn_result', { target_run_id: run.run_id }),
       )
     )[0];
@@ -264,7 +258,7 @@ export async function runAgentTestTurn(
     );
   }
   try {
-    const transcript = await requireRpc(
+    const transcript = await requireRpcData(
       agentRpc(client)('get_agent_test_conversation', { target_conversation_id: conversationId }),
     );
     const history = conversationHistory(transcript).slice(0, -1);
@@ -277,7 +271,7 @@ export async function runAgentTestTurn(
     };
     const tools = new ControlledToolExecutor(industry, {
       requestHumanHelp: async (input, trustedContext) => {
-        const handoffs = await requireRpc(
+        const handoffs = await requireRpcData(
           agentRpc(client)('request_agent_test_handoff', {
             handoff_reason: input.reason,
             handoff_urgency: input.urgency,
@@ -289,7 +283,7 @@ export async function runAgentTestTurn(
       },
       searchBusinessKnowledge: async (input, trustedContext) => {
         const matches = await searchKnowledge(client, input.query, trustedContext.locationId);
-        await requireRpc(
+        await requireVoidRpc(
           agentRpc(client)('record_agent_test_knowledge_search', {
             target_conversation_id: trustedContext.conversationId,
             tool_call_id: input.toolCallId,
@@ -329,7 +323,7 @@ export async function runAgentTestTurn(
       userMessage,
     });
 
-    await requireRpc(
+    await requireVoidRpc(
       agentRpc(client)('complete_agent_test_turn', {
         assistant_body: result.text,
         handoff_requested: result.handoffRequested,

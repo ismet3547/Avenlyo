@@ -2,10 +2,8 @@
 
 import { useActionState } from 'react';
 
-import {
-  knowledgeInitialActionState,
-  startKnowledgeImportAction,
-} from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { startKnowledgeImportAction } from '@/app/dashboard/ai-front-office/knowledge/actions';
+import { knowledgeInitialActionState } from '@/app/dashboard/ai-front-office/knowledge/action-state';
 
 export function ImportWebsiteForm({
   defaultUrl,

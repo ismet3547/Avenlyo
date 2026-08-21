@@ -11,14 +11,11 @@ import {
 } from '@avenlyo/knowledge';
 import { z } from 'zod';
 
+import { createRpcGuards, type RpcError } from '@/lib/supabase/rpc';
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
 
 import type { KnowledgeDraftDocument, KnowledgeOverview, KnowledgeSearchMatch } from './types';
 import { knowledgeServerEnv } from './config';
-
-interface RpcError {
-  message: string;
-}
 
 interface KnowledgeRpcCaller {
   (
@@ -142,13 +139,11 @@ export class KnowledgeServiceError extends Error {
   }
 }
 
-async function requireRpc<Result>(
-  request: PromiseLike<{ data: Result | null; error: RpcError | null }>,
-): Promise<Result> {
-  const { data, error } = await request;
-  if (error || data === null) throw new KnowledgeServiceError();
-  return data;
-}
+// `start_knowledge_import`, `fail_knowledge_import`, `update_knowledge_document_draft`, and
+// `release_knowledge_publish` are `returns void` in SQL, so PostgREST answers a success with null
+// data. They go through requireVoidRpc. `save_knowledge_import_pages` and
+// `complete_knowledge_publish` return an integer and keep the strict guard, as do every read.
+const { requireRpcData, requireVoidRpc } = createRpcGuards(() => new KnowledgeServiceError());
 
 const statusSchema = z.enum([
   'pending',
@@ -162,7 +157,7 @@ const statusSchema = z.enum([
 export async function loadKnowledgeOverview(
   client: AvenlyoSupabaseClient,
 ): Promise<readonly KnowledgeOverview[]> {
-  const rows = await requireRpc(knowledgeRpc(client)('get_my_knowledge_overview'));
+  const rows = await requireRpcData(knowledgeRpc(client)('get_my_knowledge_overview'));
   return rows.map((row) => ({
     draftDocuments: row.draft_documents,
     errorMessage: row.error_message,
@@ -181,7 +176,7 @@ export async function loadKnowledgeReview(
   client: AvenlyoSupabaseClient,
   importId: string,
 ): Promise<readonly KnowledgeDraftDocument[]> {
-  const rows = await requireRpc(
+  const rows = await requireRpcData(
     knowledgeRpc(client)('get_knowledge_import_review', { target_import_id: importId }),
   );
   return rows.map((row) => ({
@@ -204,7 +199,7 @@ export async function importWebsiteKnowledge(
   rootUrl: string,
   locationId: string | null,
 ): Promise<string> {
-  const created = await requireRpc(
+  const created = await requireRpcData(
     knowledgeRpc(client)('create_knowledge_import', {
       requested_location_id: locationId,
       root_url_input: rootUrl,
@@ -212,11 +207,13 @@ export async function importWebsiteKnowledge(
   );
   const importId = created[0]?.import_id;
   if (!importId) throw new KnowledgeServiceError();
-  await requireRpc(knowledgeRpc(client)('start_knowledge_import', { target_import_id: importId }));
+  await requireVoidRpc(
+    knowledgeRpc(client)('start_knowledge_import', { target_import_id: importId }),
+  );
 
   try {
     const result = await new KnowledgeImportRunner().run(rootUrl);
-    await requireRpc(
+    await requireRpcData(
       knowledgeRpc(client)('save_knowledge_import_pages', {
         crawled_pages: result.pages.map((page) => ({
           canonical_url: page.canonicalUrl,
@@ -234,7 +231,7 @@ export async function importWebsiteKnowledge(
   } catch (error) {
     const failure = safeImportFailure(error);
     try {
-      await requireRpc(
+      await requireVoidRpc(
         knowledgeRpc(client)('fail_knowledge_import', {
           safe_error_code: failure.code,
           safe_error_message: failure.message,
@@ -255,7 +252,7 @@ export async function saveKnowledgeDraft(
   content: string,
   included: boolean,
 ): Promise<void> {
-  await requireRpc(
+  await requireVoidRpc(
     knowledgeRpc(client)('update_knowledge_document_draft', {
       draft_content: content,
       draft_title: title,
@@ -282,7 +279,7 @@ export async function publishKnowledgeImport(
   client: AvenlyoSupabaseClient,
   importId: string,
 ): Promise<number> {
-  const documents = await requireRpc(
+  const documents = await requireRpcData(
     knowledgeRpc(client)('begin_knowledge_publish', {
       target_import_id: importId,
     }),
@@ -324,7 +321,7 @@ export async function publishKnowledgeImport(
       content_hash: document.content_hash,
       document_id: document.document_id,
     }));
-    return await requireRpc(
+    return await requireRpcData(
       knowledgeRpc(client)('complete_knowledge_publish', {
         document_versions: versions,
         generated_chunks: chunks,
@@ -334,7 +331,7 @@ export async function publishKnowledgeImport(
   } catch (error) {
     // The reservation is recoverable: no database transaction is kept open during OpenAI I/O.
     try {
-      await requireRpc(
+      await requireVoidRpc(
         knowledgeRpc(client)('release_knowledge_publish', {
           safe_error_code: 'publication_failed',
           safe_error_message: 'Knowledge could not be published right now. Please try again.',
@@ -363,7 +360,7 @@ export async function searchKnowledge(
   }
   const [embedding] = await embedInBatches(provider, [question]);
   if (!embedding) throw new KnowledgeServiceError();
-  const matches = await requireRpc(
+  const matches = await requireRpcData(
     knowledgeRpc(client)('match_my_knowledge', {
       query_embedding_text: vectorLiteral(embedding),
       requested_location_id: locationId,
