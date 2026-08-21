@@ -42,7 +42,7 @@ async function startOrigin(handler?: (host: string | undefined) => void): Promis
     response.end('<html><body>origin</body></html>');
   });
   await new Promise<void>((resolve) => origin!.listen(0, '127.0.0.1', resolve));
-  return (origin!.address() as AddressInfo).port;
+  return (origin.address() as AddressInfo).port;
 }
 
 /** Issues an absolute-form proxied HTTP request, the shape a browser sends to a proxy. */

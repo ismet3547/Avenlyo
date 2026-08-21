@@ -61,7 +61,7 @@ export function shouldAttemptRenderedFallback(result: CrawlResult): boolean {
  * them in a browser would be using rendering to launder a policy answer, so the whole class is
  * refused, and an unrecognised failure is refused too rather than guessed at.
  */
-export function shouldAttemptRenderedFallbackAfterError(_error: unknown): false {
+export function shouldAttemptRenderedFallbackAfterError(): false {
   return false;
 }
 
