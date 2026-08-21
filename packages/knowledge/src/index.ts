@@ -24,7 +24,13 @@ export {
   shouldAttemptRenderedFallback,
   shouldAttemptRenderedFallbackAfterError,
 } from './rendered/types';
-export type { RenderedCrawlLimits, RenderedPage, RenderedPageSource } from './rendered/types';
+export type {
+  MainNavigationAuthorizer,
+  RenderOptions,
+  RenderedCrawlLimits,
+  RenderedPage,
+  RenderedPageSource,
+} from './rendered/types';
 export { embedInBatches } from './embeddings/batching';
 export {
   defaultEmbeddingDimensions,

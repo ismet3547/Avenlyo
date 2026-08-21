@@ -186,10 +186,7 @@ describe('rendered deduplication and bounds', () => {
     const source = sourceOf(pages);
     let clock = 0;
     // Every step consumes a large slice of the budget, so the deadline arrives before the cap.
-    await crawlerFor(source).crawl(
-      'https://clinic.example/',
-      () => (clock += 40_000),
-    );
+    await crawlerFor(source).crawl('https://clinic.example/', () => (clock += 40_000));
 
     expect(source.rendered.length).toBeLessThan(defaultCrawlLimits.maxPages);
   });

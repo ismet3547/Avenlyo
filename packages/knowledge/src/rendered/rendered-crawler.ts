@@ -79,9 +79,17 @@ export class RenderedWebsiteCrawler {
       let settledUrl: URL;
       try {
         await this.assertRobotsAllowed(current.url, robotsBudget);
-        const rendered = await this.source.render(current.url);
-        // A browser can navigate itself. Wherever it ended up is re-validated as if it were a fresh
-        // candidate, so client-side routing cannot leave the crawl scope or reach a private target.
+        const rendered = await this.source.render(current.url, {
+          // Every top-level document request the browser makes is decided here, before it is sent.
+          // Checking only where the browser ended up would mean an off-domain or robots-disallowed
+          // target had already been fetched and its JavaScript executed.
+          authorizeNavigation: (target) =>
+            this.isNavigationAllowed(target, rootDomain, robotsBudget),
+          // A render may use only what is left of the import, never a fresh page timeout.
+          remainingMs: deadline - now(),
+        });
+        // The settled URL is re-validated too. Authorization stops the request; this stops a page
+        // that reached an allowed URL by some path the crawl should not record.
         settledUrl = normalizeCrawlUrl(rendered.url);
         if (!isInCrawlScope(settledUrl, rootDomain)) {
           pagesSkipped += 1;
@@ -130,6 +138,27 @@ export class RenderedWebsiteCrawler {
     }
 
     return { pages, pagesDiscovered: pageAttempts, pagesSkipped, rootUrl: root.toString() };
+  }
+
+  /**
+   * The pre-navigation decision: scheme, crawl scope, and robots for the exact target.
+   *
+   * It answers rather than throws, because it runs inside the browser's request path and a refusal
+   * there is an aborted request, not an import failure.
+   */
+  private async isNavigationAllowed(
+    target: URL,
+    rootDomain: string,
+    robotsBudget: CrawlDownloadBudget,
+  ): Promise<boolean> {
+    try {
+      const normalized = normalizeCrawlUrl(target.toString());
+      if (!isInCrawlScope(normalized, rootDomain)) return false;
+      await this.assertRobotsAllowed(normalized, robotsBudget);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async assertRobotsAllowed(

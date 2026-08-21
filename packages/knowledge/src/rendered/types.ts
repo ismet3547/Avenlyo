@@ -15,9 +15,29 @@ export interface RenderedPage {
   readonly url: string;
 }
 
+/**
+ * Decides whether one main-frame document navigation may happen, before the network is touched.
+ *
+ * Checking where the browser ended up is too late: by then the target has already been fetched and
+ * its JavaScript executed, which is the whole thing an off-domain or robots-disallowed navigation
+ * needed to be prevented from doing. The renderer therefore asks this before continuing any
+ * top-level document request, including redirects, so a refused target is never requested at all.
+ *
+ * This is a policy decision, not the network boundary. DNS resolution and address pinning remain
+ * the proxy's job; interception here can never be a substitute for them.
+ */
+export type MainNavigationAuthorizer = (target: URL) => Promise<boolean>;
+
+export interface RenderOptions {
+  /** Consulted before every top-level document request the browser makes. */
+  readonly authorizeNavigation: MainNavigationAuthorizer;
+  /** All the time this render may use, taken from what is left of the import deadline. */
+  readonly remainingMs: number;
+}
+
 export interface RenderedPageSource {
   /** Renders one URL that crawl policy has already accepted, and returns its settled DOM. */
-  render(url: URL): Promise<RenderedPage>;
+  render(url: URL, options: RenderOptions): Promise<RenderedPage>;
 }
 
 export interface RenderedCrawlLimits {
