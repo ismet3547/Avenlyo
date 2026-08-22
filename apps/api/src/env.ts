@@ -23,6 +23,10 @@ export const env = parseEnvironment(
     GOOGLE_CLIENT_ID: z.string().min(1).optional(),
     GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
     GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+    // Where this host keeps its Chromium binary, when it has one. Optional on purpose: an
+    // unconfigured host still serves every static website import and answers the rest with a
+    // bounded "rendering is not available" message rather than failing to start.
+    KNOWLEDGE_RENDERER_EXECUTABLE_PATH: z.string().min(1).optional(),
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     OPENAI_API_KEY: z.string().min(1).optional(),
     OPENAI_AGENT_MODEL: z.string().min(1).default('gpt-5.6'),

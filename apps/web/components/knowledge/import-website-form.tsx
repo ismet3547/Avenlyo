@@ -37,7 +37,7 @@ export function ImportWebsiteForm({
         disabled={disabled || isPending}
         type="submit"
       >
-        {isPending ? 'Importing website…' : defaultUrl ? 'Rescan website' : 'Import website'}
+        {isPending ? 'Starting import…' : defaultUrl ? 'Rescan website' : 'Import website'}
       </button>
       {state.status === 'error' ? (
         <p className="text-sm text-red-700 sm:col-span-2">{state.message}</p>

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type * as KnowledgeService from '@/lib/knowledge/service';
 import { describe, expect, it, vi } from 'vitest';
 
-const importWebsiteKnowledge = vi.fn();
+const requestWebsiteImport = vi.fn();
 const redirect = vi.fn((url: string) => {
   // Next's real redirect signals success by throwing a control-flow error rather than returning.
   // Reproducing that shape is what makes this test able to catch a redirect swallowed by a catch.
@@ -27,7 +27,7 @@ vi.mock('@/lib/supabase/auth', () => ({
 }));
 vi.mock('@/lib/knowledge/service', async (importOriginal) => ({
   ...(await importOriginal<typeof KnowledgeService>()),
-  importWebsiteKnowledge,
+  requestWebsiteImport,
 }));
 vi.mock('@/lib/knowledge/config', () => ({
   knowledgeServerEnv: { OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small' },
@@ -117,12 +117,12 @@ describe('no other "use server" module exports a runtime value', () => {
 });
 
 /**
- * `redirect` reports success by throwing. Keeping it inside the import's try/catch converted every
- * successful import into a knowledge error state.
+ * `redirect` reports success by throwing. Keeping it inside the request's try/catch converted every
+ * successfully queued import into a knowledge error state.
  */
 describe('successful import redirects instead of reporting an error', () => {
   it('lets the redirect signal propagate', async () => {
-    importWebsiteKnowledge.mockResolvedValue('20000000-0000-4000-8000-000000000001');
+    requestWebsiteImport.mockResolvedValue('20000000-0000-4000-8000-000000000001');
 
     await expect(
       actions.startKnowledgeImportAction(knowledgeInitialActionState, form('https://clinic.test/')),
@@ -135,7 +135,7 @@ describe('successful import redirects instead of reporting an error', () => {
   });
 
   it('does not turn the redirect into an action error state', async () => {
-    importWebsiteKnowledge.mockResolvedValue('20000000-0000-4000-8000-000000000001');
+    requestWebsiteImport.mockResolvedValue('20000000-0000-4000-8000-000000000001');
 
     const outcome = await actions
       .startKnowledgeImportAction(knowledgeInitialActionState, form('https://clinic.test/'))
@@ -147,7 +147,7 @@ describe('successful import redirects instead of reporting an error', () => {
 
 describe('genuine import failures still return a safe error state', () => {
   it('surfaces a knowledge service message without redirecting', async () => {
-    importWebsiteKnowledge.mockRejectedValue(
+    requestWebsiteImport.mockRejectedValue(
       new KnowledgeServiceError('That website blocks automated crawling.'),
     );
     redirect.mockClear();
@@ -159,7 +159,7 @@ describe('genuine import failures still return a safe error state', () => {
   });
 
   it('does not leak an internal failure to the operator', async () => {
-    importWebsiteKnowledge.mockRejectedValue(new Error('ECONNREFUSED 10.0.0.4:5432'));
+    requestWebsiteImport.mockRejectedValue(new Error('ECONNREFUSED 10.0.0.4:5432'));
     redirect.mockClear();
 
     const state = await actions.startKnowledgeImportAction(
@@ -168,14 +168,14 @@ describe('genuine import failures still return a safe error state', () => {
     );
 
     expect(state).toEqual({
-      message: 'Knowledge import could not be completed.',
+      message: 'This website import could not be started.',
       status: 'error',
     });
     expect(redirect).not.toHaveBeenCalled();
   });
 
   it('rejects an unusable URL before any import work starts', async () => {
-    importWebsiteKnowledge.mockClear();
+    requestWebsiteImport.mockClear();
 
     const state = await actions.startKnowledgeImportAction(
       knowledgeInitialActionState,
@@ -183,6 +183,33 @@ describe('genuine import failures still return a safe error state', () => {
     );
 
     expect(state.status).toBe('error');
-    expect(importWebsiteKnowledge).not.toHaveBeenCalled();
+    expect(requestWebsiteImport).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The action's whole job is now to make the request durable and hand the operator to the review
+ * page. Anything it does beyond that runs inside a request the operator can close.
+ */
+describe('creating an import does not crawl in the request', () => {
+  it('queues the import and redirects without waiting for pages', async () => {
+    requestWebsiteImport.mockClear();
+    requestWebsiteImport.mockResolvedValue('20000000-0000-4000-8000-000000000002');
+    redirect.mockClear();
+
+    await actions
+      .startKnowledgeImportAction(knowledgeInitialActionState, form('https://clinic.test/'))
+      .catch(() => undefined);
+
+    expect(requestWebsiteImport).toHaveBeenCalledTimes(1);
+    // The location comes from the server-side workspace session, never from the submitted form.
+    expect(requestWebsiteImport).toHaveBeenCalledWith(
+      expect.anything(),
+      'https://clinic.test/',
+      '10000000-0000-4000-8000-000000000001',
+    );
+    expect(redirect).toHaveBeenCalledWith(
+      '/dashboard/ai-front-office/knowledge/imports/20000000-0000-4000-8000-000000000002',
+    );
   });
 });

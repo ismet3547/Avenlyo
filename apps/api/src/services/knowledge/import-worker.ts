@@ -6,6 +6,7 @@ import {
   WebsiteCrawler,
   shouldAttemptRenderedFallback,
   type CrawlResult,
+  type RenderedPageSource,
 } from '@avenlyo/knowledge';
 import type { Database } from '@avenlyo/database';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -80,6 +81,29 @@ interface ClaimedImport {
   readonly rootUrl: string;
 }
 
+/** A browser-backed source with the lifecycle the worker owns: start it, use it, always close it. */
+export interface ManagedRenderedSource extends RenderedPageSource {
+  close(): Promise<void>;
+  start(): Promise<void>;
+}
+
+export interface KnowledgeImportWorkerInput {
+  readonly observer?: WorkerObserver;
+  readonly renderedExecutablePath?: string;
+  readonly supabase: SupabaseClient<Database>;
+  /**
+   * Seams, defaulted to the real crawler, the real capability probe, and the real browser.
+   *
+   * They exist so the escalation *policy* — static first, render only an empty completed crawl,
+   * never render a refusal — can be tested without a network or a browser binary. Production passes
+   * none of them, so the tested path and the shipped path are the same code.
+   */
+  readonly capabilityPath?: (explicit?: string) => string | undefined;
+  readonly crawlRendered?: (source: RenderedPageSource, rootUrl: string) => Promise<CrawlResult>;
+  readonly crawlStatic?: (rootUrl: string) => Promise<CrawlResult>;
+  readonly createRenderedSource?: (executablePath: string) => ManagedRenderedSource;
+}
+
 /**
  * Runs website imports that an authenticated owner or admin already created.
  *
@@ -100,13 +124,7 @@ export class KnowledgeImportWorker {
   private tickErrorCode: string | null = null;
   private readonly workerId = `knowledge-${randomUUID()}`;
 
-  public constructor(
-    private readonly input: {
-      readonly observer?: WorkerObserver;
-      readonly renderedExecutablePath?: string;
-      readonly supabase: SupabaseClient<Database>;
-    },
-  ) {}
+  public constructor(private readonly input: KnowledgeImportWorkerInput) {}
 
   public start(): void {
     if (this.stopped || this.timer) return;
@@ -133,8 +151,7 @@ export class KnowledgeImportWorker {
   private async tick(): Promise<void> {
     if (this.active || this.stopped) return;
     this.active = true;
-    this.tickErrorCode = null;
-    this.inFlight = this.run();
+    this.inFlight = this.pollOnce();
     try {
       await this.inFlight;
       // A tick that finds no import is a healthy tick: "no work" is not a failure.
@@ -154,7 +171,9 @@ export class KnowledgeImportWorker {
     return this.input.supabase as KnowledgeClient;
   }
 
-  private async run(): Promise<void> {
+  /** One claim-and-run pass. Public so the loop can be driven deterministically in a test. */
+  public async pollOnce(): Promise<void> {
+    this.tickErrorCode = null;
     let claimed: ClaimedImport | null;
     try {
       // Abandoned work returns to the queue first, so a crashed process cannot strand an import.
@@ -226,24 +245,30 @@ export class KnowledgeImportWorker {
   private async crawl(
     rootUrl: string,
   ): Promise<{ result: CrawlResult; strategy: 'rendered' | 'static' }> {
-    const staticResult = await new WebsiteCrawler().crawl(rootUrl);
+    const crawlStatic =
+      this.input.crawlStatic ?? ((target: string) => new WebsiteCrawler().crawl(target));
+    const staticResult = await crawlStatic(rootUrl);
     if (!shouldAttemptRenderedFallback(staticResult)) {
       return { result: staticResult, strategy: 'static' };
     }
-    if (!renderedCapabilityExecutablePath(this.input.renderedExecutablePath)) {
+    const capabilityPath = this.input.capabilityPath ?? renderedCapabilityExecutablePath;
+    const executablePath = capabilityPath(this.input.renderedExecutablePath);
+    if (!executablePath) {
       throw new CrawlPolicyError(
         'request_failed',
         'This website needs JavaScript rendering, which is not available right now.',
       );
     }
-    const source = new PlaywrightRenderedPageSource(
-      this.input.renderedExecutablePath
-        ? { executablePath: this.input.renderedExecutablePath }
-        : {},
-    );
+    const createSource =
+      this.input.createRenderedSource ??
+      ((path: string) => new PlaywrightRenderedPageSource({ executablePath: path }));
+    const crawlRendered =
+      this.input.crawlRendered ??
+      ((target: RenderedPageSource, url: string) => new RenderedWebsiteCrawler(target).crawl(url));
+    const source = createSource(executablePath);
     try {
       await source.start();
-      const rendered = await new RenderedWebsiteCrawler(source).crawl(rootUrl);
+      const rendered = await crawlRendered(source, rootUrl);
       return { result: rendered, strategy: 'rendered' };
     } finally {
       // The browser and its proxy are torn down on every path, success or failure alike.

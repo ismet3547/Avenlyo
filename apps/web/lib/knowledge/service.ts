@@ -3,10 +3,8 @@ import { createHash } from 'node:crypto';
 import type { Json } from '@avenlyo/database';
 import {
   chunkKnowledgeContent,
-  CrawlPolicyError,
   embedInBatches,
   EmbeddingConfigurationError,
-  KnowledgeImportRunner,
   OpenAIEmbeddingProvider,
 } from '@avenlyo/knowledge';
 import { z } from 'zod';
@@ -22,24 +20,6 @@ interface KnowledgeRpcCaller {
     name: 'create_knowledge_import',
     args: { requested_location_id: string | null; root_url_input: string },
   ): PromiseLike<{ data: { import_id: string; status: string }[] | null; error: RpcError | null }>;
-  (
-    name: 'start_knowledge_import',
-    args: { target_import_id: string },
-  ): PromiseLike<{ data: null; error: RpcError | null }>;
-  (
-    name: 'save_knowledge_import_pages',
-    args: {
-      crawled_pages: Json;
-      discovered_count: number;
-      final_root_url: string;
-      skipped_count: number;
-      target_import_id: string;
-    },
-  ): PromiseLike<{ data: number | null; error: RpcError | null }>;
-  (
-    name: 'fail_knowledge_import',
-    args: { safe_error_code: string; safe_error_message: string; target_import_id: string },
-  ): PromiseLike<{ data: null; error: RpcError | null }>;
   (
     name: 'update_knowledge_document_draft',
     args: {
@@ -139,10 +119,9 @@ export class KnowledgeServiceError extends Error {
   }
 }
 
-// `start_knowledge_import`, `fail_knowledge_import`, `update_knowledge_document_draft`, and
-// `release_knowledge_publish` are `returns void` in SQL, so PostgREST answers a success with null
-// data. They go through requireVoidRpc. `save_knowledge_import_pages` and
-// `complete_knowledge_publish` return an integer and keep the strict guard, as do every read.
+// `update_knowledge_document_draft` and `release_knowledge_publish` are `returns void` in SQL, so
+// PostgREST answers a success with null data. They go through requireVoidRpc.
+// `complete_knowledge_publish` returns an integer and keeps the strict guard, as does every read.
 const { requireRpcData, requireVoidRpc } = createRpcGuards(() => new KnowledgeServiceError());
 
 const statusSchema = z.enum([
@@ -189,12 +168,16 @@ export async function loadKnowledgeReview(
   }));
 }
 
-function safeImportFailure(error: unknown): { code: string; message: string } {
-  if (error instanceof CrawlPolicyError) return { code: error.code, message: error.message };
-  return { code: 'import_failed', message: 'Knowledge import could not be completed.' };
-}
-
-export async function importWebsiteKnowledge(
+/**
+ * Enqueues a website import and returns immediately.
+ *
+ * Nothing is crawled here. A request handler that fetched a whole website inline died with the
+ * request: a slow site, a deployment, or a closed tab lost the work with no record of it, and a
+ * site needing a browser could never be handled at all, because a Next.js server has no business
+ * launching Chromium. The row this creates is the durable unit of work, and the API worker claims
+ * it under a lease.
+ */
+export async function requestWebsiteImport(
   client: AvenlyoSupabaseClient,
   rootUrl: string,
   locationId: string | null,
@@ -207,42 +190,16 @@ export async function importWebsiteKnowledge(
   );
   const importId = created[0]?.import_id;
   if (!importId) throw new KnowledgeServiceError();
-  await requireVoidRpc(
-    knowledgeRpc(client)('start_knowledge_import', { target_import_id: importId }),
-  );
+  return importId;
+}
 
-  try {
-    const result = await new KnowledgeImportRunner().run(rootUrl);
-    await requireRpcData(
-      knowledgeRpc(client)('save_knowledge_import_pages', {
-        crawled_pages: result.pages.map((page) => ({
-          canonical_url: page.canonicalUrl,
-          content: page.content,
-          content_hash: page.contentHash,
-          title: page.title,
-        })),
-        discovered_count: result.pagesDiscovered,
-        final_root_url: result.rootUrl,
-        skipped_count: result.pagesSkipped,
-        target_import_id: importId,
-      }),
-    );
-    return importId;
-  } catch (error) {
-    const failure = safeImportFailure(error);
-    try {
-      await requireVoidRpc(
-        knowledgeRpc(client)('fail_knowledge_import', {
-          safe_error_code: failure.code,
-          safe_error_message: failure.message,
-          target_import_id: importId,
-        }),
-      );
-    } catch {
-      // Preserve the original safe error; a later rescan creates a fresh import attempt.
-    }
-    throw new KnowledgeServiceError(failure.message);
-  }
+/** One import's own state, for the review page that has to know whether there is anything yet. */
+export async function loadKnowledgeImport(
+  client: AvenlyoSupabaseClient,
+  importId: string,
+): Promise<KnowledgeOverview | null> {
+  const imports = await loadKnowledgeOverview(client);
+  return imports.find((item) => item.id === importId) ?? null;
 }
 
 export async function saveKnowledgeDraft(

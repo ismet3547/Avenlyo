@@ -11,6 +11,7 @@ import {
 import type { WorkerObserver } from './observability/worker-observer.js';
 import type { BillingService } from './services/billing/billing-service.js';
 import { createBillingRuntime as createBillingRuntimeDefault } from './services/billing/runtime.js';
+import { createKnowledgeRuntime as createKnowledgeRuntimeDefault } from './services/knowledge/runtime.js';
 import { createMessagingRuntime as createMessagingRuntimeDefault } from './services/messaging/runtime.js';
 
 /**
@@ -66,6 +67,9 @@ export interface RuntimeBootstrapInput {
     readonly instanceId: string;
     readonly logger: BootstrapApp['log'];
   }) => BootstrapHeartbeat | null;
+  readonly createKnowledgeRuntime?: (input: {
+    readonly observerFor: (component: RuntimeComponent) => WorkerObserver;
+  }) => BootstrapWorkerRuntime | null;
   readonly createMessagingRuntime?: (input: {
     readonly observerFor: (component: RuntimeComponent) => WorkerObserver;
   }) => BootstrapWorkerRuntime | null;
@@ -112,6 +116,7 @@ export async function bootstrapRuntime(
   const buildAppFn = input.buildApp ?? ((options) => buildAppDefault(options));
   const createMessaging = input.createMessagingRuntime ?? createMessagingRuntimeDefault;
   const createBilling = input.createBillingRuntime ?? createBillingRuntimeDefault;
+  const createKnowledge = input.createKnowledgeRuntime ?? createKnowledgeRuntimeDefault;
 
   let heartbeat: BootstrapHeartbeat | null = null;
 
@@ -145,6 +150,7 @@ export async function bootstrapRuntime(
 
   const messaging = createMessaging({ observerFor });
   const billing = createBilling({ observerFor });
+  const knowledge = createKnowledge({ observerFor });
   const app = buildAppFn({ billingService: billing?.service ?? null, runtimeState });
 
   const createHeartbeatFn = input.createHeartbeat ?? defaultHeartbeat;
@@ -155,7 +161,11 @@ export async function bootstrapRuntime(
     'Runtime starting.',
   );
 
-  const components = [...(messaging?.components ?? []), ...(billing?.components ?? [])];
+  const components = [
+    ...(messaging?.components ?? []),
+    ...(billing?.components ?? []),
+    ...(knowledge?.components ?? []),
+  ];
   for (const component of components) heartbeat?.recordState(component, 'starting');
 
   /** A configured worker loop that cannot start makes this replica unready rather than silently dead. */
@@ -184,10 +194,11 @@ export async function bootstrapRuntime(
   // is never a moment where readiness could report ready while a configured scheduler is missing.
   if (messaging) startWorkerRuntime('messaging', messaging.components, () => messaging.start());
   if (billing) startWorkerRuntime('billing', billing.components, () => billing.start());
+  if (knowledge) startWorkerRuntime('knowledge', knowledge.components, () => knowledge.start());
   runtimeState.markLocalStartupComplete();
 
   const stopWorkerRuntimes = async (): Promise<void> => {
-    await Promise.all([messaging?.stop(), billing?.stop()]);
+    await Promise.all([messaging?.stop(), billing?.stop(), knowledge?.stop()]);
     for (const component of components) {
       app.log.info({ component, operation: 'component.stopped' }, 'Runtime component stopped.');
     }

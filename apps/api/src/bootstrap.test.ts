@@ -97,6 +97,7 @@ describe('liveness before the database', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: () => null,
       runtimeState,
     });
@@ -118,6 +119,7 @@ describe('liveness before the database', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: () => null,
     });
     await result.heartbeatRegistration;
@@ -146,6 +148,7 @@ describe('liveness before the database', () => {
       }),
       createBillingRuntime: () => null,
       createHeartbeat: () => null,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: () => messaging.runtime,
       runtimeState,
     });
@@ -167,6 +170,7 @@ describe('startup failure cleanup', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => ({ ...billing.runtime, service: null as never }),
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: () => messaging.runtime,
     });
 
@@ -197,6 +201,7 @@ describe('startup failure cleanup', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: () => failing,
     });
 
@@ -218,6 +223,7 @@ describe('startup failure cleanup', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => null,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: () => messaging.runtime,
       runtimeState,
     });
@@ -226,6 +232,48 @@ describe('startup failure cleanup', () => {
     // refuse, because a configured worker loop is dead.
     expect(result.listening).toBe(true);
     expect(runtimeState.schedulerFailures()).toEqual(['lead_followups', 'message_processing']);
+  });
+
+  it('starts the knowledge import worker and reports it as a runtime component', async () => {
+    const app = fakeApp();
+    const knowledge = fakeWorkerRuntime(['knowledge_imports']);
+    const heartbeat = fakeHeartbeat();
+
+    const result = await bootstrapRuntime({
+      buildApp: () => app.app,
+      createBillingRuntime: () => null,
+      createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => knowledge.runtime,
+      createMessagingRuntime: () => null,
+    });
+
+    expect(result.listening).toBe(true);
+    expect(knowledge.isTimerRunning()).toBe(true);
+    // Recorded as starting like every other component, so an operator sees the queue consumer exists.
+    expect(heartbeat.events).toContain('state:knowledge_imports');
+
+    await result.shutdown?.shutdown('SIGTERM');
+    expect(knowledge.events).toEqual(['start', 'stop']);
+  });
+
+  it('keeps serving when the knowledge worker cannot start, and refuses readiness', async () => {
+    // A host missing its queue consumer is still a live process: website imports simply stay
+    // pending until a replica that can run them picks them up.
+    const app = fakeApp();
+    const knowledge = fakeWorkerRuntime(['knowledge_imports'], { startThrows: true });
+    const runtimeState = createRuntimeState();
+
+    const result = await bootstrapRuntime({
+      buildApp: () => app.app,
+      createBillingRuntime: () => null,
+      createHeartbeat: () => null,
+      createKnowledgeRuntime: () => knowledge.runtime,
+      createMessagingRuntime: () => null,
+      runtimeState,
+    });
+
+    expect(result.listening).toBe(true);
+    expect(runtimeState.schedulerFailures()).toEqual(['knowledge_imports']);
   });
 });
 
@@ -240,6 +288,7 @@ describe('shutdown wiring', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: () => messaging.runtime,
       forceExit,
     });
@@ -295,6 +344,7 @@ describe('worker observer wiring', () => {
       createBillingRuntime: () => null,
       // Created after the runtimes, which is the ordering that broke this.
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: (options) => {
         messaging = observerCapturingRuntime(['message_processing'], options);
         return messaging.runtime;
@@ -322,6 +372,7 @@ describe('worker observer wiring', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: (options) => {
         handedOut.push(options.observerFor('message_processing'));
         handedOut.push(options.observerFor('message_processing'));
@@ -353,6 +404,7 @@ describe('worker observer wiring', () => {
         return { ...billing.runtime, service: null as never };
       },
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: (options) => {
         messaging = observerCapturingRuntime(
           ['message_processing', 'appointment_reminders', 'lead_followups'],
@@ -391,6 +443,7 @@ describe('worker observer wiring', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => null,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: (options) => {
         messaging = observerCapturingRuntime(['message_processing'], options);
         return messaging.runtime;
@@ -413,6 +466,7 @@ describe('worker observer wiring', () => {
       buildApp: () => app.app,
       createBillingRuntime: () => null,
       createHeartbeat: () => heartbeat.heartbeat,
+      createKnowledgeRuntime: () => null,
       createMessagingRuntime: (options) => {
         void options.observerFor('message_processing');
         return {
