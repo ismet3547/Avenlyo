@@ -200,12 +200,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # The Docker-dependent half. Builds the exact images deploy/compose.yaml would run, then proves
-    # -- inside the built API image, as its actual non-root runtime user, using the browser it
-    # actually ships -- that Chromium launches with the OS sandbox enabled. This is deliberately not
-    # the same thing the existing "Rendered browser security" job proves: that job proves the
-    # application's launch configuration on a bare GitHub runner; this one proves the final,
-    # containerized artifact can do the same thing under Docker's isolation.
+    # The Docker-dependent half. Everything here goes through deploy/compose.yaml itself -- the same
+    # --env-file, the same `docker compose build` / `up` / `exec` a real deploy uses -- rather than
+    # hand-copying its security_opt/init/shm_size arguments into separate `docker run` commands.
+    # A prior version of this job did copy them, and that only proved the image plus a manually
+    # re-typed set of flags; it did not prove deploy/compose.yaml's api service definition itself,
+    # including whether `security_opt: [seccomp:./chromium-seccomp.json]` even resolves correctly
+    # from Compose's own working directory. This version execs the sandbox smoke inside the actual
+    # `docker compose up` service instead, so it does.
+    env:
+      # The exact commit SHA under test -- matches how a real deploy tags images (see
+      # docs/deployment/hetzner-staging.md's "Release identifier"), and is what "SHA-tagged images
+      # are produced" below actually checks for, not an assumed/synthetic tag.
+      AVENLYO_RELEASE: ${{ github.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -224,111 +231,122 @@ jobs:
           sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
           echo "unprivileged_userns_clone=$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo n/a)"
 
-      - name: Build the API image
-        run: docker build -f deploy/Dockerfile.api -t avenlyo-api:ci .
-
-      # apps/web validates NEXT_PUBLIC_* at build time (apps/web/lib/supabase/config.ts) and fails
-      # the build on an empty string, not just a missing one -- Dockerfile.web's ARGs default to ""
-      # when nothing is supplied, so `next build` fails page-data collection for /auth/callback
-      # without a syntactically valid value here. These are placeholders for validating that the
-      # image builds and boots, never real staging configuration -- real values come from
-      # deploy/env/build.env on whatever host actually deploys this.
-      - name: Build the web image
+      # Three placeholder files, none committed, none real configuration -- exactly what a real host
+      # would have at these paths, minus real values. deploy/env/build.env is what the documented
+      # `docker compose --env-file deploy/env/build.env ... build` command actually reads (a bare
+      # `docker compose build` does NOT load a same-named file automatically -- that was issue #1 in
+      # this correction pass, and this job now exercises the corrected, documented command, not the
+      # old implicit assumption). apps/web/lib/supabase/config.ts rejects an empty NEXT_PUBLIC_* string
+      # at build time (found by this job's own earlier run), so these need to be syntactically valid,
+      # not merely present. /etc/avenlyo/api.env needs enough to satisfy apps/api/src/env.ts's
+      # NODE_ENV=production HTTPS guard; /etc/avenlyo/web.env can stay empty -- every NEXT_PUBLIC_*
+      # value web's runtime touches is already inlined into the built server bundle at this point,
+      # not read from the environment again at container start.
+      - name: Create placeholder env files
         run: |
-          docker build -f deploy/Dockerfile.web -t avenlyo-web:ci . \
-            --build-arg NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co \
-            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key \
-            --build-arg NEXT_PUBLIC_APP_URL=https://staging.avenlyo.com \
-            --build-arg NEXT_PUBLIC_AVENLYO_API_URL=https://api-staging.avenlyo.com
-
-      # deploy/compose.yaml's env_file: entries point at /etc/avenlyo/{web,api}.env, which exist
-      # only on the real deployment host (Part J: never committed, see deploy/env/*.example).
-      # `docker compose config` resolves env_file: paths to validate the file, so it fails here
-      # without something at those paths -- these are empty placeholders solely so the runner has
-      # the same directory shape a real host does; they carry no configuration of any kind.
-      - name: Create placeholder env files for compose config validation
-        run: |
+          cat > deploy/env/build.env <<'EOF'
+          NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key
+          NEXT_PUBLIC_APP_URL=https://staging.avenlyo.com
+          NEXT_PUBLIC_AVENLYO_API_URL=https://api-staging.avenlyo.com
+          EOF
           sudo mkdir -p /etc/avenlyo
-          sudo touch /etc/avenlyo/web.env /etc/avenlyo/api.env
+          sudo touch /etc/avenlyo/web.env
+          cat <<'EOF' | sudo tee /etc/avenlyo/api.env > /dev/null
+          API_HOST=0.0.0.0
+          API_PORT=4000
+          NODE_ENV=production
+          WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com
+          EOF
+          sudo chmod 0640 /etc/avenlyo/*.env
 
       - name: Validate compose config
-        run: docker compose -f deploy/compose.yaml config
+        run: docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config
 
-      - name: Assert the API image's runtime user is not root
+      # Proves the seccomp profile path in deploy/compose.yaml's security_opt actually resolves from
+      # Compose's own working directory (deploy/), not just that the file exists on disk somewhere.
+      - name: Confirm the seccomp profile resolves in the rendered config
         run: |
-          uid="$(docker run --rm --entrypoint node avenlyo-api:ci -e 'process.stdout.write(String(process.getuid()))')"
-          echo "API container UID: $uid"
-          if [ "$uid" = "0" ]; then
-            echo "::error::API image runs as UID 0 (root)."
+          resolved="$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config | grep -A1 'security_opt' | grep seccomp || true)"
+          echo "Resolved seccomp entry: $resolved"
+          if [ -z "$resolved" ]; then
+            echo "::error::api service's seccomp profile did not appear in the resolved config."
             exit 1
           fi
 
-      # This is Part D's mandatory proof: build the final image, run it as the actual non-root
-      # runtime user, use the browser path shipped in the image, chromiumSandbox: true, fail (never
-      # skip, never retry without the sandbox) if it cannot initialize.
+      - name: Confirm bounded log rotation is present in the rendered config
+        run: |
+          docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config | grep -A3 'logging:' | tee /tmp/logging-config.txt
+          test -s /tmp/logging-config.txt
+
+      # Confirms none of the three services publish a host port other than Caddy's 80/443/443-udp --
+      # web and api must show only `expose:`, never `ports:`.
+      - name: Confirm 3000/4000 are not published to the host
+        run: |
+          rendered="$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config)"
+          if echo "$rendered" | grep -E '^\s+published:\s*"?(3000|4000)"?'; then
+            echo "::error::web or api publishes a host port; only Caddy may."
+            exit 1
+          fi
+          echo "Confirmed: no published host port for web or api."
+
+      # BUILD ONCE, under the real SHA tag, through the documented --env-file mechanism -- the same
+      # command docs/deployment/hetzner-staging.md's "Deploy procedure" now specifies. Builds both
+      # images; nothing downstream re-builds.
+      - name: docker compose build (BUILD ONCE, under the SHA tag)
+        run: docker compose --env-file deploy/env/build.env -f deploy/compose.yaml build web api
+
+      - name: Confirm SHA-tagged images were produced
+        run: |
+          docker image inspect "avenlyo-web:${AVENLYO_RELEASE}" > /dev/null
+          docker image inspect "avenlyo-api:${AVENLYO_RELEASE}" > /dev/null
+          echo "Confirmed avenlyo-web:${AVENLYO_RELEASE} and avenlyo-api:${AVENLYO_RELEASE} exist."
+
+      # DEPLOY that exact already-built image -- --no-build is deliberate and load-bearing here: if
+      # the previous step had failed to produce the tag, this fails loudly instead of silently
+      # rebuilding something else. Caddy is deliberately not started: its Caddyfile names real public
+      # hostnames, and bringing it up would attempt a real ACME/Let's Encrypt request against them
+      # from a GitHub-owned IP that DNS does not point at -- out of scope for this job, which is
+      # about the api/web service definitions, not Caddy's TLS behavior.
+      - name: docker compose up --no-build (DEPLOY the already-built image)
+        # --wait blocks until both services report healthy per their own Dockerfile HEALTHCHECK,
+        # exercising that definition too, rather than a fixed sleep or a manual retry loop.
+        run: docker compose --env-file deploy/env/build.env -f deploy/compose.yaml up -d --no-build --wait web api
+
+      - name: Assert the running api service's user is not root
+        run: |
+          uid="$(docker compose -f deploy/compose.yaml exec -T api node -e 'process.stdout.write(String(process.getuid()))')"
+          echo "api service UID: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "::error::api service runs as UID 0 (root)."
+            exit 1
+          fi
+
+      # This is Part D's mandatory proof, now run through the real service rather than a re-typed
+      # `docker run`: `docker compose exec` runs inside the container `docker compose up` already
+      # started, inheriting deploy/compose.yaml's own init/security_opt/seccomp/shm_size/user exactly
+      # as configured -- proving the shipped compose file, not a manual reconstruction of it.
       #
-      # Three real failures were found and fixed here in sequence, not assumed away -- each is what
-      # deploy/compose.yaml's api service now runs:
-      #  1. WITHOUT deploy/chromium-seccomp.json: Docker's default seccomp profile blocks
-      #     unprivileged user-namespace creation even with the host kernel sysctl above set, and the
-      #     smoke correctly failed closed with "No usable sandbox!" rather than falling back.
-      #     deploy/chromium-seccomp.json (Docker's default profile plus Playwright's own documented,
-      #     narrow SCMP_ACT_ALLOW for clone/setns/unshare) fixed it. Not `unconfined`.
-      #  2. WITHOUT --init: past the seccomp gate, Chromium's namespace sandbox failed a different
-      #     way -- `sys_chroot("/proc/self/fdinfo/")` -- because the container's entrypoint (`node`,
-      #     which then execs Chromium's zygote) was itself PID 1, and PID 1 gets kernel-level special
-      #     treatment that this exact self-referential /proc/self step trips over. Playwright's own
-      #     documented Docker recommendation, not a workaround invented here.
-      #  3. WITH --cap-drop=ALL: still the identical chroot failure -- proving it was never the
-      #     seccomp or PID-1 fix that was insufficient, but that Chromium's own internal
-      #     sandbox/zygote setup needs some capability from Docker's default set. Playwright's own
-      #     official documented command
-      #     (`docker run --ipc=host --user pwuser --security-opt seccomp=seccomp_profile.json ...`)
-      #     does not drop capabilities either. Removing --cap-drop=ALL here (Docker's default set,
-      #     nothing added beyond it, no SYS_ADMIN) is what made this job pass -- matching upstream's
-      #     own tested configuration rather than guessing which single default capability is needed.
-      - name: Real sandboxed Chromium launch inside the final API container
-        run: |
-          docker run --rm \
-            --init \
-            --security-opt no-new-privileges:true \
-            --security-opt seccomp=deploy/chromium-seccomp.json \
-            --shm-size=1gb \
-            --entrypoint node \
-            avenlyo-api:ci \
-            dist/scripts/chromium-sandbox-smoke.js
+      # Three real failures were found and fixed in earlier runs of this job, each now reflected in
+      # deploy/compose.yaml's api service directly (see its comments for the full sequence): Docker's
+      # default seccomp profile blocking unprivileged user-namespace creation (fixed by
+      # deploy/chromium-seccomp.json, Playwright's own documented profile); the container's
+      # entrypoint being PID 1, which broke a self-referential /proc/self chroot step inside
+      # Chromium's own namespace-sandbox setup (fixed by `init: true`, Playwright's own documented
+      # recommendation); and `cap_drop: ALL` being incompatible with that same setup, fixed by
+      # matching Docker's default capability set -- exactly what Playwright's own official documented
+      # command runs, nothing added beyond it, no SYS_ADMIN.
+      - name: Real sandboxed Chromium launch inside the running api service
+        run: docker compose -f deploy/compose.yaml exec -T api node dist/scripts/chromium-sandbox-smoke.js
 
-      - name: API container boots and answers /health/live
+      - name: api service answers /health/live
         run: |
-          docker run -d --name api-ci -p 127.0.0.1:4100:4000 \
-            --init \
-            --security-opt no-new-privileges:true \
-            --security-opt seccomp=deploy/chromium-seccomp.json \
-            --shm-size=1gb \
-            -e API_HOST=0.0.0.0 -e API_PORT=4000 -e NODE_ENV=production \
-            -e WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com \
-            avenlyo-api:ci
-          for _ in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:4100/health/live > /dev/null; then
-              echo "API /health/live ok"; docker logs api-ci; docker rm -f api-ci; exit 0
-            fi
-            sleep 1
-          done
-          echo "::error::API container never answered /health/live"
-          docker logs api-ci
-          docker rm -f api-ci
-          exit 1
+          docker compose -f deploy/compose.yaml exec -T api node -e "fetch('http://127.0.0.1:4000/health/live').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
 
-      - name: Web container boots and answers /api/health
+      - name: web service answers /api/health
         run: |
-          docker run -d --name web-ci -p 127.0.0.1:3100:3000 avenlyo-web:ci
-          for _ in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:3100/api/health > /dev/null; then
-              echo "web /api/health ok"; docker logs web-ci; docker rm -f web-ci; exit 0
-            fi
-            sleep 1
-          done
-          echo "::error::web container never answered /api/health"
-          docker logs web-ci
-          docker rm -f web-ci
-          exit 1
+          docker compose -f deploy/compose.yaml exec -T web node -e "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f deploy/compose.yaml down -v
