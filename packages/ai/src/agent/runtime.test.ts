@@ -129,20 +129,29 @@ describe('controlled agent runtime', () => {
     );
   });
 
-  it('does not allow low-similarity knowledge to support a business answer', async () => {
+  it('does not let an ambiguous cluster of matches support a business answer', async () => {
+    // Replaces a test that pinned a fixed 0.78 floor. That floor was above anything real retrieval
+    // produces for a natural question, so it rejected correct answers rather than unreliable ones.
+    // What must still be refused is a flat field: several pages equally, mildly related, none of
+    // them the answer. The scores here would each pass the absolute floor on their own.
     const { runtime: agent } = runtime(
       [
         result('', [
           {
             arguments: JSON.stringify({ query: 'hours' }),
-            callId: 'low',
+            callId: 'ambiguous',
             name: 'search_business_knowledge',
           },
         ]),
         result('We are definitely open every day.'),
       ],
       serviceDouble({
-        searchBusinessKnowledge: () => Promise.resolve([{ ...source, similarity: 0.77 }]),
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.46 },
+            { ...source, similarity: 0.44 },
+            { ...source, similarity: 0.41 },
+          ]),
       }),
     );
     await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
@@ -151,24 +160,54 @@ describe('controlled agent runtime', () => {
     });
   });
 
-  it('accepts a source exactly at the conservative similarity floor', async () => {
-    const floorSource = { ...source, similarity: 0.78 };
+  it('does not let a match below the reliability floor support a business answer', async () => {
     const { runtime: agent } = runtime(
       [
         result('', [
           {
             arguments: JSON.stringify({ query: 'hours' }),
-            callId: 'floor',
+            callId: 'weak',
             name: 'search_business_knowledge',
           },
         ]),
-        result('The published source lists the hours.'),
+        result('We are definitely open every day.'),
       ],
-      serviceDouble({ searchBusinessKnowledge: () => Promise.resolve([floorSource]) }),
+      serviceDouble({
+        searchBusinessKnowledge: () => Promise.resolve([{ ...source, similarity: 0.29 }]),
+      }),
     );
     await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
-      sources: [floorSource],
+      sources: [],
+      text: "I don't have reliable information about that yet. I can ask the team to help.",
     });
+  });
+
+  it('answers from a moderately scored match that clearly leads the field', async () => {
+    // The real staging shape: "Hesabım yoksa ne yapmalıyım?" retrieved 0.573 / 0.422 / 0.296 and
+    // the agent refused all of it. The top two answer the question; the third is noise.
+    const winner = { ...source, similarity: 0.573, title: 'Giris Yap' };
+    const runnerUp = { ...source, similarity: 0.422, title: 'Hesap Olustur' };
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hesap' }),
+            callId: 'clear-winner',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('You can create an account from the sign-in page.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([winner, runnerUp, { ...source, similarity: 0.296, title: 'Unrelated' }]),
+      }),
+    );
+
+    const answer = await turn(agent, 'Hesabim yoksa ne yapmaliyim?');
+
+    expect(answer.text).toBe('You can create an account from the sign-in page.');
+    expect(answer.sources.map((entry) => entry.title)).toEqual(['Giris Yap', 'Hesap Olustur']);
   });
 
   it('uses a deterministic fallback after a failed knowledge search', async () => {

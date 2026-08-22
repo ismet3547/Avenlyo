@@ -4,6 +4,8 @@ import {
   describeKnowledgeReview,
   knowledgeReviewNeedsDocuments,
   KNOWLEDGE_EMPTY_IMPORT_MESSAGE,
+  KNOWLEDGE_PUBLISHED_IMPORT_MESSAGE,
+  KNOWLEDGE_PUBLISHED_WITHOUT_DOCUMENTS_MESSAGE,
 } from './review-view';
 import type { KnowledgeDraftDocument, KnowledgeImportStatus, KnowledgeOverview } from './types';
 
@@ -119,12 +121,124 @@ describe('an import that finished', () => {
     expect(view).toMatchObject({ canPublish: false, includedCount: 0, kind: 'review' });
   });
 
-  it('ignores already published documents when deciding there is nothing to review', () => {
+  it('still reports a genuinely empty awaiting_review import as empty', () => {
+    // The one state the empty message is for: the crawl finished, the worker wrote nothing, and
+    // there is no publication to describe instead.
+    const view = describeKnowledgeReview({
+      documents: [],
+      record: record({ status: 'awaiting_review' }),
+    });
+
+    expect(view).toEqual({ kind: 'empty' });
+  });
+});
+
+describe('an import that was published', () => {
+  // Found in real staging: publishing succeeded, eight documents went live, and the review page
+  // said "No usable knowledge text could be extracted from this website." Publishing turns every
+  // included draft into `ready` and every excluded one into `archived`, so a completed import has
+  // zero drafts by construction -- and the draft count was the only thing the view looked at.
+  it('reports the publication rather than an extraction failure', () => {
+    const view = describeKnowledgeReview({
+      documents: [
+        draft({ id: 'a', status: 'ready' }),
+        draft({ id: 'b', status: 'ready' }),
+        draft({ id: 'c', included: false, status: 'archived' }),
+      ],
+      record: record({ pagesImported: 3, readyDocuments: 2, status: 'completed' }),
+    });
+
+    expect(view).toEqual({ kind: 'published', readyCount: 2 });
+  });
+
+  it('never produces the extraction-empty message merely because no drafts remain', () => {
     const view = describeKnowledgeReview({
       documents: [draft({ status: 'ready' })],
       record: record({ status: 'completed' }),
     });
 
-    expect(view).toEqual({ kind: 'empty' });
+    expect(view.kind).not.toBe('empty');
+    expect(view.kind).toBe('published');
+  });
+
+  it('offers nothing to edit or publish', () => {
+    const view = describeKnowledgeReview({
+      documents: [draft({ status: 'ready' }), draft({ id: 'b', status: 'ready' })],
+      record: record({ status: 'completed' }),
+    });
+
+    // A completed import is finished. Re-opening it for editing would let an operator change text
+    // whose embeddings have already been written, so the view carries no publish affordance at all.
+    expect(view).not.toHaveProperty('canPublish');
+    expect(view).not.toHaveProperty('draftCount');
+  });
+
+  it('tells the truth about a completed import with nothing published', () => {
+    // Not a state the publish path can reach -- it publishes at least one document or fails. If it
+    // is ever observed, claiming extraction failed would be a guess, and the wrong one.
+    const view = describeKnowledgeReview({ documents: [], record: record({ status: 'completed' }) });
+
+    expect(view).toEqual({ kind: 'published', readyCount: 0 });
+    expect(KNOWLEDGE_PUBLISHED_WITHOUT_DOCUMENTS_MESSAGE).not.toBe(KNOWLEDGE_EMPTY_IMPORT_MESSAGE);
+  });
+
+  it('does not count drafts or archived documents as published', () => {
+    const view = describeKnowledgeReview({
+      documents: [
+        draft({ id: 'a', status: 'ready' }),
+        draft({ id: 'b', status: 'draft' }),
+        draft({ id: 'c', status: 'archived' }),
+      ],
+      record: record({ status: 'completed' }),
+    });
+
+    expect(view).toEqual({ kind: 'published', readyCount: 1 });
+  });
+
+  it('describes publication in words that do not claim extraction failed', () => {
+    expect(KNOWLEDGE_PUBLISHED_IMPORT_MESSAGE).toContain('published');
+    expect(KNOWLEDGE_PUBLISHED_IMPORT_MESSAGE).not.toContain('No usable');
+  });
+});
+
+describe('the review state machine covers every import status', () => {
+  const statuses: readonly KnowledgeImportStatus[] = [
+    'pending',
+    'running',
+    'awaiting_review',
+    'publishing',
+    'completed',
+    'failed',
+  ];
+
+  it.each(statuses)('answers %s with a defined view', (status) => {
+    const view = describeKnowledgeReview({
+      documents: [draft({ status: status === 'completed' ? 'ready' : 'draft' })],
+      record: record({ status }),
+    });
+
+    expect(view.kind).toBeDefined();
+  });
+
+  it('leaves the states that were already right alone', () => {
+    // Guards the shape of this change: only `completed` was rerouted, and a regression that also
+    // caught `publishing` would silently stop showing an operator the drafts being published.
+    expect(
+      describeKnowledgeReview({ documents: [], record: record({ status: 'pending' }) }).kind,
+    ).toBe('progress');
+    expect(
+      describeKnowledgeReview({ documents: [], record: record({ status: 'running' }) }).kind,
+    ).toBe('progress');
+    expect(
+      describeKnowledgeReview({ documents: [], record: record({ status: 'failed' }) }).kind,
+    ).toBe('failed');
+    expect(
+      describeKnowledgeReview({ documents: [draft()], record: record({ status: 'awaiting_review' }) })
+        .kind,
+    ).toBe('review');
+    expect(
+      describeKnowledgeReview({ documents: [draft()], record: record({ status: 'publishing' }) })
+        .kind,
+    ).toBe('review');
   });
 });

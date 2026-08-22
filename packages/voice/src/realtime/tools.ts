@@ -1,7 +1,7 @@
 import {
-  MIN_AGENT_KNOWLEDGE_SIMILARITY,
   captureLeadFunction,
   captureLeadSchema,
+  reliableKnowledgeSources,
   requestHumanHelpFunction,
   requestHumanHelpSchema,
   searchBusinessKnowledgeFunction,
@@ -306,20 +306,15 @@ function rejected(summary: string): VoiceToolExecution {
   };
 }
 
-function reliableSources(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[] {
-  return matches
-    .filter(
-      (match) =>
-        Number.isFinite(match.similarity) && match.similarity >= MIN_AGENT_KNOWLEDGE_SIMILARITY,
-    )
-    .slice(0, 3)
-    .map((match) => ({
-      content: match.content.slice(0, 1_200),
-      similarity: Math.max(0, Math.min(1, match.similarity)),
-      sourceUrl: match.sourceUrl,
-      title: match.title.slice(0, 240),
-    }));
-}
+/**
+ * Voice trusts knowledge on exactly the terms chat does.
+ *
+ * This used to be a second copy of the filter, sharing only the threshold constant. Two copies of
+ * a trust rule is one rule and one latent divergence: the calibration fix would have landed on
+ * chat alone and left the phone answering "I don't have reliable information about that" to a
+ * question the chat agent had just answered from the same published pages.
+ */
+const reliableSources = reliableKnowledgeSources;
 
 /** Controlled, sequential live-call executor. Routing and transfer targets are never model inputs. */
 export class VoiceToolExecutor {

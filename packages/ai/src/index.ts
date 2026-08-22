@@ -35,10 +35,14 @@ export {
 } from './providers/openai-responses';
 export { FakeAgentProvider } from './testing/fake-provider';
 export {
-  ControlledToolExecutor,
+  isKnowledgeReliable,
+  reliableKnowledgeSources,
+  MAX_AGENT_KNOWLEDGE_SOURCES,
+  MIN_AGENT_KNOWLEDGE_LEAD_RATIO,
   MIN_AGENT_KNOWLEDGE_SIMILARITY,
-  policyHandoffCallId,
-} from './tools/executor';
+  STRONG_AGENT_KNOWLEDGE_SIMILARITY,
+} from './agent/knowledge-reliability';
+export { ControlledToolExecutor, policyHandoffCallId } from './tools/executor';
 export { activeToolDefinitions, activeToolsForIndustry } from './tools/registry';
 export {
   availableAppointmentsSchema,

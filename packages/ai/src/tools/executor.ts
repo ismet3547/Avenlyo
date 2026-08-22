@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 
 import { requiresUrgentLeadHandoff } from '@avenlyo/industries';
 
+import { reliableKnowledgeSources } from '../agent/knowledge-reliability';
 import { MAX_TOOL_OUTPUT_CHARACTERS } from '../agent/limits';
-import type { AgentExecutionContext, AgentToolCall, KnowledgeSource } from '../agent/types';
+import type { AgentExecutionContext, AgentToolCall } from '../agent/types';
 
 import { activeToolDefinitions } from './registry';
 import {
@@ -21,30 +22,12 @@ import {
 } from './schemas';
 import type { AgentToolServices, ToolExecutionResult, ToolExecutor } from './types';
 
-/** Conservative starting floor: a nearest neighbour is not necessarily a reliable business fact. */
-export const MIN_AGENT_KNOWLEDGE_SIMILARITY = 0.78;
-
 function truncate(value: string, maximum: number): string {
   return value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
 }
 
 function safeJson(value: unknown): string {
   return truncate(JSON.stringify(value), MAX_TOOL_OUTPUT_CHARACTERS);
-}
-
-function sanitizedSources(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[] {
-  return matches
-    .filter(
-      (match) =>
-        Number.isFinite(match.similarity) && match.similarity >= MIN_AGENT_KNOWLEDGE_SIMILARITY,
-    )
-    .slice(0, 3)
-    .map((match) => ({
-      content: truncate(match.content, 1_200),
-      similarity: Math.max(0, Math.min(1, match.similarity)),
-      sourceUrl: match.sourceUrl ? truncate(match.sourceUrl, 1_000) : null,
-      title: truncate(match.title, 240),
-    }));
 }
 
 function rejected(call: AgentToolCall, summary: string): ToolExecutionResult {
@@ -94,7 +77,9 @@ export class ControlledToolExecutor implements ToolExecutor {
       if (call.name === 'search_business_knowledge') {
         const parsed = searchBusinessKnowledgeSchema.safeParse(rawArguments);
         if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
-        const sources = sanitizedSources(
+        // The trust decision lives in one module shared with the voice executor, so a customer
+        // cannot get an answer over chat that the same corpus would refuse over the phone.
+        const sources = reliableKnowledgeSources(
           await this.services.searchBusinessKnowledge(
             { query: parsed.data.query, toolCallId: call.callId },
             context,

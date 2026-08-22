@@ -8,6 +8,8 @@ import {
   describeKnowledgeReview,
   knowledgeReviewNeedsDocuments,
   KNOWLEDGE_EMPTY_IMPORT_MESSAGE,
+  KNOWLEDGE_PUBLISHED_IMPORT_MESSAGE,
+  KNOWLEDGE_PUBLISHED_WITHOUT_DOCUMENTS_MESSAGE,
 } from '@/lib/knowledge/review-view';
 import { loadKnowledgeImport, loadKnowledgeReview } from '@/lib/knowledge/service';
 import type { KnowledgeDraftDocument } from '@/lib/knowledge/types';
@@ -55,10 +57,12 @@ export default async function KnowledgeReviewPage({ params }: KnowledgeReviewPag
       <h1 className="mt-3 font-display text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">
         Review website pages
       </h1>
-      <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-        Edit the cleaned text, exclude pages you do not want used, then publish only the included
-        drafts. Publishing creates embeddings; it never generates customer-facing answers.
-      </p>
+      {view.kind === 'published' ? null : (
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
+          Edit the cleaned text, exclude pages you do not want used, then publish only the included
+          drafts. Publishing creates embeddings; it never generates customer-facing answers.
+        </p>
+      )}
       <p className="mt-2 truncate text-sm text-muted-foreground">{record.rootUrl}</p>
 
       {view.kind === 'progress' ? (
@@ -74,6 +78,25 @@ export default async function KnowledgeReviewPage({ params }: KnowledgeReviewPag
           <p className="mt-3 text-sm leading-6 text-red-800">
             Return to Business Knowledge to try a different address.
           </p>
+        </div>
+      ) : null}
+
+      {view.kind === 'published' ? (
+        <div className="mt-6 rounded-xl border border-border bg-white p-6 shadow-sm">
+          <p className="font-semibold text-ink">
+            {view.readyCount > 0 ? 'This website is published' : 'This import is completed'}
+          </p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {view.readyCount > 0
+              ? KNOWLEDGE_PUBLISHED_IMPORT_MESSAGE
+              : KNOWLEDGE_PUBLISHED_WITHOUT_DOCUMENTS_MESSAGE}
+          </p>
+          {view.readyCount > 0 ? (
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">
+              <span className="font-semibold text-ink">{view.readyCount}</span> published{' '}
+              {view.readyCount === 1 ? 'page' : 'pages'}. Import a website again to replace them.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
