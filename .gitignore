@@ -16,3 +16,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+rendered-report.json

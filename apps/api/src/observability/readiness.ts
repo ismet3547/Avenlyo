@@ -14,7 +14,7 @@ import type { RuntimeComponent } from './runtime-state.js';
  */
 
 /** Raised when this application build needs migrations the deployed database does not have yet. */
-export const REQUIRED_SCHEMA_VERSION = 17;
+export const REQUIRED_SCHEMA_VERSION = 18;
 
 export type ReadinessReason =
   | 'shutting_down'

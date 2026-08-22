@@ -1,16 +1,6 @@
-import type * as KnowledgePackage from '@avenlyo/knowledge';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
-
-const run = vi.fn();
-
-vi.mock('@avenlyo/knowledge', async (importOriginal) => ({
-  ...(await importOriginal<typeof KnowledgePackage>()),
-  KnowledgeImportRunner: class {
-    public run = run;
-  },
-}));
 
 // `./config` imports Next.js's `server-only` marker, which has no resolution outside the Next
 // runtime. Only the embedding paths read it, and none of those are under test here.
@@ -22,21 +12,39 @@ vi.mock('./config', () => ({
   },
 }));
 
-const { importWebsiteKnowledge, KnowledgeServiceError, loadKnowledgeOverview, saveKnowledgeDraft } =
-  await import('./service');
+const {
+  KnowledgeServiceError,
+  loadKnowledgeImport,
+  loadKnowledgeOverview,
+  requestWebsiteImport,
+  saveKnowledgeDraft,
+} = await import('./service');
 
 type RpcResult = { data: unknown; error: { message: string } | null };
 
+const IMPORT_ID = '10000000-0000-4000-8000-000000000001';
+
+function overviewRow(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    draft_documents: 0,
+    error_message: null,
+    finished_at: null,
+    import_id: IMPORT_ID,
+    pages_discovered: 0,
+    pages_imported: 0,
+    ready_documents: 0,
+    root_url: 'https://clinic.test/',
+    started_at: null,
+    status: 'pending',
+    ...overrides,
+  };
+}
+
 function clientWith(overrides: Readonly<Record<string, RpcResult>> = {}) {
   const defaults: Record<string, RpcResult> = {
-    create_knowledge_import: {
-      data: [{ import_id: '10000000-0000-4000-8000-000000000001', status: 'pending' }],
-      error: null,
-    },
-    fail_knowledge_import: { data: null, error: null },
-    save_knowledge_import_pages: { data: 3, error: null },
+    create_knowledge_import: { data: [{ import_id: IMPORT_ID, status: 'pending' }], error: null },
+    get_my_knowledge_overview: { data: [overviewRow()], error: null },
     // The success shape of a `returns void` function.
-    start_knowledge_import: { data: null, error: null },
     update_knowledge_document_draft: { data: null, error: null },
   };
   const rpc = vi.fn((name: string) =>
@@ -44,24 +52,6 @@ function clientWith(overrides: Readonly<Record<string, RpcResult>> = {}) {
   );
   return { client: { rpc } as unknown as AvenlyoSupabaseClient, rpc };
 }
-
-const CRAWL_RESULT = {
-  pages: [
-    {
-      canonicalUrl: 'https://clinic.test/',
-      content: 'Open daily.',
-      contentHash: 'h',
-      title: 'Home',
-    },
-  ],
-  pagesDiscovered: 1,
-  pagesSkipped: 0,
-  rootUrl: 'https://clinic.test/',
-};
-
-beforeEach(() => {
-  run.mockReset();
-});
 
 function saveDraft(client: AvenlyoSupabaseClient) {
   return saveKnowledgeDraft(
@@ -74,8 +64,7 @@ function saveDraft(client: AvenlyoSupabaseClient) {
 }
 
 /**
- * Knowledge has the same `returns void` contract as Agent Test: `start_knowledge_import`,
- * `fail_knowledge_import`, `update_knowledge_document_draft`, and `release_knowledge_publish`
+ * `update_knowledge_document_draft` and `release_knowledge_publish` are `returns void` in SQL and
  * answer a success with null data, which the previous strict guard read as failure.
  */
 describe('void knowledge RPCs', () => {
@@ -91,31 +80,99 @@ describe('void knowledge RPCs', () => {
     });
     await expect(saveDraft(client)).rejects.toBeInstanceOf(KnowledgeServiceError);
   });
+});
 
-  it('accepts the void success answer when starting an import', async () => {
-    run.mockResolvedValue(CRAWL_RESULT);
+describe('requesting a website import', () => {
+  it('creates a durable request and crawls nothing in the web process', async () => {
     const { client, rpc } = clientWith();
 
-    await expect(importWebsiteKnowledge(client, 'https://clinic.test/', null)).resolves.toBe(
-      '10000000-0000-4000-8000-000000000001',
+    await expect(requestWebsiteImport(client, 'https://clinic.test/', null)).resolves.toBe(
+      IMPORT_ID,
     );
-    expect(rpc).toHaveBeenCalledWith('start_knowledge_import', expect.anything());
-    // A successful import must not be marked failed on the way out.
-    expect(rpc).not.toHaveBeenCalledWith('fail_knowledge_import', expect.anything());
+
+    // The whole point of the durable worker: a request handler that crawled inline lost the work
+    // whenever the request ended, and could never render a JavaScript-only site. Creating the row
+    // is the only thing this path does, so one call is the whole contract.
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('create_knowledge_import', {
+      requested_location_id: null,
+      root_url_input: 'https://clinic.test/',
+    });
   });
 
-  it('still fails closed when starting an import reports an error', async () => {
-    run.mockResolvedValue(CRAWL_RESULT);
-    const { client, rpc } = clientWith({
-      start_knowledge_import: { data: null, error: { message: 'conflict' } },
+  it('never writes crawl state from the browser session', async () => {
+    const { client, rpc } = clientWith();
+
+    await requestWebsiteImport(client, 'https://clinic.test/', null);
+
+    // Running, page saving, and failing all belong to the claim-holding worker now.
+    for (const name of [
+      'start_knowledge_import',
+      'save_knowledge_import_pages',
+      'fail_knowledge_import',
+    ]) {
+      expect(rpc).not.toHaveBeenCalledWith(name, expect.anything());
+    }
+  });
+
+  it('passes the selected location through unchanged', async () => {
+    const { client, rpc } = clientWith();
+    await requestWebsiteImport(client, 'https://clinic.test/', 'loc-1');
+    expect(rpc).toHaveBeenCalledWith('create_knowledge_import', {
+      requested_location_id: 'loc-1',
+      root_url_input: 'https://clinic.test/',
+    });
+  });
+
+  it('rejects an import creation that returns no data', async () => {
+    const { client } = clientWith({ create_knowledge_import: { data: null, error: null } });
+    await expect(requestWebsiteImport(client, 'https://clinic.test/', null)).rejects.toBeInstanceOf(
+      KnowledgeServiceError,
+    );
+  });
+});
+
+describe('reading one import', () => {
+  it('reports the status the worker last recorded', async () => {
+    const { client } = clientWith({
+      get_my_knowledge_overview: {
+        data: [overviewRow({ pages_imported: 4, status: 'awaiting_review' })],
+        error: null,
+      },
     });
 
+    const record = await loadKnowledgeImport(client, IMPORT_ID);
+
+    expect(record?.status).toBe('awaiting_review');
+    expect(record?.pagesImported).toBe(4);
+  });
+
+  it('carries the safe failure message the worker recorded', async () => {
+    const { client } = clientWith({
+      get_my_knowledge_overview: {
+        data: [
+          overviewRow({
+            error_message: 'This website needs JavaScript rendering, which is not available right now.',
+            status: 'failed',
+          }),
+        ],
+        error: null,
+      },
+    });
+
+    const record = await loadKnowledgeImport(client, IMPORT_ID);
+
+    expect(record?.status).toBe('failed');
+    expect(record?.errorMessage).toContain('JavaScript rendering');
+  });
+
+  it('answers with nothing for an import this workspace cannot see', async () => {
+    // The overview is already tenant-scoped, so an id from another organization simply is not in
+    // it. The page turns that into a 404 rather than a differently worded error.
+    const { client } = clientWith();
     await expect(
-      importWebsiteKnowledge(client, 'https://clinic.test/', null),
-    ).rejects.toBeInstanceOf(KnowledgeServiceError);
-    // The failure happened before the crawl, so nothing was crawled.
-    expect(run).not.toHaveBeenCalled();
-    expect(rpc).not.toHaveBeenCalledWith('save_knowledge_import_pages', expect.anything());
+      loadKnowledgeImport(client, '10000000-0000-4000-8000-000000000009'),
+    ).resolves.toBeNull();
   });
 });
 
@@ -123,36 +180,5 @@ describe('data-returning knowledge RPCs keep their strict null check', () => {
   it('rejects an overview read that returns no data', async () => {
     const { client } = clientWith({ get_my_knowledge_overview: { data: null, error: null } });
     await expect(loadKnowledgeOverview(client)).rejects.toBeInstanceOf(KnowledgeServiceError);
-  });
-
-  it('rejects an import creation that returns no data', async () => {
-    const { client } = clientWith({ create_knowledge_import: { data: null, error: null } });
-    await expect(
-      importWebsiteKnowledge(client, 'https://clinic.test/', null),
-    ).rejects.toBeInstanceOf(KnowledgeServiceError);
-  });
-
-  it('rejects a page save that returns no count, and records the failure safely', async () => {
-    run.mockResolvedValue(CRAWL_RESULT);
-    const { client, rpc } = clientWith({
-      save_knowledge_import_pages: { data: null, error: null },
-    });
-
-    await expect(
-      importWebsiteKnowledge(client, 'https://clinic.test/', null),
-    ).rejects.toBeInstanceOf(KnowledgeServiceError);
-    expect(rpc).toHaveBeenCalledWith('fail_knowledge_import', {
-      safe_error_code: 'import_failed',
-      safe_error_message: 'Knowledge import could not be completed.',
-      target_import_id: '10000000-0000-4000-8000-000000000001',
-    });
-  });
-
-  it('accepts a zero page count as a real answer', async () => {
-    run.mockResolvedValue({ ...CRAWL_RESULT, pages: [], pagesDiscovered: 0 });
-    const { client } = clientWith({ save_knowledge_import_pages: { data: 0, error: null } });
-    await expect(importWebsiteKnowledge(client, 'https://clinic.test/', null)).resolves.toBe(
-      '10000000-0000-4000-8000-000000000001',
-    );
   });
 });
