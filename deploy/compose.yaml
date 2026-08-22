@@ -14,6 +14,19 @@
 
 name: avenlyo-staging
 
+# Bounded log rotation, shared by all three services (Part N). json-file is Docker's default driver;
+# without max-size/max-file it grows unbounded, which is the actual risk on a small staging disk --
+# not the absence of a logging stack, which this deliberately does not add. 10m x 5 files is
+# ~50 MB/service ceiling (150 MB across all three), a conservative starting point for staging, not a
+# measured figure -- there is no provisioned host to size this against yet. Pino's structured JSON
+# output (apps/api) and Next's own stdout (apps/web) are unchanged; this only bounds what Docker
+# retains of them on disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 networks:
   internal:
     driver: bridge
@@ -28,9 +41,10 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.web
       args:
-        # Build-time only -- see the "IMPORTANT NEXT_PUBLIC ENV RULE" note in
-        # docs/deployment/hetzner-staging.md. Supplied via deploy/build.env (untracked, see
-        # deploy/env/build.env.example), never hardcoded here.
+        # Build-time only -- see "Build-time vs. runtime configuration" in
+        # docs/deployment/hetzner-staging.md. Supplied via `docker compose --env-file
+        # deploy/env/build.env build` (untracked; see deploy/env/build.env.example) -- the filename
+        # alone does not make Compose load it, the flag is required. Never hardcoded here.
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
@@ -58,6 +72,7 @@ services:
     # Worth revisiting once a real host can prove it, documented in
     # docs/deployment/hetzner-staging.md rather than guessed at here.
     mem_limit: 1g
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
@@ -117,6 +132,7 @@ services:
     # container restart, and deliberately not read_only here -- Chromium genuinely needs writable
     # paths beyond /tmp (its own profile/cache directories), unlike the web container.
     mem_limit: 2g
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health/live').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
@@ -156,6 +172,7 @@ services:
         condition: service_healthy
       api:
         condition: service_healthy
+    logging: *default-logging
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s

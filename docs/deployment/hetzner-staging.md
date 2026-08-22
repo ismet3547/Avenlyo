@@ -35,7 +35,9 @@ Two genuinely different kinds of configuration, handled two different ways:
   JavaScript bundle at `next build` time. Setting them as a container runtime environment variable
   has no effect on an already-built image -- the value has to exist before `docker build` runs.
   They are supplied as Docker build args (`deploy/Dockerfile.web`'s `ARG`s), sourced from
-  `deploy/env/build.env` (real values, never committed -- see `deploy/env/build.env.example`).
+  `deploy/env/build.env` (real values, never committed -- see `deploy/env/build.env.example`) --
+  **only when that file is passed explicitly as `--env-file deploy/env/build.env`.** Its filename
+  alone does not make Compose load it; see "Deploy procedure" below for the exact commands.
   They are public values (an anon key scoped by RLS, a base URL) but still never hardcoded into the
   repository, the same way no other deployment-specific configuration is.
 - **Runtime, server-only** (everything else): read from `/etc/avenlyo/web.env` and
@@ -46,8 +48,9 @@ Two genuinely different kinds of configuration, handled two different ways:
 validates these at build time and rejects an *empty string*, not only a missing one. If
 `deploy/Dockerfile.web`'s build args are left unset, they default to `""`, and `next build` fails
 collecting page data for `/auth/callback` with `EnvironmentValidationError` -- it does not silently
-produce a build that merely lacks Supabase. Always supply real values via `deploy/env/build.env`
-before running `docker compose build`; there is no safe "build without them" path for this image.
+produce a build that merely lacks Supabase. Always supply real values via
+`--env-file deploy/env/build.env` on the `docker compose build` command itself; there is no safe
+"build without them" path for this image.
 
 ## Environment files
 
@@ -93,17 +96,19 @@ with none.
 
 ## Release identifier
 
-`AVENLYO_RELEASE` is set from the deployed commit SHA, supplied as a shell/CI environment variable
-to `docker compose`, not baked into the image or generated per container restart:
+`AVENLYO_RELEASE` is set from the deployed commit SHA once, exported into the shell before *any*
+`docker compose` command, and reused unchanged for both `build` and `up` -- never regenerated
+per-command, or the image `build` names and the image `up` asks for silently diverge:
 
 ```
-AVENLYO_RELEASE=$(git rev-parse HEAD) docker compose -f deploy/compose.yaml up -d
+export AVENLYO_RELEASE="$(git rev-parse HEAD)"
 ```
 
-Both `web` and `api` read the same value (`deploy/compose.yaml`'s `environment:` block for each
+Both `web` and `api` read this same value (`deploy/compose.yaml`'s `environment:` block for each
 service), and it also names the image tag (`avenlyo-api:${AVENLYO_RELEASE}`,
 `avenlyo-web:${AVENLYO_RELEASE}`), which is what makes rollback a tag switch rather than a rebuild
-(see below).
+(see below). The invariant this exists to guarantee: **build once, under this exact tag; deploy that
+exact already-built image; never rebuild during rollback.**
 
 ## Migration deployment order
 
@@ -129,14 +134,28 @@ PR does not add one.
 
 ## Deploy procedure
 
+**A named, real file, not implicit.** `docker compose build` alone does *not* automatically load a
+file merely because it is named `deploy/env/build.env` -- Compose interpolates `${VAR}` references
+(the `NEXT_PUBLIC_*` build args in `deploy/compose.yaml`) from the shell environment, an explicit
+`--env-file`, or Compose's own default `.env` next to the compose file, and none of those is
+`deploy/env/build.env` unless it is named explicitly on every command. Leaving this implicit was
+this runbook's own bug in an earlier draft: it read correctly but did not work, and this PR already
+proved (see "Build-time vs. runtime configuration" above) that an unset `NEXT_PUBLIC_*` value fails
+the build outright -- so a command that silently didn't load it would either fail loudly (good) or,
+worse, succeed by reusing a stale cached layer from a previous build that did have real args. Every
+command below passes `--env-file deploy/env/build.env` explicitly, every time.
+
 ```
+export AVENLYO_RELEASE="$(git rev-parse HEAD)"
+
 git commit -> GitHub
   -> CI green (.github/workflows/ci.yml: application, rendered-browser-security,
      database-security, api-production-artifact, hetzner-staging-containers)
   -> migrations: supabase db push against the linked staging project (before restart)
-  -> dependencies + build: docker compose -f deploy/compose.yaml build
-     (reads deploy/env/build.env for the NEXT_PUBLIC_* args)
-  -> restart: AVENLYO_RELEASE=<sha> docker compose -f deploy/compose.yaml up -d
+  -> BUILD ONCE, under the SHA tag:
+       docker compose --env-file deploy/env/build.env -f deploy/compose.yaml build
+  -> DEPLOY that exact already-built image -- --no-build must not silently rebuild:
+       docker compose --env-file deploy/env/build.env -f deploy/compose.yaml up -d --no-build
   -> health verification:
        docker compose -f deploy/compose.yaml exec api node -e "fetch('http://127.0.0.1:4000/health/ready')..."
        curl https://staging.avenlyo.com/api/health
@@ -144,18 +163,28 @@ git commit -> GitHub
   -> rollback (only if verification fails) -- see below
 ```
 
+`up -d --no-build` deliberately never triggers an implicit build: if the tag `build` just produced
+isn't present (a typo in `AVENLYO_RELEASE` between the two commands, for instance), this fails loudly
+instead of silently building and deploying something that was never through the "BUILD ONCE" step,
+which is exactly the class of drift this two-command split exists to prevent.
+
 ## Rollback
 
 Image tags are the deployed commit SHA (`avenlyo-web:<sha>`, `avenlyo-api:<sha>`), never `latest`.
-Rollback means:
+Rollback means pointing `AVENLYO_RELEASE` at a commit whose image was already built by a prior
+deploy, and running `up` against it -- never rebuilding:
 
 ```
-AVENLYO_RELEASE=<previous-known-good-sha> docker compose -f deploy/compose.yaml up -d --no-build
+export AVENLYO_RELEASE="<previous-known-good-sha>"
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml up -d --no-build
 ```
 
--- running the previous image, never rebuilding old source during an incident. `--no-build` is
-deliberate: it fails loudly if that tag isn't already present locally rather than silently
-rebuilding something different.
+`--env-file` is still required here, for the same reason it's required for `build`: Compose needs it
+to resolve the same `${VAR}` references in `deploy/compose.yaml` even though `--no-build` means the
+image itself won't actually be rebuilt. `--no-build` is the load-bearing part: it fails loudly if
+that tag isn't already present locally rather than silently rebuilding something different -- running
+the previous image is the entire point of a rollback, and rebuilding old source during an incident is
+exactly the failure mode this command is written to make impossible.
 
 Chromium rolls back with it automatically, by construction: the browser binary and its stable
 symlink (`/opt/avenlyo/chromium/chrome`, see `deploy/Dockerfile.api`) are baked into the image layer
@@ -220,12 +249,13 @@ minimum viable floor. Marked as estimates -- no Hetzner VM has been provisioned 
 
 ## Logging
 
-Fastify's default Pino logger already emits structured JSON (unchanged by this PR). Both containers
-write to stdout/stderr; Docker's log driver captures it. Configure bounded rotation at the Docker
-daemon level (`log-opts: max-size`, `max-file`) or via `docker compose`'s per-service `logging:`
-block when the host is actually provisioned -- not configured by this PR, since it is a host-level
-daemon setting rather than something `deploy/compose.yaml` alone controls safely across every Docker
-version.
+Fastify's default Pino logger already emits structured JSON (unchanged by this PR). All three
+containers write to stdout/stderr; `deploy/compose.yaml` sets a bounded `json-file` policy for all
+of them via a shared `x-logging` anchor -- `max-size: "10m"`, `max-file: "5"`, roughly a 50 MB
+ceiling per service (150 MB across all three). This is a conservative starting point for staging,
+not a measured figure -- there is no provisioned host to size it against yet, and it is easy to
+raise later if it proves too tight. `docker compose config` renders the resolved `logging:` block
+for each service; this PR's CI checks that it's present.
 
 No ELK, Loki, Grafana, Datadog, or other logging SaaS. Never log environment values, tokens,
 cookies, raw imported website content, or PII -- this is existing, unchanged application discipline
@@ -242,6 +272,29 @@ never a separately-versioned base image, never a floating tag. The installed rev
 `/opt/avenlyo/chromium/chrome`. `KNOWLEDGE_RENDERER_EXECUTABLE_PATH` is baked into the image as that
 stable path, never a hardcoded revision directory. Bumping `playwright-core` in `pnpm-lock.yaml` and
 rebuilding the image is the only way this path's target changes.
+
+## Reproducibility: base images are not currently digest-pinned
+
+`deploy/Dockerfile.api` and `deploy/Dockerfile.web` reference `node:22-bookworm-slim`;
+`deploy/compose.yaml`'s `caddy` service references `caddy:2.8-alpine`. Both are tags, not digests --
+considered and deliberately left as tags rather than pinned to a `sha256:...` digest for this PR.
+
+**What this means precisely:** an immutable Avenlyo SHA tag (`avenlyo-api:<sha>`,
+`avenlyo-web:<sha>`) is exactly reproducible for rollback -- once built, that image's layers do not
+change, and re-deploying the same tag later runs the identical bytes. What is *not* currently
+guaranteed is that *rebuilding* the same git commit SHA at a later date reproduces byte-identical
+output: `node:22-bookworm-slim` and `caddy:2.8-alpine` can each receive upstream patch updates under
+the same tag, so a rebuild next month may pick up a newer base image than a rebuild today did, even
+from unchanged Avenlyo source. Do not claim full byte-for-byte rebuild reproducibility while these
+tags float.
+
+**Why not pin now:** digest-pinning requires recording the exact current digest for each tag, which
+this PR cannot verify against a live registry pull in this environment, and turning it into a
+dependency-upgrade exercise (choosing and validating exact digests, plus the process for bumping them
+later) is explicitly out of this PR's scope. If the team decides the staging reproducibility promise
+needs to extend to rebuilds, not just rollbacks, pin `FROM node:22-bookworm-slim@sha256:<digest>` and
+`image: caddy:2.8-alpine@sha256:<digest>` as a small, separate, deliberate change -- not bundled into
+an unrelated correction.
 
 ## What remains manual
 
