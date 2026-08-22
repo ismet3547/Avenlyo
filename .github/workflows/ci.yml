@@ -236,6 +236,16 @@ jobs:
             --build-arg NEXT_PUBLIC_APP_URL=https://staging.avenlyo.com \
             --build-arg NEXT_PUBLIC_AVENLYO_API_URL=https://api-staging.avenlyo.com
 
+      # deploy/compose.yaml's env_file: entries point at /etc/avenlyo/{web,api}.env, which exist
+      # only on the real deployment host (Part J: never committed, see deploy/env/*.example).
+      # `docker compose config` resolves env_file: paths to validate the file, so it fails here
+      # without something at those paths -- these are empty placeholders solely so the runner has
+      # the same directory shape a real host does; they carry no configuration of any kind.
+      - name: Create placeholder env files for compose config validation
+        run: |
+          sudo mkdir -p /etc/avenlyo
+          sudo touch /etc/avenlyo/web.env /etc/avenlyo/api.env
+
       - name: Validate compose config
         run: docker compose -f deploy/compose.yaml config
 
