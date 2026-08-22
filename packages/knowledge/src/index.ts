@@ -40,6 +40,5 @@ export {
 export type { OpenAIEmbeddingProviderOptions } from './embeddings/openai';
 export { EmbeddingConfigurationError, EmbeddingOperationError } from './embeddings/provider';
 export type { EmbeddingProvider } from './embeddings/provider';
-export { KnowledgeImportRunner } from './imports/runner';
-export type { KnowledgeImportExecution, KnowledgeImportStatus } from './imports/types';
+export type { KnowledgeImportStatus } from './imports/types';
 export type { KnowledgeMatch } from './retrieval/types';

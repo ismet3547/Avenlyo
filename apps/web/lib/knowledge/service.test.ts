@@ -1,18 +1,6 @@
-import type * as KnowledgePackage from '@avenlyo/knowledge';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
-
-const run = vi.fn();
-
-// Still mocked, and deliberately so: the point of several tests below is that the web request path
-// never reaches a crawler at all. A real one would prove nothing except that the network was slow.
-vi.mock('@avenlyo/knowledge', async (importOriginal) => ({
-  ...(await importOriginal<typeof KnowledgePackage>()),
-  KnowledgeImportRunner: class {
-    public run = run;
-  },
-}));
 
 // `./config` imports Next.js's `server-only` marker, which has no resolution outside the Next
 // runtime. Only the embedding paths read it, and none of those are under test here.
@@ -65,10 +53,6 @@ function clientWith(overrides: Readonly<Record<string, RpcResult>> = {}) {
   return { client: { rpc } as unknown as AvenlyoSupabaseClient, rpc };
 }
 
-beforeEach(() => {
-  run.mockReset();
-});
-
 function saveDraft(client: AvenlyoSupabaseClient) {
   return saveKnowledgeDraft(
     client,
@@ -107,8 +91,8 @@ describe('requesting a website import', () => {
     );
 
     // The whole point of the durable worker: a request handler that crawled inline lost the work
-    // whenever the request ended, and could never render a JavaScript-only site.
-    expect(run).not.toHaveBeenCalled();
+    // whenever the request ended, and could never render a JavaScript-only site. Creating the row
+    // is the only thing this path does, so one call is the whole contract.
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(rpc).toHaveBeenCalledWith('create_knowledge_import', {
       requested_location_id: null,
