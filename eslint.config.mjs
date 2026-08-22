@@ -61,5 +61,15 @@ export default tseslint.config(
       '@typescript-eslint/triple-slash-reference': 'off',
     },
   },
+  {
+    // Plain Node.js build/deploy tooling (esbuild config, boot smokes) -- not part of any shipped
+    // artifact, so it stays plain .mjs rather than adding a TypeScript loader dependency just to
+    // typecheck a handful of lines. The TS block above only covers .ts/.tsx, so these otherwise get
+    // no globals at all and every Node global reads as undefined.
+    files: ['**/*.mjs', '**/*.cjs'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
   prettier,
 );

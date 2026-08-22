@@ -1,0 +1,142 @@
+# Avenlyo Hetzner staging -- one VM, three containers.
+#
+#   Internet -> 80/443 -> caddy -> web:3000   (staging.avenlyo.com)
+#                               -> api:4000   (api-staging.avenlyo.com)
+#
+# 3000 and 4000 are never published to the host. Only Caddy is internet-facing; web and api are
+# reachable from Caddy purely through Docker's internal DNS (service names), which is also why
+# 127.0.0.1:3000 / 127.0.0.1:4000 would be wrong here -- from inside the caddy container, that
+# address is the caddy container itself, not web or api.
+#
+# No Hetzner VM, DNS record, or hosted Supabase migration is touched by this file. `docker compose
+# config` validates this file's shape; actually running it against a live host is a separate,
+# later, manual step -- see docs/deployment/hetzner-staging.md.
+
+name: avenlyo-staging
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        # Build-time only -- see the "IMPORTANT NEXT_PUBLIC ENV RULE" note in
+        # docs/deployment/hetzner-staging.md. Supplied via deploy/build.env (untracked, see
+        # deploy/env/build.env.example), never hardcoded here.
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
+        NEXT_PUBLIC_AVENLYO_API_URL: ${NEXT_PUBLIC_AVENLYO_API_URL:-}
+    image: avenlyo-web:${AVENLYO_RELEASE:-local}
+    env_file:
+      # Server-only runtime configuration. See deploy/env/web.env.example -- the real file is never
+      # committed and lives only on the host, at /etc/avenlyo/web.env.
+      - /etc/avenlyo/web.env
+    environment:
+      AVENLYO_RELEASE: ${AVENLYO_RELEASE:-unknown}
+    expose:
+      - "3000"
+    networks:
+      - internal
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # A read-only root filesystem was considered for this container too, and deliberately deferred:
+    # it is a reasonable hardening step for a plain `next start` process, but this PR cannot run
+    # Docker locally to verify every path Next's production server writes to, and this container is
+    # not the one carrying the actual security-critical requirement (Chromium's sandbox, on api).
+    # Worth revisiting once a real host can prove it, documented in
+    # docs/deployment/hetzner-staging.md rather than guessed at here.
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    image: avenlyo-api:${AVENLYO_RELEASE:-local}
+    env_file:
+      # Server-only runtime configuration, including the Supabase service-role key and every
+      # provider secret -- never in web.env. See deploy/env/api.env.example.
+      - /etc/avenlyo/api.env
+    environment:
+      AVENLYO_RELEASE: ${AVENLYO_RELEASE:-unknown}
+    expose:
+      - "4000"
+    networks:
+      - internal
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # A bounded /dev/shm, not the host's IPC namespace. Chromium uses shared memory heavily for
+    # tab/renderer processes; the default 64MB Docker gives a container is not enough and the
+    # common workaround (`ipc: host`) shares the host's IPC namespace with every other process on
+    # it, which is a far larger exposure than this workload needs. A sized tmpfs-backed /dev/shm
+    # solves the same problem without it.
+    shm_size: "1gb"
+    # Chromium's browser cache and any other renderer scratch space; not business data, discarded on
+    # container restart, and deliberately not read_only here -- Chromium genuinely needs writable
+    # paths beyond /tmp (its own profile/cache directories), unlike the web container.
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/health/live').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    # Pinned to a specific minor line, not `latest` or a bare major tag. Bump deliberately; see
+    # docs/deployment/hetzner-staging.md for how.
+    image: caddy:2.8-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Only Caddy's own certificate/state data persists. No application data, no logs with
+      # business content, ever lands in a volume.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - internal
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      # The two capabilities Caddy documents needing to bind 80/443 as a non-root-equivalent
+      # process and to open enough file descriptors for many concurrent connections -- not a broad
+      # grant, and not SYS_ADMIN.
+      - NET_BIND_SERVICE
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

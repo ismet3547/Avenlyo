@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/dynamic-website-knowledge]
   push:
-    branches: [main]
+    branches: [main, feat/dynamic-website-knowledge]
 
 permissions:
   contents: read
@@ -153,3 +153,132 @@ jobs:
       - name: Stop local Supabase
         if: always()
         run: supabase stop --no-backup
+
+  api-production-artifact:
+    name: API production artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Proves apps/api's real production build -- not `tsx src/server.ts` -- boots under plain Node
+    # and shuts down cleanly. No Docker needed for this job; it is the pnpm/Node-only half of the
+    # infra validation, kept separate from the Docker-dependent job below so it stays fast.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the API production bundle
+        run: pnpm --filter @avenlyo/api build
+
+      - name: Confirm the bundle exists
+        run: test -f apps/api/dist/server.js && test -f apps/api/dist/scripts/chromium-sandbox-smoke.js
+
+      - name: Artifact boot smoke -- plain Node, /health/live, graceful SIGTERM
+        run: pnpm --filter @avenlyo/api smoke:artifact
+
+  hetzner-staging-containers:
+    name: Hetzner staging container validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # The Docker-dependent half. Builds the exact images deploy/compose.yaml would run, then proves
+    # -- inside the built API image, as its actual non-root runtime user, using the browser it
+    # actually ships -- that Chromium launches with the OS sandbox enabled. This is deliberately not
+    # the same thing the existing "Rendered browser security" job proves: that job proves the
+    # application's launch configuration on a bare GitHub runner; this one proves the final,
+    # containerized artifact can do the same thing under Docker's isolation.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same finding as the existing "Rendered browser security" job: Ubuntu 24.04 runners restrict
+      # unprivileged user namespaces through AppArmor, which is exactly what Chromium's sandbox needs
+      # to build its own as a non-root user. This is a host (runner) kernel setting, independent of
+      # Docker's own seccomp profile, and containers share the host kernel -- so it has to be set
+      # here too, once, before any container that launches Chromium runs.
+      - name: Allow unprivileged user namespaces for the Chromium sandbox
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          echo "unprivileged_userns_clone=$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo n/a)"
+
+      - name: Build the API image
+        run: docker build -f deploy/Dockerfile.api -t avenlyo-api:ci .
+
+      - name: Build the web image
+        run: docker build -f deploy/Dockerfile.web -t avenlyo-web:ci .
+
+      - name: Validate compose config
+        run: docker compose -f deploy/compose.yaml config
+
+      - name: Assert the API image's runtime user is not root
+        run: |
+          uid="$(docker run --rm --entrypoint node avenlyo-api:ci -e 'process.stdout.write(String(process.getuid()))')"
+          echo "API container UID: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "::error::API image runs as UID 0 (root)."
+            exit 1
+          fi
+
+      # This is Part D's mandatory proof: build the final image, run it as the actual non-root
+      # runtime user, use the browser path shipped in the image, chromiumSandbox: true, fail (never
+      # skip, never retry without the sandbox) if it cannot initialize. No --security-opt seccomp
+      # override and no added capabilities beyond Docker's default here on purpose: this is the test
+      # for whether that default is actually sufficient on this host.
+      - name: Real sandboxed Chromium launch inside the final API container
+        run: |
+          docker run --rm \
+            --cap-drop=ALL \
+            --security-opt no-new-privileges:true \
+            --shm-size=1gb \
+            --entrypoint node \
+            avenlyo-api:ci \
+            dist/scripts/chromium-sandbox-smoke.js
+
+      - name: API container boots and answers /health/live
+        run: |
+          docker run -d --name api-ci -p 127.0.0.1:4100:4000 \
+            -e API_HOST=0.0.0.0 -e API_PORT=4000 -e NODE_ENV=production \
+            -e WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com \
+            avenlyo-api:ci
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:4100/health/live > /dev/null; then
+              echo "API /health/live ok"; docker logs api-ci; docker rm -f api-ci; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::API container never answered /health/live"
+          docker logs api-ci
+          docker rm -f api-ci
+          exit 1
+
+      - name: Web container boots and answers /api/health
+        run: |
+          docker run -d --name web-ci -p 127.0.0.1:3100:3000 avenlyo-web:ci
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3100/api/health > /dev/null; then
+              echo "web /api/health ok"; docker logs web-ci; docker rm -f web-ci; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::web container never answered /api/health"
+          docker logs web-ci
+          docker rm -f web-ci
+          exit 1
