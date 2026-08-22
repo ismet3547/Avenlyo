@@ -86,8 +86,17 @@ services:
     # self-referential /proc/self chroot) -- proven by this PR's own CI, and Playwright's own
     # documented Docker recommendation for exactly this reason, not a guess.
     init: true
-    cap_drop:
-      - ALL
+    # cap_drop: [ALL] was tried first, per Part C's preference, and proven incompatible by this PR's
+    # own CI: with every capability dropped, Chromium's own internal sandbox/zygote setup failed a
+    # step unrelated to the seccomp or PID-1 fixes above (a chroot during namespace setup), and it
+    # passed as soon as capabilities were restored to Docker's default set -- with the seccomp
+    # profile and no-new-privileges below unchanged. That default set is exactly what Playwright's
+    # own official Docker documentation runs and tests
+    # (`docker run --ipc=host --user pwuser --security-opt seccomp=seccomp_profile.json ...`, no
+    # cap_drop at all); this repository does not narrow further than that, matching upstream's own
+    # tested configuration rather than guessing at which single default capability Chromium's
+    # namespace setup needs. No capability is *added* beyond Docker's default -- nothing here grants
+    # SYS_ADMIN or any capability Docker does not already include by default.
     security_opt:
       - no-new-privileges:true
       # Docker's default seccomp profile blocks unprivileged user-namespace creation, which is
