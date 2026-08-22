@@ -42,6 +42,13 @@ Two genuinely different kinds of configuration, handled two different ways:
   `/etc/avenlyo/api.env` on the host via Compose's `env_file:`. Changing one of these does not
   require rebuilding an image, only restarting the container.
 
+**A real failure mode, found by this PR's own CI, not hypothetical:** `apps/web/lib/supabase/config.ts`
+validates these at build time and rejects an *empty string*, not only a missing one. If
+`deploy/Dockerfile.web`'s build args are left unset, they default to `""`, and `next build` fails
+collecting page data for `/auth/callback` with `EnvironmentValidationError` -- it does not silently
+produce a build that merely lacks Supabase. Always supply real values via `deploy/env/build.env`
+before running `docker compose build`; there is no safe "build without them" path for this image.
+
 ## Environment files
 
 Never commit a real env file. Templates only:
