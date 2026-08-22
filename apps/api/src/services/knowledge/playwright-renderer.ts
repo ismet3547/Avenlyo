@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import {
   CrawlPolicyError,
   EgressProxy,
+  RenderCapabilityError,
   defaultRenderedCrawlLimits,
   type EgressProxyOptions,
   type MainNavigationAuthorizer,
@@ -11,7 +12,13 @@ import {
   type RenderedPage,
   type RenderedPageSource,
 } from '@avenlyo/knowledge';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type LaunchOptions,
+  type Page,
+} from 'playwright-core';
 
 /**
  * The concrete Chromium renderer, and the only place in Avenlyo that runs third-party JavaScript.
@@ -21,7 +28,12 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
  * during install, which keeps every workspace install and CI run deterministic and leaves providing
  * Chromium to the deployment that actually needs it.
  *
- * Two different boundaries operate here and must not be confused.
+ * Three different boundaries operate here and must not be confused.
+ *
+ * The *process* boundary is the Chromium OS sandbox, enabled explicitly in
+ * `buildRenderedLaunchOptions`. It is the only control that assumes the renderer has already been
+ * compromised, and it is the one that has to be stated rather than inherited: Playwright's
+ * `launch` contract defaults `chromiumSandbox` to `false`.
  *
  * The *network* boundary is the loopback proxy this class owns. Chromium is launched pointing at it
  * with loopback bypass disabled, which is what makes it unavoidable for TCP: a proxied client hands
@@ -79,6 +91,62 @@ function safeDefaultExecutablePath(): string | undefined {
   }
 }
 
+/**
+ * Chromium switches that are never negotiable, and the one place they are written down.
+ *
+ * Frozen and exported so a regression test can read exactly what production passes rather than a
+ * copy of it. A test that restated this list would keep passing while the shipped list changed.
+ */
+export const renderedChromiumArgs: readonly string[] = Object.freeze([
+  // Without this, Chromium bypasses the proxy for loopback and private hosts, which is
+  // precisely the traffic the proxy exists to refuse.
+  '--proxy-bypass-list=<-loopback>',
+  // WebRTC can open UDP straight from a real interface, which an HTTP proxy never sees. This
+  // is measured rather than assumed: without it, page JavaScript reaches a local UDP listener
+  // through ICE candidate gathering.
+  '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+  // The pre-rename switch, kept because which one a given Chromium honours is a build
+  // detail and the cost of setting both is nothing.
+  '--webrtc-ip-handling-policy=disable_non_proxied_udp',
+  '--enforce-webrtc-ip-permission-check',
+  // mDNS candidates are still UDP from a real interface.
+  '--disable-features=WebRtcHideLocalIpsWithMdns',
+  // QUIC is the other direct-UDP transport that would sidestep an HTTP proxy.
+  '--disable-quic',
+  '--disable-background-networking',
+  '--disable-sync',
+  '--no-first-run',
+  '--no-default-browser-check',
+]);
+
+/**
+ * The production launch configuration, as a value.
+ *
+ * Extracted from `start()` deliberately. `chromiumSandbox` **defaults to `false`** in Playwright's
+ * `BrowserType.launch` contract, so the OS sandbox is not something this code can leave unstated
+ * and assume: omitting it ships hostile third-party JavaScript running unsandboxed in the worker
+ * process. It was omitted, and the comment claiming otherwise was wrong. Building the options here
+ * lets a unit test assert the real shipped value without a browser binary.
+ *
+ * There is deliberately no sandbox-disabled variant anywhere in this file. If a host cannot start a
+ * sandboxed Chromium, the rendered capability is unavailable on that host and `start()` says so;
+ * `--no-sandbox` is the workaround that would make every other control here decorative.
+ */
+export function buildRenderedLaunchOptions(input: {
+  readonly executablePath: string;
+  readonly proxyServer: string;
+}): LaunchOptions {
+  return {
+    args: [...renderedChromiumArgs],
+    // The OS sandbox. Explicit because the library default is off, and this is the last barrier
+    // between hostile page JavaScript and the worker process.
+    chromiumSandbox: true,
+    executablePath: input.executablePath,
+    headless: true,
+    proxy: { server: input.proxyServer },
+  };
+}
+
 type InterceptedRoute = Parameters<Parameters<BrowserContext['route']>[1]>[0];
 
 export class PlaywrightRenderedPageSource implements RenderedPageSource {
@@ -107,42 +175,21 @@ export class PlaywrightRenderedPageSource implements RenderedPageSource {
   /** Starts the proxy and one isolated browser context for a single import. */
   public async start(): Promise<void> {
     const executablePath = renderedCapabilityExecutablePath(this.options.executablePath);
-    if (!executablePath) {
-      throw new CrawlPolicyError(
-        'request_failed',
-        'This website needs JavaScript rendering, which is not available right now.',
-      );
-    }
+    if (!executablePath) throw new RenderCapabilityError();
     this.proxy = new EgressProxy(this.options.egress ?? {});
     await this.proxy.listen();
-    this.browser = await chromium.launch({
-      args: [
-        // Without this, Chromium bypasses the proxy for loopback and private hosts, which is
-        // precisely the traffic the proxy exists to refuse.
-        '--proxy-bypass-list=<-loopback>',
-        // WebRTC can open UDP straight from a real interface, which an HTTP proxy never sees. This
-        // is measured rather than assumed: without it, page JavaScript reaches a local UDP listener
-        // through ICE candidate gathering.
-        '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-        // The pre-rename switch, kept because which one a given Chromium honours is a build
-        // detail and the cost of setting both is nothing.
-        '--webrtc-ip-handling-policy=disable_non_proxied_udp',
-        '--enforce-webrtc-ip-permission-check',
-        // mDNS candidates are still UDP from a real interface.
-        '--disable-features=WebRtcHideLocalIpsWithMdns',
-        // QUIC is the other direct-UDP transport that would sidestep an HTTP proxy.
-        '--disable-quic',
-        '--disable-background-networking',
-        '--disable-sync',
-        '--no-first-run',
-        '--no-default-browser-check',
-      ],
-      executablePath,
-      headless: true,
-      // The OS sandbox stays on. Disabling it is a common workaround and would remove the last
-      // barrier between hostile page JavaScript and this worker process.
-      proxy: { server: this.proxy.proxyUrl },
-    });
+    try {
+      this.browser = await chromium.launch(
+        buildRenderedLaunchOptions({ executablePath, proxyServer: this.proxy.proxyUrl }),
+      );
+    } catch {
+      // A host that cannot start a sandboxed Chromium has no rendered capability, and that is the
+      // whole answer. Retrying without the sandbox is the one recovery this code will not perform,
+      // so the failure is reported as a capability outcome rather than laundered into a launch that
+      // would run hostile JavaScript unconfined. The underlying Playwright error is dropped on
+      // purpose: it carries the executable path and host detail.
+      throw new RenderCapabilityError();
+    }
     this.context = await this.browser.newContext({
       acceptDownloads: false,
       // Certificate verification stays with Chromium, end to end, against the original hostname.

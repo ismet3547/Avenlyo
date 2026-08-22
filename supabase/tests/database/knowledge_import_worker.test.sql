@@ -1,7 +1,7 @@
 -- Phase 18 durable knowledge import worker: claim, lease, recovery, and tenant boundaries.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(38);
+select extensions.plan(55);
 
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
@@ -275,6 +275,152 @@ select extensions.is(
   'a live lease cannot be stolen by another worker');
 select extensions.is(
   public.recover_stale_knowledge_imports(10), 0, 'a live lease is not recovered');
+reset role;
+
+-- ============================================================================================
+-- Lease expiry ends claim authority
+--
+-- The lease, not the recovery sweep, is what grants a worker the right to write. These cases run
+-- entirely inside the window the old contract left open: the lease has expired, recovery has not
+-- run yet, and the expired worker still holds a token the row still carries. Under the old rule
+-- (status = 'running' and claim_token = target) every one of these writes was accepted.
+-- ============================================================================================
+
+insert into public.knowledge_imports (id, organization_id, location_id, root_url, status) values
+  ('dd140000-0000-4000-8000-000000000006', 'dd100000-0000-4000-8000-000000000001',
+   'dd110000-0000-4000-8000-000000000001', 'https://clinic-a.example/expired', 'pending');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select set_config('avenlyo.claim6',
+  (select claim_token::text from public.claim_pending_knowledge_import('worker-nine', 300)), true);
+reset role;
+-- The worker overran its lease: still alive, still holding its token, simply too slow.
+update public.knowledge_imports set lease_expires_at = now() - interval '1 second'
+where id = 'dd140000-0000-4000-8000-000000000006';
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  public.renew_knowledge_import_lease('dd140000-0000-4000-8000-000000000006',
+    current_setting('avenlyo.claim6')::uuid, 300),
+  false,
+  'an expired claimant cannot renew itself back to life'
+);
+reset role;
+-- The refusal has to come from the lease contract itself. If recovery had already cleared the
+-- token, these cases would prove nothing about the window they exist to close.
+select extensions.ok(
+  (select status = 'running' and claim_token = current_setting('avenlyo.claim6')::uuid
+     and lease_expires_at < now()
+   from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000006'),
+  'the expired claim is refused while its token is still on the row and recovery has not run'
+);
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.complete_knowledge_import_crawl('dd140000-0000-4000-8000-000000000006',
+    current_setting('avenlyo.claim6')::uuid,
+    jsonb_build_array(jsonb_build_object(
+      'canonical_url', 'https://clinic-a.example/expired',
+      'content', repeat('Content crawled after the lease had already lapsed. ', 3),
+      'content_hash', repeat('c', 64),
+      'title', 'Expired')),
+    1, 0, 'https://clinic-a.example/expired', 'static')
+$sql$, '42501', 'claim is no longer valid')), 'an expired claimant cannot complete');
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.fail_knowledge_import_as_worker('dd140000-0000-4000-8000-000000000006',
+    current_setting('avenlyo.claim6')::uuid, 'request_failed', 'The website could not be fetched.',
+    'transient')
+$sql$, '42501', 'claim is no longer valid')), 'an expired claimant cannot fail');
+
+select extensions.is(
+  public.recover_stale_knowledge_imports(10), 1, 'recovery owns the expired work');
+reset role;
+select extensions.is(
+  (select status from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000006'),
+  'pending',
+  'the expired import returns to the queue'
+);
+select extensions.is(
+  (select count(*)::integer from public.knowledge_documents
+   where import_id = 'dd140000-0000-4000-8000-000000000006'),
+  0,
+  'nothing the expired claimant tried to write survived'
+);
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select set_config('avenlyo.claim7',
+  (select claim_token::text from public.claim_pending_knowledge_import('worker-ten', 300)), true);
+select extensions.ok(
+  current_setting('avenlyo.claim7') is not null
+    and current_setting('avenlyo.claim7') <> current_setting('avenlyo.claim6'),
+  'the re-claim issues a token the previous claimant never held'
+);
+select extensions.is(
+  public.renew_knowledge_import_lease('dd140000-0000-4000-8000-000000000006',
+    current_setting('avenlyo.claim7')::uuid, 300),
+  true,
+  'an active token with a live lease can renew'
+);
+
+-- The original worker finally wakes up. Its token was valid, its work may even have succeeded, and
+-- none of that matters any more: the import belongs to worker-ten.
+select extensions.is(
+  public.renew_knowledge_import_lease('dd140000-0000-4000-8000-000000000006',
+    current_setting('avenlyo.claim6')::uuid, 300),
+  false,
+  'the old token cannot renew after the work was re-claimed'
+);
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.complete_knowledge_import_crawl('dd140000-0000-4000-8000-000000000006',
+    current_setting('avenlyo.claim6')::uuid, '[]'::jsonb, 1, 0,
+    'https://clinic-a.example/expired', 'static')
+$sql$, '42501', 'claim is no longer valid')),
+  'the old token cannot complete after the work was re-claimed');
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.fail_knowledge_import_as_worker('dd140000-0000-4000-8000-000000000006',
+    current_setting('avenlyo.claim6')::uuid, 'request_failed', 'stale', 'transient')
+$sql$, '42501', 'claim is no longer valid')),
+  'the old token cannot fail after the work was re-claimed');
+
+select extensions.is(
+  (select count(*)::integer from public.claim_pending_knowledge_import('worker-eleven', 300)), 0,
+  'the live lease of the new claimant cannot be stolen');
+select extensions.is(
+  public.recover_stale_knowledge_imports(10), 0,
+  'recovery leaves a live claimant alone');
+reset role;
+
+-- A running row with no lease at all can no longer be acted on by any claimant, so recovery has to
+-- own it too. Nothing creates this state -- claiming always writes a lease -- but before liveness
+-- was enforced it was merely odd, and now it would be stranded in running for ever.
+insert into public.knowledge_imports
+  (id, organization_id, location_id, root_url, status, attempt_count, claimed_by, claim_token)
+values ('dd140000-0000-4000-8000-000000000007', 'dd100000-0000-4000-8000-000000000001',
+  'dd110000-0000-4000-8000-000000000001', 'https://clinic-a.example/leaseless', 'running', 3,
+  'worker-vanished', 'dd999999-0000-4000-8000-000000000007');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  public.recover_stale_knowledge_imports(10), 1,
+  'a running import with no lease at all is recoverable');
+reset role;
+select extensions.is(
+  (select status from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000007'),
+  'failed',
+  'a leaseless import out of attempts is abandoned rather than stranded'
+);
+
+-- The lease predicate is an internal rule, not a surface. The worker role reaches it only through
+-- the four functions that enforce it.
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.knowledge_import_claim_is_live('running', null::uuid, null::timestamptz, null::uuid)
+$sql$, '42501', 'permission denied')),
+  'the lease predicate is not callable by the worker role');
 reset role;
 
 -- ============================================================================================

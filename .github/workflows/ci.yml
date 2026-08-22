@@ -83,11 +83,27 @@ jobs:
       - name: Install Chromium
         run: pnpm --filter @avenlyo/api exec playwright-core install --with-deps chromium
 
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, and unprivileged user
+      # namespaces are exactly what Chromium's sandbox needs to build its own as a non-root user.
+      # Without this the sandboxed launch fails on the runner -- and the tempting fix, dropping the
+      # sandbox, is the defect this job now exists to catch. So the host capability is enabled and
+      # CI runs the same launch configuration production does, sandbox included.
+      - name: Allow unprivileged user namespaces for the Chromium sandbox
+        run: |
+          # Tolerant of the key being absent: which of the two knobs exists is a kernel and
+          # distribution detail, and an image that already permits this needs neither. Whether the
+          # sandbox actually works is then decided by the suite launching a browser, not by these.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          echo "unprivileged_userns_clone=$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo n/a)"
+
       - name: Require a usable Chromium
         run: pnpm --filter @avenlyo/api exec node --input-type=module -e "import { chromium } from 'playwright-core'; import { existsSync } from 'node:fs'; const path = chromium.executablePath(); if (!existsSync(path)) { console.error('Chromium is required for the rendered browser security suite.'); process.exit(1); } console.log('Chromium present.');"
 
-      # No public website, no DNS, no petrandevu.com: every fixture is served from loopback, the OS
-      # sandbox stays enabled, and certificate errors are never ignored.
+      # Every case here launches through the production launch options, sandbox included, against
+      # loopback fixtures: no public website, no DNS, and certificate errors are never ignored. A
+      # host that cannot start a sandboxed Chromium fails this job rather than falling back, because
+      # falling back is what put unsandboxed hostile JavaScript in the worker process.
       - name: Rendered browser security suite
         run: pnpm vitest run --config vitest.chromium.config.ts --reporter=verbose
 

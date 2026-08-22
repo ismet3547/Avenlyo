@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { CrawlPolicyError } from '@avenlyo/knowledge';
 
+import { chromium } from 'playwright-core';
+
 import {
   PlaywrightRenderedPageSource,
+  buildRenderedLaunchOptions,
   renderedCapabilityExecutablePath,
 } from './playwright-renderer.js';
 
@@ -86,6 +89,38 @@ const CLINIC_SCRIPT = `
     'Fixture Clinic offers wellness visits, vaccinations and dental care for cats and dogs. ' +
     'Our team answers questions about appointments, pricing and opening hours every weekday.';
 `;
+
+describeRendered('production launch configuration', () => {
+  it('starts a real browser with the OS sandbox enabled', async () => {
+    // The unit suite proves the shipped options *request* `chromiumSandbox: true`. This proves the
+    // request is not aspirational: a host that cannot initialise the sandbox fails to launch at
+    // all, so a browser that starts from exactly these options is a sandboxed browser.
+    //
+    // There is deliberately no fallback here. `--no-sandbox` is what a green CI job would have
+    // been bought with, and buying it is the defect: every other control in the renderer assumes
+    // the process boundary is there.
+    const options = buildRenderedLaunchOptions({
+      executablePath: chromiumPath!,
+      // Nothing is fetched through it; the launch itself is the assertion.
+      proxyServer: 'http://127.0.0.1:1',
+    });
+    expect(options.chromiumSandbox).toBe(true);
+
+    const browser = await chromium.launch(options);
+    try {
+      expect(browser.version()).toMatch(/\d+\./);
+      // A context and a page, so the renderer processes the sandbox actually confines are spawned
+      // rather than only the browser process.
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await page.setContent('<html><body><p id="x">sandboxed</p></body></html>');
+      expect(await page.textContent('#x')).toBe('sandboxed');
+      await context.close();
+    } finally {
+      await browser.close();
+    }
+  });
+});
 
 describeRendered('rendered page source', () => {
   it('extracts text that only exists after JavaScript runs', async () => {
