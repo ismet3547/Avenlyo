@@ -1,5 +1,6 @@
 import type { Json } from '@avenlyo/database';
 import { businessHoursSchema, type BusinessDetails, type LocationDetails } from '@avenlyo/shared';
+import { cache } from 'react';
 import { z } from 'zod';
 
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
@@ -152,8 +153,12 @@ export async function loadTenantContexts(
  *
  * Null is the important case: it means the selection was authorized when it was stored and is not
  * now, so the caller has to re-resolve rather than continue with identifiers that have gone stale.
+ *
+ * Memoized per request by `(supabase, organizationId, locationId)`: `requireCompletedWorkspace`
+ * re-verifies the caller's stored selection on every layout and page in one render, and that
+ * re-verification cannot change mid-request.
  */
-export async function loadWorkspaceContext(
+export const loadWorkspaceContext = cache(async function loadWorkspaceContext(
   supabase: AvenlyoSupabaseClient,
   organizationId: string,
   locationId: string | null,
@@ -164,7 +169,7 @@ export async function loadWorkspaceContext(
   });
   if (error || !data || data.length === 0) return null;
   return mapTenantContext(data[0]);
-}
+});
 
 export async function ensureWorkspaceContext(
   supabase: AvenlyoSupabaseClient,

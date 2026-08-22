@@ -5,24 +5,24 @@ import { loadBillingExecutionSummary } from '@/lib/billing/service';
 import { loadSwitchableWorkspaces, requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { hasMultipleWorkspaces } from '@/lib/workspace/selection';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
-import { messagingRpc } from '@/lib/messaging/service';
+import { loadHandoffQueueSummary } from '@/lib/messaging/service';
 
 export default async function DashboardLayout({ children }: Readonly<{ children: ReactNode }>) {
   const context = await requireCompletedWorkspace();
   const auth = await getRequiredAuthContext();
   const workspaces = await loadSwitchableWorkspaces();
   // One tenant- and location-scoped read per dashboard render. The Inbox page owns the bounded
-  // refresh loop; navigation deliberately does not poll for this badge. The billing summary is
-  // read alongside it and is scoped to the selected organization, so switching workspace changes
-  // which billing state the banner describes.
-  const [attentionCount, billing] = auth
+  // refresh loop; navigation deliberately does not poll for this badge. The summary is memoized
+  // per request, so the Inbox page's own tiles reuse this same call instead of firing it again.
+  // The billing summary is read alongside it and is scoped to the selected organization, so
+  // switching workspace changes which billing state the banner describes.
+  const [summary, billing] = auth
     ? await Promise.all([
-        messagingRpc(auth.supabase)('get_my_handoff_queue_summary', {
-          target_location_id: context.locationId,
-        }).then((response) => response.data?.[0]?.needs_attention ?? 0),
+        loadHandoffQueueSummary(auth.supabase, context.locationId),
         loadBillingExecutionSummary(auth.supabase, context.organizationId),
       ])
-    : [0, null];
+    : [null, null];
+  const attentionCount = summary?.needs_attention ?? 0;
 
   return (
     <div className="min-h-screen bg-muted/40 md:grid md:grid-cols-[15rem_1fr]">
