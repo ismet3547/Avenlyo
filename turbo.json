@@ -8,6 +8,9 @@
     "@avenlyo/web#build": {
       "outputs": [".next/**"]
     },
+    "@avenlyo/api#build": {
+      "outputs": ["dist/**"]
+    },
     "typecheck": {
       "dependsOn": ["^typecheck"],
       "outputs": []

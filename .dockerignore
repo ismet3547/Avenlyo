@@ -1,0 +1,30 @@
+# Docker build context exclusions for both deploy/Dockerfile.api and deploy/Dockerfile.web.
+#
+# Two goals: keep the build context small, and make it structurally impossible for a local .env
+# file or a build artifact from a developer's machine to end up inside an image layer.
+
+.git
+.github
+
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/.turbo
+
+# Real env files are never part of the build context. Only committed .env.example templates
+# (which contain no values) are allowed through.
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Editor/OS noise
+.vscode
+.idea
+*.log
+.DS_Store
+Thumbs.db
+
+# This deploy scaffolding itself is not part of any image's build context.
+deploy/**/*.env
