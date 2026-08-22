@@ -275,11 +275,16 @@ jobs:
       #     treatment that this exact self-referential /proc/self step trips over. This is Playwright's
       #     own documented Docker recommendation ("Using the --init Docker flag is recommended to
       #     avoid special treatment for processes with PID=1"), not a workaround invented here.
+      # Diagnostic round: Playwright's own documented working example
+      # (docker run --ipc=host --user pwuser --security-opt seccomp=seccomp_profile.json ...) does
+      # NOT drop capabilities -- it runs with Docker's default set. This run deliberately removes
+      # --cap-drop=ALL to test whether this repo's stricter-than-documented capability set is what's
+      # breaking the namespace sandbox's own internal setup, before deciding whether cap_drop: ALL is
+      # actually compatible with the proven configuration (Part C's own conditional: "if compatible").
       - name: Real sandboxed Chromium launch inside the final API container
         run: |
           docker run --rm \
             --init \
-            --cap-drop=ALL \
             --security-opt no-new-privileges:true \
             --security-opt seccomp=deploy/chromium-seccomp.json \
             --shm-size=1gb \
