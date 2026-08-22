@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 
+import { cache } from 'react';
 import { z } from 'zod';
 
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
@@ -52,8 +53,12 @@ export class WorkspaceServiceError extends Error {
   }
 }
 
-/** Every context this caller may work in right now, straight from the database. */
-export async function loadWorkspaceOptions(
+/**
+ * Every context this caller may work in right now, straight from the database. Memoized per
+ * request: the layout, `loadSwitchableWorkspaces`, and every page's `requireCompletedWorkspace`
+ * call all need this same list within one render, and it cannot change mid-request.
+ */
+export const loadWorkspaceOptions = cache(async function loadWorkspaceOptions(
   supabase: AvenlyoSupabaseClient,
 ): Promise<WorkspaceOption[]> {
   const { data, error } = await workspaceRpc(supabase)('get_my_workspace_contexts');
@@ -64,7 +69,7 @@ export async function loadWorkspaceOptions(
     .array(workspaceRowSchema)
     .parse(data)
     .map((row) => toWorkspaceOption(row));
-}
+});
 
 export async function readWorkspaceSelection(): Promise<WorkspaceSelection | null> {
   const store = await cookies();

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { MessageCircleMore, PhoneCall, TriangleAlert, UserRound } from 'lucide-react';
-import type { HandoffQueueRow } from '@avenlyo/database';
+import type { HandoffHistoryRow, HandoffQueueRow, InboxMessageRow } from '@avenlyo/database';
 
 import {
   claimHandoffAction,
@@ -24,7 +24,7 @@ import {
 } from './queue-view';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { getRequiredAuthContext } from '@/lib/supabase/auth';
-import { messagingRpc } from '@/lib/messaging/service';
+import { loadHandoffQueueSummary, messagingRpc } from '@/lib/messaging/service';
 
 const QUEUE_LIMIT = 60;
 const HISTORY_LIMIT = 8;
@@ -79,23 +79,21 @@ export default async function InboxPage({
   const workspace = await requireCompletedWorkspace();
   const auth = await getRequiredAuthContext();
   const activeFilter = normalizeQueueFilter(filter);
-  const rpc = auth ? messagingRpc(auth.supabase) : null;
 
-  const summary = rpc
-    ? ((await rpc('get_my_handoff_queue_summary', { target_location_id: workspace.locationId }))
-        .data?.[0] ?? null)
-    : null;
-  const queue = rpc
-    ? sortQueueRows(
-        (
-          await rpc('get_my_handoff_queue', {
-            target_filter: activeFilter,
-            target_limit: QUEUE_LIMIT,
-            target_location_id: workspace.locationId,
-          })
-        ).data ?? [],
-      )
-    : [];
+  // The summary is shared with the dashboard layout's badge via `loadHandoffQueueSummary`'s
+  // per-request memo -- this call reuses that result rather than firing the RPC again. The queue
+  // read does not depend on the summary (or vice versa), so they run in parallel.
+  const [summary, queue] = auth
+    ? await Promise.all([
+        loadHandoffQueueSummary(auth.supabase, workspace.locationId),
+        messagingRpc(auth.supabase)('get_my_handoff_queue', {
+          target_filter: activeFilter,
+          target_limit: QUEUE_LIMIT,
+          target_location_id: workspace.locationId,
+        }).then((response) => sortQueueRows(response.data ?? [])),
+      ])
+    : [null, []];
+  const rpc = auth ? messagingRpc(auth.supabase) : null;
 
   let selected: HandoffQueueRow | null =
     queue.find((row) => row.conversation_id === requestedConversationId) ?? queue[0] ?? null;
@@ -113,20 +111,19 @@ export default async function InboxPage({
       fallback?.find((row) => row.conversation_id === requestedConversationId) ?? selected ?? null;
   }
 
-  const messages =
+  // Neither read depends on the other, only on `selected`, so they run in parallel.
+  const [messages, history]: [readonly InboxMessageRow[], readonly HandoffHistoryRow[]] =
     rpc && selected
-      ? ((await rpc('get_my_inbox_messages', { target_conversation_id: selected.conversation_id }))
-          .data ?? [])
-      : [];
-  const history =
-    rpc && selected
-      ? ((
-          await rpc('get_my_conversation_handoff_history', {
+      ? await Promise.all([
+          rpc('get_my_inbox_messages', { target_conversation_id: selected.conversation_id }).then(
+            (response) => response.data ?? [],
+          ),
+          rpc('get_my_conversation_handoff_history', {
             target_conversation_id: selected.conversation_id,
             target_limit: HISTORY_LIMIT,
-          })
-        ).data ?? [])
-      : [];
+          }).then((response) => response.data ?? []),
+        ])
+      : [[], []];
 
   const now = Date.now();
   // Owner/admin recovery is offered in the UI only because the server already permits it.
