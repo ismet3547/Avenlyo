@@ -1,7 +1,7 @@
 -- Phase 18 durable knowledge import worker: claim, lease, recovery, and tenant boundaries.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(55);
+select extensions.plan(66);
 
 create function pg_temp.error_matches(target_sql text, expected_state text, message_pattern text)
 returns boolean language plpgsql as $$
@@ -413,15 +413,141 @@ select extensions.is(
   'a leaseless import out of attempts is abandoned rather than stranded'
 );
 
--- The lease predicate is an internal rule, not a surface. The worker role reaches it only through
--- the four functions that enforce it.
+-- The two predicates are internal rules, not surfaces. The worker role reaches them only through
+-- the functions that enforce them.
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.ok((select pg_temp.error_matches($sql$
-  select public.knowledge_import_claim_is_live('running', null::uuid, null::timestamptz, null::uuid)
+  select public.knowledge_import_claim_matches('running', null::uuid, null::uuid)
+$sql$, '42501', 'permission denied')),
+  'the claim predicate is not callable by the worker role');
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.knowledge_import_lease_is_live(null::timestamptz)
 $sql$, '42501', 'permission denied')),
   'the lease predicate is not callable by the worker role');
 reset role;
+
+-- ============================================================================================
+-- Lease expiry is judged by the wall clock, not by the transaction snapshot
+--
+-- The case the previous section could not reach. Those tests call in *after* expiry, so a
+-- transaction-start snapshot and the real clock agree and the predicate is never asked to tell
+-- them apart. The dangerous shape is an operation that was authorized when it began and is not by
+-- the time it writes -- a claimant that blocked on the import row lock while its lease ran out.
+--
+-- A second connection is what would produce that block, and pg_prove runs one file in one session
+-- inside one transaction, so the harness cannot hold a competing lock while this session waits on
+-- it. Every mechanism that could (dblink, an async second connection) either adds an extension the
+-- database does not otherwise need or risks hanging the whole suite on a lock that is never
+-- released.
+--
+-- The lock wait is not the property, though; it is only one way to spend wall-clock time inside a
+-- transaction. `pg_sleep` spends it deterministically, and produces the exact state the race
+-- produces: `now()` still says the lease is live, `clock_timestamp()` says it expired. Every write
+-- below was authorized under the old predicate and is refused under the new one, which is what the
+-- race turns on. Token fencing across a concurrent committed recovery is proved separately, in the
+-- section above.
+-- ============================================================================================
+
+insert into public.knowledge_imports (id, organization_id, location_id, root_url, status) values
+  ('dd140000-0000-4000-8000-000000000008', 'dd100000-0000-4000-8000-000000000001',
+   'dd110000-0000-4000-8000-000000000001', 'https://clinic-a.example/slowlock', 'pending');
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select set_config('avenlyo.claim8',
+  (select claim_token::text from public.claim_pending_knowledge_import('worker-twelve', 300)), true);
+reset role;
+
+-- A lease that is live right now and about to lapse. This is the moment the claimant issues its
+-- statement and blocks.
+update public.knowledge_imports
+set lease_expires_at = clock_timestamp() + interval '1 second'
+where id = 'dd140000-0000-4000-8000-000000000008';
+select extensions.ok(
+  (select lease_expires_at > clock_timestamp() and lease_expires_at > now()
+   from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000008'),
+  'the lease is live under both the wall clock and the transaction snapshot when the wait begins'
+);
+
+-- The wait. In production this is time spent blocked on the row lock; here it is time spent in
+-- pg_sleep. What matters is that it is real time inside a transaction that has already started.
+select pg_sleep(1.5);
+
+-- The state the whole race turns on, asserted rather than assumed: the snapshot has not moved and
+-- still reports a live lease, while the real clock has passed expiry.
+select extensions.ok(
+  (select lease_expires_at > now()
+   from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000008'),
+  'the transaction snapshot still reports the lease as live after the wait'
+);
+select extensions.ok(
+  (select lease_expires_at <= clock_timestamp()
+   from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000008'),
+  'the wall clock has passed the lease expiry after the wait'
+);
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  public.renew_knowledge_import_lease('dd140000-0000-4000-8000-000000000008',
+    current_setting('avenlyo.claim8')::uuid, 300),
+  false,
+  'a claimant whose lease lapsed during the wait cannot renew'
+);
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.complete_knowledge_import_crawl('dd140000-0000-4000-8000-000000000008',
+    current_setting('avenlyo.claim8')::uuid,
+    jsonb_build_array(jsonb_build_object(
+      'canonical_url', 'https://clinic-a.example/slowlock',
+      'content', repeat('Content written after the lease lapsed during the wait. ', 3),
+      'content_hash', repeat('d', 64),
+      'title', 'Slow lock')),
+    1, 0, 'https://clinic-a.example/slowlock', 'static')
+$sql$, '42501', 'claim is no longer valid')),
+  'a claimant whose lease lapsed during the wait cannot complete');
+select extensions.ok((select pg_temp.error_matches($sql$
+  select public.fail_knowledge_import_as_worker('dd140000-0000-4000-8000-000000000008',
+    current_setting('avenlyo.claim8')::uuid, 'request_failed', 'The website could not be fetched.',
+    'transient')
+$sql$, '42501', 'claim is no longer valid')),
+  'a claimant whose lease lapsed during the wait cannot fail');
+reset role;
+
+-- The refusals came from the clock, not from recovery having already taken the row: the token the
+-- caller presented is still the token on the row, and the import is still running.
+select extensions.ok(
+  (select status = 'running' and claim_token = current_setting('avenlyo.claim8')::uuid
+   from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000008'),
+  'the lapsed claimant still holds the token it was refused on'
+);
+select extensions.is(
+  (select count(*)::integer from public.knowledge_documents
+   where import_id = 'dd140000-0000-4000-8000-000000000008'),
+  0,
+  'nothing the lapsed claimant tried to write survived'
+);
+
+-- Recovery reads the same clock, so there is no window where a row is too expired for its claimant
+-- and not yet expired for recovery. Under a transaction-snapshot predicate this returns zero.
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  public.recover_stale_knowledge_imports(10), 1,
+  'recovery agrees the lease lapsed during the wait and reclaims it'
+);
+reset role;
+select extensions.is(
+  (select status from public.knowledge_imports where id = 'dd140000-0000-4000-8000-000000000008'),
+  'pending',
+  'the reclaimed import returns to the queue'
+);
+
+-- Parked, so the sections below keep their single-candidate assumption. Every row in this file is
+-- inserted in one transaction and therefore shares one `created_at`, and the claim orders by it --
+-- so leaving a second claimable row here would make which import a later claim returns arbitrary.
+update public.knowledge_imports
+set status = 'failed', finished_at = now(), error_code = 'import_abandoned'
+where id = 'dd140000-0000-4000-8000-000000000008';
 
 -- ============================================================================================
 -- Bounded attempts
