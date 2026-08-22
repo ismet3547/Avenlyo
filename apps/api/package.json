@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc --noEmit",
-    "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
+    "build": "node esbuild.config.mjs",
+    "start": "node dist/server.js",
+    "smoke:artifact": "node scripts/artifact-smoke.mjs",
     "ops:status": "tsx src/scripts/ops-status.ts",
     "smoke:production": "tsx src/scripts/smoke-production.ts",
     "voice:assign-number": "tsx src/scripts/assign-voice-number.ts",
@@ -37,6 +38,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.14"
+    "@types/ws": "^8.5.14",
+    "esbuild": "^0.24.2"
   }
 }
