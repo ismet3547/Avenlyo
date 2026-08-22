@@ -12,6 +12,7 @@ import type {
   InboxMessageRow,
   WebChatWidgetConfigurationRow,
 } from '@avenlyo/database';
+import { cache } from 'react';
 
 import type { AvenlyoSupabaseClient } from '@/lib/supabase/server';
 
@@ -122,3 +123,27 @@ export interface MessagingRpcCaller {
 export function messagingRpc(client: AvenlyoSupabaseClient): MessagingRpcCaller {
   return client.rpc.bind(client);
 }
+
+/**
+ * Uncached queue-summary resolution, exported separately from `loadHandoffQueueSummary` so it is
+ * unit-testable without React's per-request cache dispatcher, which only memoizes inside an active
+ * Server Component render and is a silent no-op anywhere else -- the same reason `auth.ts` splits
+ * `resolveAuthContext` from `getRequiredAuthContext`. A failure returns null rather than throwing:
+ * a queue summary must never be able to take the dashboard down.
+ */
+export async function resolveHandoffQueueSummary(
+  client: AvenlyoSupabaseClient,
+  locationId: string | null,
+): Promise<HandoffQueueSummaryRow | null> {
+  const response = await messagingRpc(client)('get_my_handoff_queue_summary', {
+    target_location_id: locationId,
+  });
+  return response.error ? null : (response.data?.[0] ?? null);
+}
+
+/**
+ * The queue summary for one location -- total needing attention, urgent, and assigned to the
+ * caller. The dashboard layout's badge and the Inbox page's tiles both read this on every render;
+ * memoized per request with `cache()` so they share the one RPC call instead of each firing it.
+ */
+export const loadHandoffQueueSummary = cache(resolveHandoffQueueSummary);
