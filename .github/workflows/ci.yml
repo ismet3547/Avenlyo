@@ -227,8 +227,19 @@ jobs:
       - name: Build the API image
         run: docker build -f deploy/Dockerfile.api -t avenlyo-api:ci .
 
+      # apps/web validates NEXT_PUBLIC_* at build time (apps/web/lib/supabase/config.ts) and fails
+      # the build on an empty string, not just a missing one -- Dockerfile.web's ARGs default to ""
+      # when nothing is supplied, so `next build` fails page-data collection for /auth/callback
+      # without a syntactically valid value here. These are placeholders for validating that the
+      # image builds and boots, never real staging configuration -- real values come from
+      # deploy/env/build.env on whatever host actually deploys this.
       - name: Build the web image
-        run: docker build -f deploy/Dockerfile.web -t avenlyo-web:ci .
+        run: |
+          docker build -f deploy/Dockerfile.web -t avenlyo-web:ci . \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key \
+            --build-arg NEXT_PUBLIC_APP_URL=https://staging.avenlyo.com \
+            --build-arg NEXT_PUBLIC_AVENLYO_API_URL=https://api-staging.avenlyo.com
 
       - name: Validate compose config
         run: docker compose -f deploy/compose.yaml config
