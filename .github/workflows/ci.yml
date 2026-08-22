@@ -258,7 +258,14 @@ jobs:
           NODE_ENV=production
           WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com
           EOF
-          sudo chmod 0640 /etc/avenlyo/*.env
+          # 0640 root-owned (what docs/deployment/hetzner-staging.md specifies for the real host) is
+          # unreadable by the unprivileged runner user `docker compose` actually runs as here, and
+          # `docker compose` failed with exactly that permission error on the first run of this job.
+          # A real host deploys as root or the dedicated `avenlyo` user/group, which the 0640 runbook
+          # guidance is written for; this runner is neither, and these files carry only placeholder
+          # strings, so relaxing to world-readable is a CI-only accommodation, not a change to the
+          # documented production permission.
+          sudo chmod 0644 /etc/avenlyo/*.env
 
       - name: Validate compose config
         run: docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config
