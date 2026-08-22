@@ -81,6 +81,11 @@ services:
     networks:
       - internal
     restart: unless-stopped
+    # Without this, `node dist/server.js` is the container's own PID 1, and PID 1 gets kernel-level
+    # special treatment that breaks a specific step of Chromium's namespace sandbox setup (a
+    # self-referential /proc/self chroot) -- proven by this PR's own CI, and Playwright's own
+    # documented Docker recommendation for exactly this reason, not a guess.
+    init: true
     cap_drop:
       - ALL
     security_opt:
