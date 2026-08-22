@@ -186,13 +186,22 @@ Not executed by this PR. For whoever provisions the actual VM:
 - Caddy TLS prerequisite: ports 80 and 443 reachable from the internet before first start, so the
   ACME HTTP-01 challenge can complete.
 - **User-namespace / Chromium sandbox verification on the actual Hetzner host is required before
-  relying on rendered imports in staging.** This repository's own CI (both the existing
-  `rendered-browser-security` job and this PR's new `hetzner-staging-containers` job) needed
-  `kernel.apparmor_restrict_unprivileged_userns=0` (or `kernel.unprivileged_userns_clone=1`) set on
-  Ubuntu 24.04 GitHub runners for a sandboxed Chromium launch to succeed. Hetzner's Ubuntu 24.04
-  image very likely needs the identical host-level sysctl, but this has not been proven against a
-  real Hetzner host by this PR -- confirm it there specifically, the same way CI confirms it on the
-  runner, before trusting the rendered-import capability in staging.
+  relying on rendered imports in staging.** Two layers were needed, both proven by this PR's own CI,
+  not assumed:
+  1. **Host kernel**: `kernel.apparmor_restrict_unprivileged_userns=0` (or
+     `kernel.unprivileged_userns_clone=1`) -- Ubuntu 24.04 GitHub runners restrict unprivileged user
+     namespaces by default, the same restriction the pre-existing `rendered-browser-security` job
+     already worked around on a bare runner.
+  2. **Container seccomp**: even with the host kernel fixed, the *container's* first attempt failed
+     identically ("No usable sandbox!") under Docker's default seccomp profile -- confirmed directly
+     in this PR's CI run, not inferred. `deploy/chromium-seccomp.json` (Docker's default profile plus
+     Playwright's own documented one-line addition permitting `clone`/`setns`/`unshare`) fixed it.
+     `deploy/compose.yaml`'s `api` service already applies it.
+
+  Hetzner's Ubuntu 24.04 image very likely needs the identical host-level sysctl for layer 1, but
+  that specific host has not been provisioned or tested by this PR -- confirm it there specifically
+  before trusting the rendered-import capability in staging. Layer 2 (the seccomp profile) is baked
+  into the image/compose file already and needs no host-specific action.
 - Disk/log rotation: see "Logging" below.
 - Rollback procedure: see above.
 

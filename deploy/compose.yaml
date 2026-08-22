@@ -85,6 +85,14 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      # Docker's default seccomp profile blocks unprivileged user-namespace creation, which is
+      # exactly what Chromium's sandbox needs -- proven by this PR's own CI, which failed closed
+      # with "No usable sandbox!" under the default profile before this was added. This file is
+      # Docker's default profile plus one narrow, explicit addition (unconditional SCMP_ACT_ALLOW
+      # for clone/setns/unshare), copied verbatim from Playwright's own
+      # microsoft/playwright/utils/docker/seccomp_profile.json -- not `unconfined`, and no
+      # capability is added: unprivileged user namespaces require none, by kernel design.
+      - seccomp:./chromium-seccomp.json
     # A bounded /dev/shm, not the host's IPC namespace. Chromium uses shared memory heavily for
     # tab/renderer processes; the default 64MB Docker gives a container is not enough and the
     # common workaround (`ipc: host`) shares the host's IPC namespace with every other process on
