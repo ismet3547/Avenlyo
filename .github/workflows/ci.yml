@@ -274,7 +274,7 @@ jobs:
       # Compose's own working directory (deploy/), not just that the file exists on disk somewhere.
       - name: Confirm the seccomp profile resolves in the rendered config
         run: |
-          resolved="$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config | grep -A1 'security_opt' | grep seccomp || true)"
+          resolved="$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config | grep 'seccomp' || true)"
           echo "Resolved seccomp entry: $resolved"
           if [ -z "$resolved" ]; then
             echo "::error::api service's seccomp profile did not appear in the resolved config."
