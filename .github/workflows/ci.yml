@@ -260,14 +260,23 @@ jobs:
 
       # This is Part D's mandatory proof: build the final image, run it as the actual non-root
       # runtime user, use the browser path shipped in the image, chromiumSandbox: true, fail (never
-      # skip, never retry without the sandbox) if it cannot initialize. No --security-opt seccomp
-      # override and no added capabilities beyond Docker's default here on purpose: this is the test
-      # for whether that default is actually sufficient on this host.
+      # skip, never retry without the sandbox) if it cannot initialize.
+      #
+      # First proven WITHOUT deploy/chromium-seccomp.json: Docker's own default profile blocks
+      # unprivileged user-namespace creation even with the host kernel sysctl above set, and the
+      # smoke correctly failed closed with "No usable sandbox!" rather than falling back --
+      # confirming the smoke does what it claims. deploy/chromium-seccomp.json is Docker's default
+      # seccomp profile plus one explicit, narrow addition (SCMP_ACT_ALLOW for clone/setns/unshare,
+      # unconditionally -- not gated behind CAP_SYS_ADMIN), copied verbatim from Playwright's own
+      # microsoft/playwright/utils/docker/seccomp_profile.json, which is their documented fix for
+      # exactly this failure. Not `unconfined`, and no capability is added: `cap_drop: ALL` stays,
+      # because unprivileged user namespaces are, by kernel design, unprivileged.
       - name: Real sandboxed Chromium launch inside the final API container
         run: |
           docker run --rm \
             --cap-drop=ALL \
             --security-opt no-new-privileges:true \
+            --security-opt seccomp=deploy/chromium-seccomp.json \
             --shm-size=1gb \
             --entrypoint node \
             avenlyo-api:ci \
@@ -276,6 +285,10 @@ jobs:
       - name: API container boots and answers /health/live
         run: |
           docker run -d --name api-ci -p 127.0.0.1:4100:4000 \
+            --cap-drop=ALL \
+            --security-opt no-new-privileges:true \
+            --security-opt seccomp=deploy/chromium-seccomp.json \
+            --shm-size=1gb \
             -e API_HOST=0.0.0.0 -e API_PORT=4000 -e NODE_ENV=production \
             -e WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com \
             avenlyo-api:ci
