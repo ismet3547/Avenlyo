@@ -9,7 +9,9 @@
     "build": "node esbuild.config.mjs",
     "start": "node dist/server.js",
     "smoke:artifact": "node scripts/artifact-smoke.mjs",
-    "ops:status": "tsx src/scripts/ops-status.ts",
+    "smoke:ops-status": "node scripts/ops-status-artifact-smoke.mjs",
+    "ops:status": "node dist/scripts/ops-status.js",
+    "ops:status:dev": "tsx src/scripts/ops-status.ts",
     "smoke:production": "tsx src/scripts/smoke-production.ts",
     "voice:assign-number": "tsx src/scripts/assign-voice-number.ts",
     "voice:set-transfer-capability": "tsx src/scripts/set-voice-transfer-capability.ts"

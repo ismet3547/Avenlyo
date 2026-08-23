@@ -189,11 +189,20 @@ jobs:
       - name: Build the API production bundle
         run: pnpm --filter @avenlyo/api build
 
+      # ops-status is listed because it was missing: the runbook and package.json both told
+      # operators to run it, and the production image -- which copies dist/ and ships no tsx -- had
+      # no artifact for it. Asserting the file exists is the cheap half; the smoke below runs it.
       - name: Confirm the bundle exists
-        run: test -f apps/api/dist/server.js && test -f apps/api/dist/scripts/chromium-sandbox-smoke.js
+        run: |
+          test -f apps/api/dist/server.js
+          test -f apps/api/dist/scripts/chromium-sandbox-smoke.js
+          test -f apps/api/dist/scripts/ops-status.js
 
       - name: Artifact boot smoke -- plain Node, /health/live, graceful SIGTERM
         run: pnpm --filter @avenlyo/api smoke:artifact
+
+      - name: Operator status artifact smoke -- plain Node, bounded output, no secrets
+        run: pnpm --filter @avenlyo/api smoke:ops-status
 
   hetzner-staging-containers:
     name: Hetzner staging container validation

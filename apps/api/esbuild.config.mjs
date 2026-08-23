@@ -67,5 +67,9 @@ await build({
   entryPoints: {
     server: 'src/server.ts',
     'scripts/chromium-sandbox-smoke': 'src/scripts/chromium-sandbox-smoke.ts',
+    // The operator status command. The runbook tells whoever is on the host to run it, the image
+    // copies `dist/` and not `src/`, and the production image has no tsx -- so leaving this out of
+    // the bundle meant the documented operational check simply did not exist in production.
+    'scripts/ops-status': 'src/scripts/ops-status.ts',
   },
 });
