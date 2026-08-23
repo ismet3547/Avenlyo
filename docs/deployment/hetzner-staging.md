@@ -58,7 +58,7 @@ Never commit a real env file. Templates only:
 
 | Template | Real path on the host | Contents |
 |---|---|---|
-| `deploy/env/web.env.example` | `/etc/avenlyo/web.env` | Runtime, server-only web config |
+| `deploy/env/web.env.example` | `/etc/avenlyo/web.env` | Runtime, server-only web config (includes `OPENAI_API_KEY`) |
 | `deploy/env/api.env.example` | `/etc/avenlyo/api.env` | Runtime, server-only API config |
 | `deploy/env/build.env.example` | `deploy/env/build.env` (on whichever machine runs `docker build`) | `NEXT_PUBLIC_*` build args |
 
@@ -71,6 +71,50 @@ the caller's own session (RLS-scoped); the service-role key is API-only.
 
 `AVENLYO_INTERNAL_BILLING_SECRET` must be byte-identical between `web.env` and `api.env`, or every
 billing mutation fails closed by design.
+
+### `OPENAI_API_KEY` goes in **both** env files
+
+`OPENAI_API_KEY` must be present in `/etc/avenlyo/api.env` **and** `/etc/avenlyo/web.env` whenever
+the OpenAI text or knowledge features are being exercised. It is not an API-only secret.
+
+This cost a staging run. The first publish failed with
+
+> OpenAI embeddings are not configured. Set OPENAI_API_KEY to publish or test knowledge.
+
+while `api.env` had the key all along. Three knowledge features run inside the **Next.js server
+process**, not in the API container:
+
+| Feature | Where it runs | What it needs the key for |
+|---|---|---|
+| Publishing a reviewed import | `apps/web/lib/knowledge/service.ts` | Embedding every included document |
+| "Test your knowledge" search | `apps/web/lib/knowledge/service.ts` | Embedding the query |
+| Agent Test | `apps/web/lib/agent/service.ts` | Calling the model |
+
+`apps/web/lib/knowledge/config.ts` treats the key as **optional at boot**, deliberately: the site
+starts and every other page works without it. So a missing key does not fail the deploy, fail a
+health check, or appear in any log at startup. It surfaces only when an operator clicks publish.
+Both `/health/ready` and `/api/health` will report healthy with the key absent.
+
+After adding it to `web.env`, recreate the web container so the new `env_file` contents are read --
+`env_file` is applied at container creation, not on restart:
+
+```bash
+docker compose -f deploy/compose.yaml up -d --force-recreate web
+```
+
+Server-only, in both files. It must never be set as a `NEXT_PUBLIC_*` variable and must never go in
+`deploy/env/build.env`: Next.js inlines build args into the browser bundle, which would publish the
+key to every visitor. `deploy/env/web.env.example` documents this, and
+`apps/web/lib/deployment/env-contract.test.ts` fails CI if the template ever again omits a
+server-only variable the web app reads, carries a `NEXT_PUBLIC_*` value, or carries the
+service-role key.
+
+`OPENAI_AGENT_MODEL` and `OPENAI_EMBEDDING_MODEL` both default in code and should stay unset. If
+you ever set `OPENAI_EMBEDDING_MODEL`, set the identical value in **both** files: the API embeds
+live conversation and voice queries against documents the web container embedded, and two different
+models produce vectors that do not compare. `OPENAI_PROJECT_ID`, `OPENAI_REALTIME_MODEL`, and
+`OPENAI_WEBHOOK_SECRET` belong to the API's voice and webhook paths only -- nothing in `apps/web`
+reads them, and this stage of staging does not need them.
 
 ## NODE_ENV and Stripe on staging
 
