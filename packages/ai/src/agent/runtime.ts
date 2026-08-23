@@ -8,6 +8,7 @@ import {
   MAX_USER_MESSAGE_CHARACTERS,
 } from './limits';
 import { buildAgentInstructions } from './prompt-builder';
+import { requiresBusinessKnowledge } from './business-knowledge-predicate';
 import type { KnowledgeSearchDiagnostic } from './knowledge-reliability';
 import type {
   AgentExecutionContext,
@@ -28,6 +29,27 @@ const loopLimitReply =
   'I couldn’t complete that request safely. I can ask the team to help with it.';
 const unknownKnowledgeReply =
   "I don't have reliable information about that yet. I can ask the team to help.";
+
+/**
+ * One runtime-forced knowledge search per turn.
+ *
+ * It can only happen when the model made no search of its own, so it never stacks on top of the
+ * trusted-query recovery inside the executor: the two are reached by mutually exclusive paths, and
+ * the worst case for a turn is therefore the model's own tool calls plus a single extra search.
+ */
+const MAX_RUNTIME_FORCED_SEARCHES_PER_TURN = 1;
+
+/**
+ * How the retrieved sources are handed back to the model.
+ *
+ * Says plainly that Avenlyo performed the search, because the model did not, and the transcript
+ * should not imply otherwise.
+ */
+function runtimeKnowledgeInput(sources: readonly KnowledgeSource[]): string {
+  return `Avenlyo searched published business knowledge for this customer question because no knowledge tool call was made. Answer only from these sources; if they do not contain the answer, say you do not have reliable information.\n${JSON.stringify(
+    { matches: sources },
+  )}`;
+}
 
 function responseText(value: string): string {
   const trimmed = value.trim();
@@ -127,6 +149,7 @@ export class AgentRuntime {
     const executedCallIds = new Set<string>();
     let knowledgeSearchAttempted = false;
     let reliableKnowledgeFound = false;
+    let runtimeForcedSearches = 0;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       let providerResult;
@@ -152,6 +175,48 @@ export class AgentRuntime {
       latestUsage = providerResult.usage;
 
       if (providerResult.toolCalls.length === 0) {
+        // The model wants to finish. If it never searched and the question needed searching, its
+        // answer is an assertion about a business it has not consulted -- which is exactly how
+        // staging got told "there is no registration link" about a page published minutes before.
+        // The prompt already asked for a search; an instruction the model can decline is not a
+        // control, so the runtime does the search itself rather than trusting the answer.
+        const groundingRequired =
+          !knowledgeSearchAttempted &&
+          runtimeForcedSearches < MAX_RUNTIME_FORCED_SEARCHES_PER_TURN &&
+          requiresBusinessKnowledge(userMessage);
+
+        if (groundingRequired) {
+          runtimeForcedSearches += 1;
+          // No executor knowledge service means no way to ground the claim, so the answer is
+          // refused rather than allowed through unchecked.
+          const forced = await this.executor.searchKnowledgeForRuntime?.(
+            userMessage,
+            toolContext,
+          );
+          if (forced) knowledgeDiagnostics.push(forced.diagnostic);
+          if (forced && forced.sources.length > 0) {
+            sources.push(...forced.sources);
+            reliableKnowledgeFound = true;
+            knowledgeSearchAttempted = true;
+            providerInput.push({
+              content: runtimeKnowledgeInput(forced.sources),
+              type: 'runtime_knowledge',
+            });
+            // Round again so the model answers from the evidence it declined to fetch.
+            continue;
+          }
+          return {
+            handoffRequested,
+            model: this.model,
+            sources: distinctSources(sources),
+            // The model's ungrounded answer is discarded, not softened.
+            text: unknownKnowledgeReply,
+            knowledgeDiagnostics,
+            toolCalls: executions,
+            usage: latestUsage,
+          };
+        }
+
         return {
           handoffRequested,
           model: this.model,

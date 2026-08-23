@@ -16,6 +16,7 @@ export type {
   KnowledgeReliabilityDiagnostics,
   KnowledgeReliabilityEvaluation,
   KnowledgeSearchDiagnostic,
+  KnowledgeSearchOrigin,
 } from './agent/knowledge-reliability';
 export type {
   AgentBusinessContext,
@@ -41,6 +42,7 @@ export {
   OpenAIResponsesProvider,
 } from './providers/openai-responses';
 export { FakeAgentProvider } from './testing/fake-provider';
+export { requiresBusinessKnowledge } from './agent/business-knowledge-predicate';
 export {
   evaluateKnowledgeReliability,
   isKnowledgeReliable,
@@ -75,6 +77,7 @@ export { futureToolContracts, futureToolNames } from './tools/types';
 export type {
   ActiveToolName,
   AgentToolServices,
+  RuntimeKnowledgeSearchResult,
   FutureToolContract,
   FutureToolName,
   ToolExecutor,

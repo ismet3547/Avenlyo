@@ -26,7 +26,20 @@ import {
   rescheduleOptionsSchema,
   upcomingAppointmentsSchema,
 } from './schemas';
-import type { AgentToolServices, ToolExecutionResult, ToolExecutor } from './types';
+import type {
+  AgentToolServices,
+  RuntimeKnowledgeSearchResult,
+  ToolExecutionResult,
+  ToolExecutor,
+} from './types';
+
+/**
+ * Stands where a tool call id would be, and is deliberately not one.
+ *
+ * A runtime search has no provider call to point at. Using a recognisable constant rather than a
+ * synthesised id keeps anyone reading a diagnostic from believing the model made this call.
+ */
+const RUNTIME_FORCED_SEARCH_ID = 'runtime-forced-search';
 
 function truncate(value: string, maximum: number): string {
   return value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
@@ -61,6 +74,55 @@ export class ControlledToolExecutor implements ToolExecutor {
   public readonly tools;
   /** One executor is built per agent turn, so this counter is the per-turn recovery budget. */
   private trustedQueryRecoveries = 0;
+
+  /**
+   * Searches published knowledge for the runtime, with a query the runtime already trusts.
+   *
+   * Not a tool call and never recorded as one. The runtime reaches for this only when the model
+   * declined to search a question that needs searching, so the trusted-query recovery inside
+   * `execute` is not involved and is not consumed: this *is* the trusted query, and running the
+   * recovery on top of it would search the same words twice.
+   */
+  public async searchKnowledgeForRuntime(
+    query: string,
+    context: AgentExecutionContext,
+  ): Promise<RuntimeKnowledgeSearchResult> {
+    const trusted = trustedRecoveryQuery(query);
+    const empty = {
+      knowledgeOutcome: 'failed' as const,
+      matches: [],
+      origin: 'runtime_forced_search' as const,
+      qualifiedCount: 0,
+      queryLength: Math.min(query.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
+      queryMatchesCustomerTurn: true,
+      retrievedCount: 0,
+      toolCallId: RUNTIME_FORCED_SEARCH_ID,
+    };
+    if (trusted === null) return { diagnostic: empty, failed: true, sources: [] };
+    try {
+      const { diagnostics, qualifyingSources } = evaluateKnowledgeReliability(
+        await this.services.searchBusinessKnowledge(
+          { query: trusted, toolCallId: RUNTIME_FORCED_SEARCH_ID },
+          context,
+        ),
+      );
+      return {
+        diagnostic: {
+          ...diagnostics,
+          knowledgeOutcome: qualifyingSources.length ? 'reliable' : 'empty_or_unreliable',
+          origin: 'runtime_forced_search',
+          queryLength: Math.min(trusted.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
+          // By construction: this search is the customer's own turn.
+          queryMatchesCustomerTurn: true,
+          toolCallId: RUNTIME_FORCED_SEARCH_ID,
+        },
+        failed: false,
+        sources: qualifyingSources,
+      };
+    } catch {
+      return { diagnostic: empty, failed: true, sources: [] };
+    }
+  }
 
   public constructor(
     private readonly industry: Parameters<typeof activeToolDefinitions>[0],
@@ -163,8 +225,8 @@ export class ControlledToolExecutor implements ToolExecutor {
             queryMatchesCustomerTurn:
               customerMessage !== undefined &&
               normalizeKnowledgeQuery(modelQuery) === normalizeKnowledgeQuery(customerMessage),
+            origin: mayRecover ? 'trusted_query_retry' : 'model_search',
             toolCallId: call.callId,
-            usedTrustedQueryRetry: mayRecover,
           },
           modelOutput: safeJson({ matches: sources }),
           sources,

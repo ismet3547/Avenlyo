@@ -34,6 +34,10 @@ function toResponseInput(item: AgentProviderInputItem): readonly ResponseInputIt
   if (item.type === 'message') {
     return [{ content: item.content, role: item.role, type: 'message' }];
   }
+  if (item.type === 'runtime_knowledge') {
+    // `developer`, not `user` or `assistant`: neither of them said this, Avenlyo did.
+    return [{ content: item.content, role: 'developer', type: 'message' }];
+  }
   if (item.type === 'function_call') {
     return [
       {

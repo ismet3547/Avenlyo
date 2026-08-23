@@ -164,6 +164,15 @@ export interface KnowledgeReliabilityEvaluation {
  * retrieval itself is the problem. Those need completely different fixes, and without this flag
  * they are indistinguishable from outside the process.
  */
+/**
+ * Which mechanism produced the search being described.
+ *
+ * Three states rather than a flag, because there are now three ways a search happens and telling
+ * them apart is the whole reason the diagnostic exists: the model asked; the model asked badly and
+ * the customer's own words were tried; or the model did not ask at all and the runtime insisted.
+ */
+export type KnowledgeSearchOrigin = 'model_search' | 'trusted_query_retry' | 'runtime_forced_search';
+
 export interface KnowledgeSearchDiagnostic {
   readonly knowledgeOutcome: 'empty_or_unreliable' | 'failed' | 'reliable';
   readonly matches: readonly KnowledgeMatchDiagnostic[];
@@ -174,11 +183,8 @@ export interface KnowledgeSearchDiagnostic {
   readonly retrievedCount: number;
   /** Already-safe identifier the tool layer uses; carries no customer or tenant data. */
   readonly toolCallId: string;
-  /**
-   * Whether the model's own query found nothing usable and the customer's actual question was
-   * searched instead. The scores above then describe that second search.
-   */
-  readonly usedTrustedQueryRetry: boolean;
+  /** Which mechanism produced this search. The scores above describe whichever one ran last. */
+  readonly origin: KnowledgeSearchOrigin;
 }
 
 /** Upper bound on the recorded length, so the field stays a small integer whatever arrives. */

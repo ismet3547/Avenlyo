@@ -80,6 +80,18 @@ export type AgentProviderInputItem =
       readonly type: 'message';
     }
   | {
+      /**
+       * Knowledge the runtime retrieved itself, because the model tried to answer a
+       * business-specific question without searching.
+       *
+       * A distinct item type rather than a forged `function_call` pair: the model did not call a
+       * tool, and writing one into the transcript would make the provider's record of the turn a
+       * lie. The provider renders this as a developer message, which is what it is.
+       */
+      readonly content: string;
+      readonly type: 'runtime_knowledge';
+    }
+  | {
       readonly arguments: string;
       readonly callId: string;
       readonly name: string;

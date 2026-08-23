@@ -213,7 +213,31 @@ export interface ToolExecutionResult {
   readonly sources: readonly KnowledgeSource[];
 }
 
+/**
+ * A knowledge search the runtime performed on its own authority.
+ *
+ * Not a `ToolExecutionResult`, because no tool was called. There is no call id, no
+ * `AgentToolExecution`, and nothing here is persisted as model activity -- the runtime did this,
+ * and the record says so.
+ */
+export interface RuntimeKnowledgeSearchResult {
+  readonly diagnostic: KnowledgeSearchDiagnostic;
+  /** The search itself could not be completed. Distinct from "completed and found nothing". */
+  readonly failed: boolean;
+  readonly sources: readonly KnowledgeSource[];
+}
+
 export interface ToolExecutor {
   execute(call: AgentToolCall, context: AgentExecutionContext): Promise<ToolExecutionResult>;
+  /**
+   * Searches published knowledge with a query the runtime trusts, outside the tool path.
+   *
+   * Optional so an executor without a knowledge service simply does not offer it, and the runtime's
+   * grounding guard degrades to refusing rather than to answering ungrounded.
+   */
+  searchKnowledgeForRuntime?(
+    query: string,
+    context: AgentExecutionContext,
+  ): Promise<RuntimeKnowledgeSearchResult>;
   readonly tools: readonly AgentFunctionTool[];
 }

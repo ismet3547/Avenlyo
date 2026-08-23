@@ -73,7 +73,7 @@ describe('the model query is always tried first', () => {
     const result = await executor.execute(call('account registration page'), context());
 
     expect(queries).toEqual(['account registration page']);
-    expect(result.knowledgeDiagnostic?.usedTrustedQueryRetry).toBe(false);
+    expect(result.knowledgeDiagnostic?.origin).toBe('model_search');
     expect(result.sources.map((source) => source.title)).toEqual(['Strong']);
   });
 
@@ -85,7 +85,7 @@ describe('the model query is always tried first', () => {
     const result = await executor.execute(call(CUSTOMER_TURN), context());
 
     expect(queries).toEqual([CUSTOMER_TURN]);
-    expect(result.knowledgeDiagnostic?.usedTrustedQueryRetry).toBe(false);
+    expect(result.knowledgeDiagnostic?.origin).toBe('model_search');
     expect(result.knowledgeOutcome).toBe('empty_or_unreliable');
   });
 
@@ -119,7 +119,7 @@ describe('recovery runs once when the model query found nothing usable', () => {
     expect(result.knowledgeDiagnostic).toMatchObject({
       qualifiedCount: 1,
       queryMatchesCustomerTurn: false,
-      usedTrustedQueryRetry: true,
+      origin: 'trusted_query_retry',
     });
   });
 
@@ -160,7 +160,7 @@ describe('recovery cannot rescue an answer the corpus does not support', () => {
     expect(queries).toHaveLength(2);
     expect(result.knowledgeOutcome).toBe('empty_or_unreliable');
     expect(result.sources).toEqual([]);
-    expect(result.knowledgeDiagnostic?.usedTrustedQueryRetry).toBe(true);
+    expect(result.knowledgeDiagnostic?.origin).toBe('trusted_query_retry');
   });
 
   it('still refuses when the customer question is below the floor', async () => {
@@ -203,7 +203,7 @@ describe('recovery is bounded', () => {
     );
 
     expect(queries).toHaveLength(1);
-    expect(result.knowledgeDiagnostic?.usedTrustedQueryRetry).toBe(false);
+    expect(result.knowledgeDiagnostic?.origin).toBe('model_search');
   });
 
   it('does not recover on a customer turn too short to be a question', async () => {
