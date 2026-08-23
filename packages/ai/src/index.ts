@@ -11,6 +11,13 @@ export { buildAgentInstructions, coreAgentInstructions } from './agent/prompt-bu
 export { AgentRuntime, agentTurnFingerprint } from './agent/runtime';
 export { AgentProviderError } from './agent/types';
 export type {
+  KnowledgeMatchDecision,
+  KnowledgeMatchDiagnostic,
+  KnowledgeReliabilityDiagnostics,
+  KnowledgeReliabilityEvaluation,
+  KnowledgeSearchDiagnostic,
+} from './agent/knowledge-reliability';
+export type {
   AgentBusinessContext,
   AgentConversationMessage,
   AgentExecutionContext,
@@ -35,8 +42,12 @@ export {
 } from './providers/openai-responses';
 export { FakeAgentProvider } from './testing/fake-provider';
 export {
+  evaluateKnowledgeReliability,
   isKnowledgeReliable,
+  normalizeKnowledgeQuery,
   reliableKnowledgeSources,
+  MAX_AGENT_KNOWLEDGE_DIAGNOSTIC_MATCHES,
+  MAX_AGENT_KNOWLEDGE_QUERY_LENGTH,
   MAX_AGENT_KNOWLEDGE_SOURCES,
   MIN_AGENT_KNOWLEDGE_LEAD_RATIO,
   MIN_AGENT_KNOWLEDGE_SIMILARITY,

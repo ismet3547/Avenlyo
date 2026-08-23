@@ -714,3 +714,79 @@ describe('controlled agent runtime', () => {
     expect(capture).not.toHaveBeenCalled();
   });
 });
+
+describe('knowledge search diagnostics', () => {
+  it('hands the trusted customer turn to the tool and reports the search', async () => {
+    // End-to-end proof of the plumbing: the runtime -- not the model -- supplies the customer
+    // utterance, so the diagnostic can say whether the model searched the real question.
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'What are your hours?' }),
+            callId: 'verbatim',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('The published hours are listed above.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.62 },
+            { ...source, similarity: 0.36 },
+          ]),
+      }),
+    );
+
+    const answer = await turn(agent, 'What are your hours?');
+
+    expect(answer.knowledgeDiagnostics).toHaveLength(1);
+    expect(answer.knowledgeDiagnostics?.[0]).toMatchObject({
+      knowledgeOutcome: 'reliable',
+      qualifiedCount: 1,
+      queryMatchesCustomerTurn: true,
+      retrievedCount: 2,
+      toolCallId: 'verbatim',
+    });
+    expect(answer.knowledgeDiagnostics?.[0]?.matches[0]?.decision).toBe('strong');
+  });
+
+  it('records a refused search too, with the reason it was refused', async () => {
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'opening times please' }),
+            callId: 'rewritten',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('We are open every day.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.46 },
+            { ...source, similarity: 0.44 },
+          ]),
+      }),
+    );
+
+    const answer = await turn(agent, 'What are your hours?');
+
+    // A refused answer is now explainable: the model asked something else, and what it asked came
+    // back flat.
+    expect(answer.text).toBe(
+      "I don't have reliable information about that yet. I can ask the team to help.",
+    );
+    expect(answer.knowledgeDiagnostics?.[0]).toMatchObject({
+      knowledgeOutcome: 'empty_or_unreliable',
+      qualifiedCount: 0,
+      queryMatchesCustomerTurn: false,
+    });
+    expect(answer.knowledgeDiagnostics?.[0]?.matches[0]?.decision).toBe(
+      'rejected_insufficient_lead',
+    );
+  });
+});

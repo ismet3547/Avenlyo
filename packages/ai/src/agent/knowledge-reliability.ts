@@ -102,6 +102,94 @@ export const MIN_AGENT_KNOWLEDGE_LEAD_RATIO = 1.25;
 /** Never hand the model an unbounded set; three sources is enough to answer from and to cite. */
 export const MAX_AGENT_KNOWLEDGE_SOURCES = 3;
 
+/** How many ranked matches a diagnostic may describe. Bounded so a diagnostic can never grow. */
+export const MAX_AGENT_KNOWLEDGE_DIAGNOSTIC_MATCHES = 5;
+
+/**
+ * Why one match did or did not earn the right to support an answer.
+ *
+ * A closed set on purpose. This is the only thing the diagnostic says about a match, and a free
+ * string here would eventually carry a title, a URL, or a fragment of the page.
+ */
+export type KnowledgeMatchDecision =
+  | 'strong'
+  | 'comparative_winner'
+  | 'rejected_below_minimum'
+  | 'rejected_not_top'
+  | 'rejected_insufficient_lead';
+
+const QUALIFYING_DECISIONS: ReadonlySet<KnowledgeMatchDecision> = new Set([
+  'strong',
+  'comparative_winner',
+]);
+
+/** One ranked match, reduced to a rank, a number, and a verdict. Never any of its text. */
+export interface KnowledgeMatchDiagnostic {
+  readonly decision: KnowledgeMatchDecision;
+  /** 1-based position after ranking. */
+  readonly rank: number;
+  readonly similarity: number;
+}
+
+/**
+ * Everything the reliability decision is willing to say about itself.
+ *
+ * Deliberately carries no identity: no title, no URL, no content, no tenant. The diagnostic
+ * question is "what numbers came back and what did the rule do with them", and nothing about a
+ * source's identity is needed to answer it.
+ */
+export interface KnowledgeReliabilityDiagnostics {
+  readonly matches: readonly KnowledgeMatchDiagnostic[];
+  /** How many sources actually reached the model, after the cap. */
+  readonly qualifiedCount: number;
+  readonly retrievedCount: number;
+}
+
+export interface KnowledgeReliabilityEvaluation {
+  readonly diagnostics: KnowledgeReliabilityDiagnostics;
+  readonly qualifyingSources: readonly KnowledgeSource[];
+}
+
+/**
+ * One knowledge search, described in numbers only.
+ *
+ * This answers exactly one question the product could not otherwise answer: *did the model search
+ * the customer's actual question, and what numeric evidence came back?* Everything that would make
+ * it useful for anything else -- the query text, the customer's words, page content, titles, URLs,
+ * tenant identifiers -- is deliberately absent, so there is nothing here to leak and no reason to
+ * guard a read path for it.
+ *
+ * `queryMatchesCustomerTurn` is the load-bearing field. False with a poor score set means the model
+ * rewrote the question into something that retrieves badly; true with the same scores means
+ * retrieval itself is the problem. Those need completely different fixes, and without this flag
+ * they are indistinguishable from outside the process.
+ */
+export interface KnowledgeSearchDiagnostic {
+  readonly knowledgeOutcome: 'empty_or_unreliable' | 'failed' | 'reliable';
+  readonly matches: readonly KnowledgeMatchDiagnostic[];
+  readonly qualifiedCount: number;
+  /** Length only. The query itself is never recorded. */
+  readonly queryLength: number;
+  readonly queryMatchesCustomerTurn: boolean;
+  readonly retrievedCount: number;
+  /** Already-safe identifier the tool layer uses; carries no customer or tenant data. */
+  readonly toolCallId: string;
+}
+
+/** Upper bound on the recorded length, so the field stays a small integer whatever arrives. */
+export const MAX_AGENT_KNOWLEDGE_QUERY_LENGTH = 4_096;
+
+/**
+ * Comparison form for "is this the customer's own question?".
+ *
+ * Case and whitespace are not meaningful differences here. Nothing locale-specific is applied:
+ * Turkish dotted/dotless I would make this answer depend on the host's locale, and a diagnostic
+ * that changes meaning by machine is worse than a slightly conservative one.
+ */
+export function normalizeKnowledgeQuery(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 const MAX_SOURCE_CONTENT = 1_200;
 const MAX_SOURCE_TITLE = 240;
 const MAX_SOURCE_URL = 1_000;
@@ -125,34 +213,74 @@ function ranked(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[]
 }
 
 /**
- * The matches that earned the right to support an answer, best first.
+ * Judges one ranked match, and says why.
  *
- * The one place the rule is evaluated. Reliability and evidence are the same question -- "which of
- * these is defensible?" -- so asking it twice is how the two answers drift apart, which is exactly
- * how weak runners-up used to reach the model behind a strong top result.
+ * The verdict and the reason are produced together because they are the same computation. A
+ * diagnostic derived from a second, parallel implementation of the rule would be worse than no
+ * diagnostic at all: it would be believed, and it would drift.
  */
-function qualifyingMatches(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[] {
+function decide(
+  similarity: number,
+  index: number,
+  topLeadsTheField: boolean,
+): KnowledgeMatchDecision {
+  if (similarity < MIN_AGENT_KNOWLEDGE_SIMILARITY) return 'rejected_below_minimum';
+  if (similarity >= STRONG_AGENT_KNOWLEDGE_SIMILARITY) return 'strong';
+  // Moderate. Only the top match can take the comparative route, because beating the field is what
+  // that route is; a mid-table score out-ranking the tail below it has not beaten anything.
+  if (index !== 0) return 'rejected_not_top';
+  return topLeadsTheField ? 'comparative_winner' : 'rejected_insufficient_lead';
+}
+
+/**
+ * The one evaluation. Everything else in this module delegates to it.
+ *
+ * Trust and observability come out of the same pass, so the diagnostic can never disagree with what
+ * the model was actually given -- which is the property that makes the diagnostic worth reading.
+ */
+export function evaluateKnowledgeReliability(
+  matches: readonly KnowledgeSource[],
+): KnowledgeReliabilityEvaluation {
   const scored = ranked(matches);
   const top = scored[0];
-  if (!top || top.similarity < MIN_AGENT_KNOWLEDGE_SIMILARITY) return [];
 
-  // The comparative route, open to the top match only. `scored[1]` absent means there was nothing
-  // to out-rank, and nothing to out-rank is not a lead -- so a lone moderate match falls through to
-  // the absolute test below and is refused there.
+  // `scored[1]` absent means there was nothing to out-rank, and nothing to out-rank is not a lead,
+  // so a lone moderate match falls through to the absolute test and is refused there.
   const runnerUp = scored[1];
   const topLeadsTheField =
+    top !== undefined &&
     runnerUp !== undefined &&
     top.similarity >= runnerUp.similarity * MIN_AGENT_KNOWLEDGE_LEAD_RATIO;
 
-  return scored.filter(
-    (match, index) =>
-      match.similarity >= STRONG_AGENT_KNOWLEDGE_SIMILARITY || (index === 0 && topLeadsTheField),
-  );
+  const decisions = scored.map((match, index) => decide(match.similarity, index, topLeadsTheField));
+  const qualifyingSources = scored
+    .filter((_match, index) => QUALIFYING_DECISIONS.has(decisions[index]!))
+    .slice(0, MAX_AGENT_KNOWLEDGE_SOURCES)
+    .map((match) => ({
+      content: truncate(match.content, MAX_SOURCE_CONTENT),
+      similarity: match.similarity,
+      sourceUrl: match.sourceUrl ? truncate(match.sourceUrl, MAX_SOURCE_URL) : null,
+      title: truncate(match.title, MAX_SOURCE_TITLE),
+    }));
+
+  return {
+    diagnostics: {
+      matches: scored.slice(0, MAX_AGENT_KNOWLEDGE_DIAGNOSTIC_MATCHES).map((match, index) => ({
+        decision: decisions[index]!,
+        rank: index + 1,
+        similarity: match.similarity,
+      })),
+      // What actually reached the model, not what could have: the cap is part of the answer.
+      qualifiedCount: qualifyingSources.length,
+      retrievedCount: scored.length,
+    },
+    qualifyingSources,
+  };
 }
 
 /** The trust decision on its own, so it can be asserted directly and reused without the mapping. */
 export function isKnowledgeReliable(matches: readonly KnowledgeSource[]): boolean {
-  return qualifyingMatches(matches).length > 0;
+  return evaluateKnowledgeReliability(matches).qualifyingSources.length > 0;
 }
 
 /**
@@ -167,12 +295,5 @@ export function isKnowledgeReliable(matches: readonly KnowledgeSource[]): boolea
 export function reliableKnowledgeSources(
   matches: readonly KnowledgeSource[],
 ): readonly KnowledgeSource[] {
-  return qualifyingMatches(matches)
-    .slice(0, MAX_AGENT_KNOWLEDGE_SOURCES)
-    .map((match) => ({
-      content: truncate(match.content, MAX_SOURCE_CONTENT),
-      similarity: match.similarity,
-      sourceUrl: match.sourceUrl ? truncate(match.sourceUrl, MAX_SOURCE_URL) : null,
-      title: truncate(match.title, MAX_SOURCE_TITLE),
-    }));
+  return evaluateKnowledgeReliability(matches).qualifyingSources;
 }

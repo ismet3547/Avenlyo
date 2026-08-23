@@ -8,7 +8,9 @@ import {
   MAX_USER_MESSAGE_CHARACTERS,
 } from './limits';
 import { buildAgentInstructions } from './prompt-builder';
+import type { KnowledgeSearchDiagnostic } from './knowledge-reliability';
 import type {
+  AgentExecutionContext,
   AgentProvider,
   AgentProviderInputItem,
   AgentToolCall,
@@ -110,7 +112,15 @@ export class AgentRuntime {
       ...buildBoundedConversationContext(input.history, userMessage),
     ];
     const executions: AgentToolExecution[] = [];
+    const knowledgeDiagnostics: KnowledgeSearchDiagnostic[] = [];
     const sources: KnowledgeSource[] = [];
+    // The trusted current customer utterance, handed to tools alongside the routing identity. It
+    // comes from the turn this runtime was given, never from the model, so a tool can tell whether
+    // the model searched the real question instead of taking the model's word for it.
+    const toolContext: AgentExecutionContext = {
+      ...input.context,
+      customerMessage: userMessage,
+    };
     let handoffRequested = false;
     let toolCalls = 0;
     let latestUsage: AgentTurnResult['usage'];
@@ -135,6 +145,7 @@ export class AgentRuntime {
           model: this.model,
           sources: distinctSources(sources),
           text: providerFailureReply,
+          knowledgeDiagnostics,
           toolCalls: executions,
         };
       }
@@ -149,6 +160,7 @@ export class AgentRuntime {
             knowledgeSearchAttempted && !reliableKnowledgeFound
               ? unknownKnowledgeReply
               : responseText(providerResult.text),
+          knowledgeDiagnostics,
           toolCalls: executions,
           usage: latestUsage,
         };
@@ -194,18 +206,20 @@ export class AgentRuntime {
             model: this.model,
             sources: distinctSources(sources),
             text: loopLimitReply,
+            knowledgeDiagnostics,
             toolCalls: executions,
             usage: latestUsage,
           };
         }
 
-        const result = await this.executor.execute(call, input.context);
+        const result = await this.executor.execute(call, toolContext);
         executions.push(result.execution);
         handoffRequested ||= result.handoffRequested;
         sources.push(...result.sources);
         if (call.name === 'search_business_knowledge') {
           knowledgeSearchAttempted = true;
           reliableKnowledgeFound ||= result.knowledgeOutcome === 'reliable';
+          if (result.knowledgeDiagnostic) knowledgeDiagnostics.push(result.knowledgeDiagnostic);
         }
         providerInput.push(
           {
@@ -225,6 +239,7 @@ export class AgentRuntime {
       model: this.model,
       sources: distinctSources(sources),
       text: loopLimitReply,
+      knowledgeDiagnostics,
       toolCalls: executions,
       usage: latestUsage,
     };

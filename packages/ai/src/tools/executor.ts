@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 
 import { requiresUrgentLeadHandoff } from '@avenlyo/industries';
 
-import { reliableKnowledgeSources } from '../agent/knowledge-reliability';
+import {
+  evaluateKnowledgeReliability,
+  normalizeKnowledgeQuery,
+  MAX_AGENT_KNOWLEDGE_QUERY_LENGTH,
+} from '../agent/knowledge-reliability';
 import { MAX_TOOL_OUTPUT_CHARACTERS } from '../agent/limits';
 import type { AgentExecutionContext, AgentToolCall } from '../agent/types';
 
@@ -79,12 +83,15 @@ export class ControlledToolExecutor implements ToolExecutor {
         if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
         // The trust decision lives in one module shared with the voice executor, so a customer
         // cannot get an answer over chat that the same corpus would refuse over the phone.
-        const sources = reliableKnowledgeSources(
-          await this.services.searchBusinessKnowledge(
-            { query: parsed.data.query, toolCallId: call.callId },
-            context,
-          ),
+        const matches = await this.services.searchBusinessKnowledge(
+          { query: parsed.data.query, toolCallId: call.callId },
+          context,
         );
+        // One evaluation produces both the sources and the record of why. Deriving the diagnostic
+        // separately would let the two disagree, and a diagnostic that can lie about the decision
+        // is worse than none.
+        const { diagnostics, qualifyingSources: sources } = evaluateKnowledgeReliability(matches);
+        const customerMessage = context.customerMessage;
         return {
           execution: {
             callId: call.callId,
@@ -96,6 +103,18 @@ export class ControlledToolExecutor implements ToolExecutor {
           },
           handoffRequested: false,
           knowledgeOutcome: sources.length ? 'reliable' : 'empty_or_unreliable',
+          knowledgeDiagnostic: {
+            ...diagnostics,
+            knowledgeOutcome: sources.length ? 'reliable' : 'empty_or_unreliable',
+            // Length, never the text. The model chose these words; recording them would put an
+            // unbounded model-authored string, derived from a customer's message, into a log.
+            queryLength: Math.min(parsed.data.query.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
+            queryMatchesCustomerTurn:
+              customerMessage !== undefined &&
+              normalizeKnowledgeQuery(parsed.data.query) ===
+                normalizeKnowledgeQuery(customerMessage),
+            toolCallId: call.callId,
+          },
           modelOutput: safeJson({ matches: sources }),
           sources,
         };

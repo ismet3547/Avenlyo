@@ -1,5 +1,7 @@
 import type { IndustryId, IndustryPack } from '@avenlyo/industries';
 
+import type { KnowledgeSearchDiagnostic } from './knowledge-reliability';
+
 export type AgentConversationRole = 'assistant' | 'customer';
 export type AgentMode = 'customer' | 'test';
 
@@ -12,6 +14,14 @@ export interface AgentExecutionContext {
   readonly organizationId: string;
   /** Trusted transport metadata supplied by the channel adapter, never model input. */
   readonly channel?: 'sms' | 'web' | undefined;
+  /**
+   * The current customer utterance, taken from trusted runtime input.
+   *
+   * Never model output and never a tool argument. The runtime fills it in from the turn it was
+   * given, so a tool can tell whether the model searched the customer's actual question without
+   * having to trust the model's account of it.
+   */
+  readonly customerMessage?: string | undefined;
   readonly triggeringInboundMessageId?: string | null | undefined;
 }
 
@@ -136,6 +146,13 @@ export interface AgentTurnResult {
   readonly text: string;
   readonly toolCalls: readonly AgentToolExecution[];
   readonly usage?: AgentProviderUsage | undefined;
+  /**
+   * Bounded, identity-free record of every knowledge search this turn performed.
+   *
+   * Returned rather than logged here, so the runtime stays free of I/O and every channel gets the
+   * same evidence; whoever runs the turn decides whether to record it.
+   */
+  readonly knowledgeDiagnostics?: readonly KnowledgeSearchDiagnostic[] | undefined;
 }
 
 export class AgentProviderError extends Error {

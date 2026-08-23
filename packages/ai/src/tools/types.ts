@@ -1,5 +1,7 @@
 import type { z } from 'zod';
 
+import type { KnowledgeSearchDiagnostic } from '../agent/knowledge-reliability';
+
 import type {
   AgentExecutionContext,
   AgentFunctionTool,
@@ -206,6 +208,8 @@ export interface ToolExecutionResult {
   readonly handoffRequested: boolean;
   readonly modelOutput: string;
   readonly knowledgeOutcome?: 'empty_or_unreliable' | 'reliable' | 'failed' | undefined;
+  /** Present only for a knowledge search. Numbers and verdicts, never text. */
+  readonly knowledgeDiagnostic?: KnowledgeSearchDiagnostic | undefined;
   readonly sources: readonly KnowledgeSource[];
 }
 
