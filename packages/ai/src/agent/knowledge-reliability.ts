@@ -174,10 +174,32 @@ export interface KnowledgeSearchDiagnostic {
   readonly retrievedCount: number;
   /** Already-safe identifier the tool layer uses; carries no customer or tenant data. */
   readonly toolCallId: string;
+  /**
+   * Whether the model's own query found nothing usable and the customer's actual question was
+   * searched instead. The scores above then describe that second search.
+   */
+  readonly usedTrustedQueryRetry: boolean;
 }
 
 /** Upper bound on the recorded length, so the field stays a small integer whatever arrives. */
 export const MAX_AGENT_KNOWLEDGE_QUERY_LENGTH = 4_096;
+
+/**
+ * At most one recovery search per agent turn.
+ *
+ * The recovery costs an embedding and a vector query, and the model may call the knowledge tool
+ * several times in one turn. Bounding it per turn rather than per call keeps a chatty turn from
+ * doubling its own retrieval cost, and one recovery is all the mechanism was ever meant to be.
+ */
+export const MAX_TRUSTED_QUERY_RECOVERIES_PER_TURN = 1;
+
+/**
+ * The longest trusted customer utterance that will be used as a recovery query.
+ *
+ * Matches the tool schema's own bound on `query`, so a recovery search can never be larger than a
+ * search the model could have asked for itself.
+ */
+export const MAX_TRUSTED_QUERY_CHARACTERS = 600;
 
 /**
  * Comparison form for "is this the customer's own question?".

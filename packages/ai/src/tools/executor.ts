@@ -6,6 +6,8 @@ import {
   evaluateKnowledgeReliability,
   normalizeKnowledgeQuery,
   MAX_AGENT_KNOWLEDGE_QUERY_LENGTH,
+  MAX_TRUSTED_QUERY_CHARACTERS,
+  MAX_TRUSTED_QUERY_RECOVERIES_PER_TURN,
 } from '../agent/knowledge-reliability';
 import { MAX_TOOL_OUTPUT_CHARACTERS } from '../agent/limits';
 import type { AgentExecutionContext, AgentToolCall } from '../agent/types';
@@ -34,6 +36,17 @@ function safeJson(value: unknown): string {
   return truncate(JSON.stringify(value), MAX_TOOL_OUTPUT_CHARACTERS);
 }
 
+/**
+ * The customer's own words, bounded to what the tool schema would have allowed anyway.
+ *
+ * Returns null when there is nothing usable to search -- no turn, or a turn too short to be a
+ * question -- so the recovery simply does not happen rather than issuing a degenerate query.
+ */
+function trustedRecoveryQuery(customerMessage: string | undefined): string | null {
+  const trimmed = (customerMessage ?? '').trim().slice(0, MAX_TRUSTED_QUERY_CHARACTERS);
+  return trimmed.length >= 3 ? trimmed : null;
+}
+
 function rejected(call: AgentToolCall, summary: string): ToolExecutionResult {
   return {
     execution: { callId: call.callId, name: call.name, status: 'rejected', summary },
@@ -46,6 +59,8 @@ function rejected(call: AgentToolCall, summary: string): ToolExecutionResult {
 /** Executes only predeclared tools through trusted services; no model data path reaches a database. */
 export class ControlledToolExecutor implements ToolExecutor {
   public readonly tools;
+  /** One executor is built per agent turn, so this counter is the per-turn recovery budget. */
+  private trustedQueryRecoveries = 0;
 
   public constructor(
     private readonly industry: Parameters<typeof activeToolDefinitions>[0],
@@ -83,14 +98,50 @@ export class ControlledToolExecutor implements ToolExecutor {
         if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
         // The trust decision lives in one module shared with the voice executor, so a customer
         // cannot get an answer over chat that the same corpus would refuse over the phone.
-        const matches = await this.services.searchBusinessKnowledge(
-          { query: parsed.data.query, toolCallId: call.callId },
-          context,
+        const modelQuery = parsed.data.query;
+        let evaluation = evaluateKnowledgeReliability(
+          await this.services.searchBusinessKnowledge(
+            { query: modelQuery, toolCallId: call.callId },
+            context,
+          ),
         );
+
+        // Measured on staging: the model rewrites the customer's question before searching, and
+        // the rewrite retrieves materially worse. A Turkish registration question scored 0.611 --
+        // strong -- when searched as the customer asked it, while the model's own 99-character
+        // reformulation of the same question returned 0.533/0.487, a flat field that qualifies
+        // nothing. The customer was told there was no reliable information about a page that had
+        // been published minutes earlier.
+        //
+        // So when the model's query finds nothing usable, the customer's actual words get one
+        // search. The recovery query comes from trusted runtime input, never from another model
+        // call and never from a tool argument, and its results face the identical evaluator at the
+        // identical thresholds -- this widens which *query* is tried, never what counts as
+        // reliable. A corpus that genuinely lacks the answer stays flat for both queries and the
+        // deterministic refusal still stands.
+        const trustedQuery = trustedRecoveryQuery(context.customerMessage);
+        const alreadySearchedTheCustomerTurn =
+          trustedQuery !== null &&
+          normalizeKnowledgeQuery(modelQuery) === normalizeKnowledgeQuery(trustedQuery);
+        const mayRecover =
+          evaluation.qualifyingSources.length === 0 &&
+          trustedQuery !== null &&
+          !alreadySearchedTheCustomerTurn &&
+          this.trustedQueryRecoveries < MAX_TRUSTED_QUERY_RECOVERIES_PER_TURN;
+        if (mayRecover) {
+          this.trustedQueryRecoveries += 1;
+          evaluation = evaluateKnowledgeReliability(
+            await this.services.searchBusinessKnowledge(
+              { query: trustedQuery, toolCallId: call.callId },
+              context,
+            ),
+          );
+        }
+
         // One evaluation produces both the sources and the record of why. Deriving the diagnostic
         // separately would let the two disagree, and a diagnostic that can lie about the decision
         // is worse than none.
-        const { diagnostics, qualifyingSources: sources } = evaluateKnowledgeReliability(matches);
+        const { diagnostics, qualifyingSources: sources } = evaluation;
         const customerMessage = context.customerMessage;
         return {
           execution: {
@@ -108,12 +159,12 @@ export class ControlledToolExecutor implements ToolExecutor {
             knowledgeOutcome: sources.length ? 'reliable' : 'empty_or_unreliable',
             // Length, never the text. The model chose these words; recording them would put an
             // unbounded model-authored string, derived from a customer's message, into a log.
-            queryLength: Math.min(parsed.data.query.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
+            queryLength: Math.min(modelQuery.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
             queryMatchesCustomerTurn:
               customerMessage !== undefined &&
-              normalizeKnowledgeQuery(parsed.data.query) ===
-                normalizeKnowledgeQuery(customerMessage),
+              normalizeKnowledgeQuery(modelQuery) === normalizeKnowledgeQuery(customerMessage),
             toolCallId: call.callId,
+            usedTrustedQueryRetry: mayRecover,
           },
           modelOutput: safeJson({ matches: sources }),
           sources,
