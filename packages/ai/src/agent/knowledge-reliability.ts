@@ -31,28 +31,49 @@ import type { KnowledgeSource } from './types';
  * that distinction, not the raw score, is what separates "the corpus answers this" from "the corpus
  * contains nothing in particular about this".
  *
- * Two gates, in order:
+ * One question is asked of each match, not of the result set: **did this source earn the right to
+ * support an answer?** There are exactly two ways to earn it.
  *
- * 1. **Floor.** Nothing below {@link MIN_AGENT_KNOWLEDGE_SIMILARITY} is ever shown to the model,
- *    whatever it leads by. Below roughly this level the text is not topically related at all, and a
- *    large lead over even weaker noise is still noise.
+ * 1. **Absolutely.** A match at or above {@link STRONG_AGENT_KNOWLEDGE_SIMILARITY} stands on its
+ *    own. It needs no comparison, and several of them are the corpus agreeing rather than hedging.
  *
- * 2. **Confidence, either way.** The best match qualifies if it is strong on its own
- *    ({@link STRONG_AGENT_KNOWLEDGE_SIMILARITY}), or if it leads the rest of the field by
- *    {@link MIN_AGENT_KNOWLEDGE_LEAD_RATIO}. A moderate score that clearly beats everything else is
- *    the corpus discriminating; the same score in a cluster of near-equals is the corpus shrugging.
+ * 2. **Comparatively.** A match in the moderate band -- at least
+ *    {@link MIN_AGENT_KNOWLEDGE_SIMILARITY}, below strong -- earns it only by being the top result
+ *    *and* leading the runner-up by {@link MIN_AGENT_KNOWLEDGE_LEAD_RATIO}. Only the top result can
+ *    take this route, because beating the field is what the route is: a mid-table score that
+ *    happens to out-rank the tail below it has not beaten anything.
  *
- * The lead is measured against the next-best match *overall*, not the next one above the floor:
- * "this beat everything else" is the signal, and it is strongest precisely when the runners-up are
- * poor. A sole match is treated as leading a field of nothing and rests on the floor alone.
+ * Nothing below {@link MIN_AGENT_KNOWLEDGE_SIMILARITY} qualifies by any route, whatever it leads
+ * by. Below roughly that level the text is not topically related, and a large lead over even weaker
+ * noise is still noise.
+ *
+ * The answer is reliable when at least one match qualifies, and the qualifying matches -- only
+ * those -- are the ones the model sees. Trust and evidence are the same decision asked once.
+ *
+ * ## Two things this deliberately refuses
+ *
+ * **A lone moderate match is not a winner.** An earlier form of this rule accepted any above-floor
+ * match that had no runner-up, on the reasoning that a field of one is led by definition. That is
+ * backwards. A missing competitor is not comparative confirmation, it is the absence of any: it
+ * usually means the tenant published one document, or the search returned one candidate, neither of
+ * which says the match answers the question. A singleton now needs absolute strength, exactly like
+ * any other match with nothing to prove itself against.
+ *
+ * **A qualifying top result does not qualify the rest.** The same earlier form decided reliability
+ * from the top match and then handed the model everything above the floor. So a strong 0.62 could
+ * drag a 0.36 and a 0.35 in with it as though they were supporting evidence, and a moderate winner
+ * could bring along the very runner-up it had just been measured against. The runner-up is what
+ * made the winner's lead meaningful; it did not thereby become an answer. Each source now stands or
+ * falls on its own.
  *
  * ## Why these constants are conservative
  *
- * They admit the staging evidence with margin to spare and nothing weaker. 0.573 over 0.422 is a
- * 1.36x lead against a required 1.25x. The 0.296 result is refused by the floor, so it is never
- * offered as supporting evidence for an answer the 0.573 result earned. A flat field -- the shape
- * of a query the corpus does not cover -- fails the lead test at any score below strong, which is
- * the hallucination guard the absolute floor was reaching for and missing.
+ * They admit the staging evidence and nothing weaker. 0.573 leads 0.422 by 1.36x against a required
+ * 1.25x, so the page that answers the question reaches the model -- alone. The 0.422 page is real
+ * enough to make that lead meaningful and not strong enough to answer on its own; the 0.296 result
+ * is below the floor twice over. A flat field, which is the shape of a query the corpus does not
+ * cover, produces no qualifying match at any score below strong. That is the hallucination guard
+ * the original absolute floor was reaching for and missing.
  */
 
 /**
@@ -103,16 +124,35 @@ function ranked(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[]
     .sort((left, right) => right.similarity - left.similarity);
 }
 
-/** The trust decision on its own, so it can be asserted directly and reused without the mapping. */
-export function isKnowledgeReliable(matches: readonly KnowledgeSource[]): boolean {
+/**
+ * The matches that earned the right to support an answer, best first.
+ *
+ * The one place the rule is evaluated. Reliability and evidence are the same question -- "which of
+ * these is defensible?" -- so asking it twice is how the two answers drift apart, which is exactly
+ * how weak runners-up used to reach the model behind a strong top result.
+ */
+function qualifyingMatches(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[] {
   const scored = ranked(matches);
   const top = scored[0];
-  if (!top || top.similarity < MIN_AGENT_KNOWLEDGE_SIMILARITY) return false;
-  if (top.similarity >= STRONG_AGENT_KNOWLEDGE_SIMILARITY) return true;
+  if (!top || top.similarity < MIN_AGENT_KNOWLEDGE_SIMILARITY) return [];
+
+  // The comparative route, open to the top match only. `scored[1]` absent means there was nothing
+  // to out-rank, and nothing to out-rank is not a lead -- so a lone moderate match falls through to
+  // the absolute test below and is refused there.
   const runnerUp = scored[1];
-  // No runner-up is a field of nothing to lead, so the floor is the only gate that applies.
-  if (!runnerUp) return true;
-  return top.similarity >= runnerUp.similarity * MIN_AGENT_KNOWLEDGE_LEAD_RATIO;
+  const topLeadsTheField =
+    runnerUp !== undefined &&
+    top.similarity >= runnerUp.similarity * MIN_AGENT_KNOWLEDGE_LEAD_RATIO;
+
+  return scored.filter(
+    (match, index) =>
+      match.similarity >= STRONG_AGENT_KNOWLEDGE_SIMILARITY || (index === 0 && topLeadsTheField),
+  );
+}
+
+/** The trust decision on its own, so it can be asserted directly and reused without the mapping. */
+export function isKnowledgeReliable(matches: readonly KnowledgeSource[]): boolean {
+  return qualifyingMatches(matches).length > 0;
 }
 
 /**
@@ -127,9 +167,7 @@ export function isKnowledgeReliable(matches: readonly KnowledgeSource[]): boolea
 export function reliableKnowledgeSources(
   matches: readonly KnowledgeSource[],
 ): readonly KnowledgeSource[] {
-  if (!isKnowledgeReliable(matches)) return [];
-  return ranked(matches)
-    .filter((match) => match.similarity >= MIN_AGENT_KNOWLEDGE_SIMILARITY)
+  return qualifyingMatches(matches)
     .slice(0, MAX_AGENT_KNOWLEDGE_SOURCES)
     .map((match) => ({
       content: truncate(match.content, MAX_SOURCE_CONTENT),

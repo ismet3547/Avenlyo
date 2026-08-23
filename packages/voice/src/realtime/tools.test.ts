@@ -52,9 +52,30 @@ describe('voice trusts knowledge on the same terms as chat', () => {
 
     expect(result.status).toBe('succeeded');
     expect(result.modelOutput).toContain('Giris');
-    expect(result.modelOutput).toContain('Hesap');
-    // Below the floor, so it is never offered as supporting evidence over the phone either.
+    // Only the winner reaches the phone too: the runner-up earned the lead its comparison proved,
+    // not the right to answer, and the third result is below the floor.
+    expect(result.modelOutput).not.toContain('Hesap');
     expect(result.modelOutput).not.toContain('Unrelated');
+  });
+
+  it('refuses a lone moderate match', async () => {
+    const executor = knowledgeExecutor([knowledgeMatch(0.44, 'Alone')]);
+
+    const result = await executor.execute(call);
+
+    expect(result.modelOutput).not.toContain('Alone');
+  });
+
+  it('does not let a strong match carry weak runners-up', async () => {
+    const executor = knowledgeExecutor([
+      knowledgeMatch(0.62, 'Strong'),
+      knowledgeMatch(0.36, 'Weak'),
+    ]);
+
+    const result = await executor.execute(call);
+
+    expect(result.modelOutput).toContain('Strong');
+    expect(result.modelOutput).not.toContain('Weak');
   });
 
   it('refuses a flat, ambiguous field', async () => {

@@ -207,7 +207,60 @@ describe('controlled agent runtime', () => {
     const answer = await turn(agent, 'Hesabim yoksa ne yapmaliyim?');
 
     expect(answer.text).toBe('You can create an account from the sign-in page.');
-    expect(answer.sources.map((entry) => entry.title)).toEqual(['Giris Yap', 'Hesap Olustur']);
+    // Only the winner. The 0.422 page is what made the lead meaningful; that is evidence about the
+    // winner, not a second answer, and it is below strong on its own terms.
+    expect(answer.sources.map((entry) => entry.title)).toEqual(['Giris Yap']);
+  });
+
+  it('does not answer from a single moderate match with nothing to compare it against', async () => {
+    // A tenant with one published document, or a search that returned one candidate. Neither is
+    // comparative confirmation, so the deterministic fallback stands.
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'singleton',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('We are open every day.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () => Promise.resolve([{ ...source, similarity: 0.44 }]),
+      }),
+    );
+    await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
+      sources: [],
+      text: "I don't have reliable information about that yet. I can ask the team to help.",
+    });
+  });
+
+  it('does not let a strong match carry weak runners-up to the model', async () => {
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'strong-top',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('The published hours are listed above.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.62, title: 'Hours' },
+            { ...source, similarity: 0.36, title: 'Weak' },
+            { ...source, similarity: 0.35, title: 'Weaker' },
+          ]),
+      }),
+    );
+
+    const answer = await turn(agent, 'What are your hours?');
+
+    expect(answer.sources.map((entry) => entry.title)).toEqual(['Hours']);
   });
 
   it('uses a deterministic fallback after a failed knowledge search', async () => {
