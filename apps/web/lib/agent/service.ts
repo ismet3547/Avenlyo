@@ -227,6 +227,7 @@ function recordAgentTestKnowledgeDiagnostics(
         queryMatchesCustomerTurn: diagnostic.queryMatchesCustomerTurn,
         retrievedCount: diagnostic.retrievedCount,
         toolCallId: diagnostic.toolCallId,
+        usedTrustedQueryRetry: diagnostic.usedTrustedQueryRetry,
       }),
     );
   }

@@ -235,6 +235,13 @@ describe('the executor diagnostic records the search without recording the words
     expect(result.knowledgeDiagnostic?.queryMatchesCustomerTurn).toBe(false);
   });
 
+  it('reports whether the trusted-query recovery ran', async () => {
+    // The field the first staging read was missing: without it a refused answer cannot be told
+    // apart from a refused answer that already had its second chance.
+    const noRecoveryNeeded = await executorFor([match(0.9)]).execute(call('kayit olma'), context);
+    expect(noRecoveryNeeded.knowledgeDiagnostic?.usedTrustedQueryRetry).toBe(false);
+  });
+
   it('agrees with the outcome the model was actually given', async () => {
     const reliable = await executorFor([match(0.62), match(0.36)]).execute(call('kayit olma'), context);
     expect(reliable.knowledgeDiagnostic?.knowledgeOutcome).toBe('reliable');
