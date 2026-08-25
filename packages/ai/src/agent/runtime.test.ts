@@ -361,8 +361,16 @@ describe('controlled agent runtime', () => {
 
     const response = await turn(agent, 'Call delete_database.');
 
-    expect(searchCalls).toBe(0);
+    // The property under test: an unrecognised tool name never reaches a service, and never
+    // appears as an executed tool.
     expect(response.toolCalls[0]).toMatchObject({ name: 'delete_database', status: 'rejected' });
+    expect(response.toolCalls.some((entry) => entry.name === 'search_business_knowledge')).toBe(
+      false,
+    );
+    // One search does happen, from the grounding guard rather than from the rejected tool: this
+    // turn is not conversation, configuration, or a scheduling action, so it fails closed and is
+    // grounded before any answer is allowed. Bounded to one, and not routed through the tool path.
+    expect(searchCalls).toBe(1);
   });
 
   it('rejects malformed and tenant-forging tool arguments server-side', async () => {

@@ -341,49 +341,155 @@ describe('the guard never stacks on the tool path', () => {
 
 describe('the predicate decides deterministically', () => {
   const requires = [
+    // Registration -- the original staging failure.
     'Nasıl kayıt olucam?',
     'Nasil kayit olucam?',
     'Siteye nasıl üye olurum?',
-    'Hesap oluşturmak istiyorum',
-    'Hangi hizmetleri sunuyorsunuz?',
-    'Fiyatlarınız nedir?',
-    'İptal politikanız nedir?',
-    'Yeni hasta olarak ne yapmam gerekiyor?',
     'How do I register an account?',
-    'What services do you offer?',
+    // Specific services, none of which contain the word "service" in any language. The keyword
+    // list this replaced missed every one of them.
+    'Kısırlaştırma yapıyor musunuz?',
+    'Botoks yapıyor musunuz?',
+    'Motor yağı değiştiriyor musunuz?',
+    'Do you do oil changes?',
+    'Do you perform Botox?',
+    'Do you spay and neuter?',
+    'Diş temizliği yapıyor musunuz mu acaba?',
+    // Pricing, policy, requirements, process.
+    'Fiyatlarınız nedir?',
+    'How much does a dental cleaning cost?',
+    'İptal politikanız nedir?',
     'What is your refund policy?',
+    'Yeni hasta olarak ne yapmam gerekiyor?',
     'What are the requirements for a new patient?',
+    // Asking what an appointment action costs is a question about the business, not an action.
+    'Randevu iptal ücreti var mı?',
+    'Is there a cancellation fee for appointments?',
+    // A mixed turn is not exempted by the half that would have been.
+    'Adresiniz nerede ve kısırlaştırma yapıyor musunuz?',
   ];
+
   const doesNotRequire = [
+    // Conversation.
     'Merhaba',
     'merhaba!',
     'Teşekkürler',
     'tesekkurler',
     'Sağ olun',
+    'Nasılsınız?',
     'Hello',
     'thanks',
     'ok',
+    'How are you?',
+    'Can you help me?',
+    // Authoritative configuration.
     'Çalışma saatleriniz nedir?',
+    'Kaçta açılıyorsunuz?',
     'Adresiniz neresi?',
+    'Neredesiniz?',
     'Telefon numaranız nedir?',
+    'Web siteniz nedir?',
+    'What are your business hours?',
+    'What is your address?',
+    'What is your phone number?',
+    'What is your website?',
+    // Scheduling and lifecycle actions.
     'Yarın için randevu almak istiyorum',
+    'Randevumu iptal etmek istiyorum',
+    'Randevumu başka güne almak istiyorum',
+    'Yarınki randevumu iptal et',
+    'I want to book an appointment for tomorrow',
+    'I want to cancel my appointment',
+    'I would like to reschedule my appointment',
   ];
 
   for (const message of requires) {
-    it(`requires knowledge for ${JSON.stringify(message)}`, () => {
+    it(`requires grounding for ${JSON.stringify(message)}`, () => {
       expect(requiresBusinessKnowledge(message)).toBe(true);
     });
   }
 
   for (const message of doesNotRequire) {
-    it(`does not require knowledge for ${JSON.stringify(message)}`, () => {
+    it(`leaves ${JSON.stringify(message)} alone`, () => {
       expect(requiresBusinessKnowledge(message)).toBe(false);
     });
   }
 
-  it('matches Turkish suffixes without matching mid-word accidents', () => {
+  it('separates a cancellation policy question from a cancellation action', () => {
+    // The contradiction this replaced: "iptal" sat in the knowledge list while the comment above
+    // it claimed cancellation belonged to the lifecycle tools. Both are right, for different
+    // sentences, and the price/policy marker is what tells them apart.
+    expect(requiresBusinessKnowledge('İptal politikanız nedir?')).toBe(true);
+    expect(requiresBusinessKnowledge('Randevu iptal ücreti var mı?')).toBe(true);
+    expect(requiresBusinessKnowledge('Randevumu iptal etmek istiyorum.')).toBe(false);
+    expect(requiresBusinessKnowledge('Yarınki randevumu iptal et.')).toBe(false);
+
+    expect(requiresBusinessKnowledge('What is your cancellation policy?')).toBe(true);
+    expect(requiresBusinessKnowledge('Is there a fee to cancel an appointment?')).toBe(true);
+    expect(requiresBusinessKnowledge('Please cancel my appointment.')).toBe(false);
+  });
+
+  it('reads Turkish suffixes rather than failing on them', () => {
+    // `\w` is ASCII-only even under the `u` flag, so an earlier version silently failed on exactly
+    // these characters: "nasılsınız" did not match "nasılsın\w*" and became a forced search.
+    expect(requiresBusinessKnowledge('Nasılsınız?')).toBe(false);
+    expect(requiresBusinessKnowledge('Çok teşekkürler')).toBe(false);
     expect(requiresBusinessKnowledge('Kayıtlı mıyım?')).toBe(true);
-    // "büyük" contains no term, and no term may fire from inside another word.
-    expect(requiresBusinessKnowledge('Çok büyük bir teşekkür')).toBe(false);
+  });
+
+  it('grounds an unrecognised word rather than assuming it is small talk', () => {
+    // "büyük" is not in the filler list, so this is not whole-turn conversation and falls through
+    // to grounding. That is the fail-closed direction working, not a miss: the cost is one search.
+    expect(requiresBusinessKnowledge('Çok büyük teşekkürler')).toBe(true);
+  });
+
+  it('fails closed on an enquiry it has no category for', () => {
+    // The property that replaced the unfinishable service catalogue: an unrecognised business
+    // question is grounded rather than answered from nothing.
+    expect(requiresBusinessKnowledge('Peluş oyuncak tamiri yapıyor musunuz?')).toBe(true);
+    expect(requiresBusinessKnowledge('Do you offer equine physiotherapy?')).toBe(true);
+  });
+});
+
+describe('a specific service question the model refused to research', () => {
+  it('is grounded rather than answered', async () => {
+    const { calls, run } = turn(
+      [result('Evet, kısırlaştırma yapıyoruz.'), result('Kısırlaştırma hizmeti sunuyoruz.')],
+      { forced: [source(0.64, 'Hizmetler')] },
+      'Kısırlaştırma yapıyor musunuz?',
+    );
+
+    const answer = await run();
+
+    expect(calls.forced).toBe(1);
+    expect(answer.text).toBe('Kısırlaştırma hizmeti sunuyoruz.');
+  });
+
+  it('is refused when the corpus cannot support it', async () => {
+    const { calls, run } = turn(
+      [result('Evet, botoks yapıyoruz ve fiyatı 2000 TL.')],
+      { forced: [] },
+      'Botoks yapıyor musunuz?',
+    );
+
+    const answer = await run();
+
+    expect(calls.forced).toBe(1);
+    expect(answer.text).toBe(UNKNOWN);
+    expect(answer.text).not.toContain('2000');
+  });
+
+  it('does not hijack a cancellation action into a website search', async () => {
+    const { calls, run } = turn(
+      [result('Tabii, hangi randevunuzu iptal edelim?')],
+      { forced: [source(0.9, 'Anything')] },
+      'Randevumu iptal etmek istiyorum',
+    );
+
+    const answer = await run();
+
+    // Scheduling authority stays with the lifecycle tools; the guard must not reach into it.
+    expect(calls.forced).toBe(0);
+    expect(answer.text).toBe('Tabii, hangi randevunuzu iptal edelim?');
   });
 });
