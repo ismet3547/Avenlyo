@@ -1,3 +1,5 @@
+import type { AgentBusinessContext } from './types';
+
 /**
  * Whether a customer turn is asking for a fact only the business's own published knowledge can
  * answer.
@@ -6,69 +8,64 @@
  * asserting a business-specific fact anyway -- "there is no registration link" -- about a site
  * whose registration page had been published minutes earlier. The prompt already told it to
  * search. An instruction the model can decline is not a control, and the runtime's no-knowledge
- * guard only fires once a search has been attempted, so declining to search bypassed the guard
- * completely.
+ * guard only arms once a search has been attempted, so declining to search bypassed it entirely.
  *
  * Deliberately not a model call. A classifier that can be wrong in novel ways, on the path whose
- * entire job is to stop the model from being wrong in novel ways, is not a safety mechanism. This
- * is deterministic, auditable, and identical on every run.
+ * whole job is to stop the model being wrong in novel ways, is not a safety mechanism.
  *
- * ## Fail closed, because an allow-list of services cannot be finished
+ * ## Fail closed, and mean it
  *
- * The first version asked "does this mention a business topic?" against a keyword list, and the
- * list could never be complete. "Kısırlaştırma yapıyor musunuz?", "Botoks yapıyor musunuz?",
- * "Motor yağı değiştiriyor musunuz?" are all plainly questions about what a business does, and
- * none of them contain the word "service" in any language. Every industry would need its own
- * catalogue, every catalogue would have gaps, and each gap was the original bypass again: model
- * skips search, unsupported service claim goes out.
+ * The default is that a turn requires grounding. Three narrow categories are exempt. That is
+ * affordable because this only runs when the model tried to end a turn with no tool call at all: a
+ * broader guard costs one extra search on that path, a narrower one costs an ungrounded claim
+ * about someone's business.
  *
- * So the question is inverted. The default is that a turn *does* require grounding, and three
- * narrow, well-understood categories are excused. That is affordable precisely because this
- * predicate only ever runs when the model tried to end a turn with no tool call at all: a broader
- * guard costs at most one extra search on that path, while a narrower one costs an ungrounded
- * claim about someone's business.
+ * The exemptions have to be genuinely narrow, and an earlier version's were not:
  *
- * The three exemptions:
+ * - It exempted "Adresiniz neresi?" without knowing whether an address was configured. With
+ *   `business.address` null there is no authoritative answer anywhere, so the exemption handed the
+ *   turn straight back to the model to invent one. An exemption that does not check the value is
+ *   not an exemption, it is the original hole with extra steps. The predicate therefore takes the
+ *   trusted business context and requires the field to actually be present.
  *
- * 1. **Conversation.** Greetings, thanks, acknowledgements, generic openers. Nothing factual is
- *    being asserted, so there is nothing to ground.
- * 2. **Authoritative configuration.** Hours, address, phone, business name, website URL. The
- *    prompt already carries these from configuration, which is a *better* source than a crawled
- *    page. Note the boundary: a configured website URL authorises stating the URL, never claims
- *    about how registering on that site works.
- * 3. **Scheduling and lifecycle actions.** Booking, cancelling, or moving an appointment. Their
- *    authority belongs to the scheduling and lifecycle tools, and website marketing copy is not
- *    the place to answer them from.
+ * - It treated "contains a configuration word and no known counter-word" as a whole-turn test.
+ *   "Kaçta botoks yapıyorsunuz?" and "Adresinizde otopark bulunuyor mu?" both sailed through. The
+ *   fix is not another counter-word list -- that list is as unfinishable as the service catalogue
+ *   it already replaced. Configuration questions are now matched as *whole turns* against anchored
+ *   shapes, so a question that merely starts like one does not qualify.
  *
- * ## Asking about a policy is not performing an action
+ * - It treated any co-occurrence of an appointment noun and an action word as a scheduling action,
+ *   so "Randevu almak için hangi belgeler gerekiyor?" was exempted as if it were a booking. Asking
+ *   what is required in order to book is a question about the business. The exemption now needs
+ *   explicit first-person intent or an imperative, and stands down when the turn asks about
+ *   requirements, process, or price.
  *
- * The distinction the first version got wrong, by listing "iptal"/"cancellation" as knowledge
- * topics while its own comment claimed cancellation was excluded. Both readings are right for
- * different sentences:
- *
- *   "Randevumu iptal etmek istiyorum."   -> lifecycle action, the tools own it
- *   "Randevu iptal ücreti var mı?"       -> policy question, published knowledge may answer it
- *
- * A price or policy marker anywhere in the turn therefore cancels the lifecycle exemption. Asking
- * what cancelling costs is a question about the business; cancelling is a thing you do.
- *
- * ## Mixed turns fail closed
- *
- * Every exemption is judged on the whole turn. "Adresiniz nerede ve kısırlaştırma yapıyor
- * musunuz?" is not exempted as a configuration question, because it is not only a configuration
- * question. Falling through to a forced search is the safe direction.
+ * Missing a genuine action phrase costs a wasted search. Accepting an ungrounded factual answer
+ * costs a customer being told something untrue about a business. Those are not comparable, and
+ * every ambiguous case here is resolved toward the search.
  */
 
+/**
+ * Casefold for comparison.
+ *
+ * The combining-dot removal is not cosmetic: JavaScript lowercases Turkish "İ" to "i" plus
+ * U+0307, so "İptal" becomes "i̇ptal" and never matches a plain "iptal". Stripping the mark makes
+ * the two forms comparable without pulling in locale-dependent casing.
+ */
 function normalize(message: string): string {
-  return message.trim().replace(/\s+/g, ' ').toLowerCase();
+  return message
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .replace(/̇/g, '');
 }
 
 /**
  * Matches a term at the start of a word.
  *
- * Word-initial rather than anywhere, so a short term cannot fire from inside an unrelated word,
- * and rather than whole-word, so Turkish suffixes still match: "randevumu" starts a word with
- * "randevu", "saatleriniz" with "saatleri".
+ * Word-initial rather than anywhere, so a short term cannot fire from inside an unrelated word, and
+ * rather than whole-word, so Turkish suffixes still match: "randevumu" starts a word with
+ * "randevu".
  */
 function mentions(normalized: string, term: string): boolean {
   let index = normalized.indexOf(term);
@@ -83,13 +80,11 @@ function mentionsAny(normalized: string, terms: readonly string[]): boolean {
   return terms.some((term) => mentions(normalized, term));
 }
 
-/**
- * Words that carry no enquiry of their own.
- *
- * Listed so "çok teşekkürler" is still just thanks. `\w` is deliberately not used anywhere in this
- * file: it is ASCII-only even under the `u` flag, so it silently fails on exactly the Turkish
- * characters this predicate exists to read -- "nasılsınız" does not match `nasılsın\w*`.
- */
+function isPresent(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/** Words carrying no enquiry of their own, so "çok teşekkürler" is still just thanks. */
 const CONVERSATION_FILLER = '(?:çok|cok|very|so|really|much|ve|and|bir|de|da|lütfen|lutfen|please)';
 
 const CONVERSATION_GREETING =
@@ -102,80 +97,47 @@ const CONVERSATION_ONLY = new RegExp(
 );
 
 /**
- * Facts the prompt already carries from authoritative business configuration.
+ * Whole-turn shapes for each authoritative configuration field, and the field each one needs.
  *
- * Kept tight on purpose. A term missing from here costs one unnecessary forced search; a term too
- * loose here excuses a turn that should have been grounded, which is the failure this guard exists
- * to prevent.
+ * Anchored end to end on purpose. "Adresiniz neresi?" is a question configuration answers;
+ * "Adresinizde otopark bulunuyor mu?" only begins like one, and the difference has to be structural
+ * rather than a race between keyword lists.
  */
-const CONFIGURATION_TERMS: readonly string[] = [
-  'çalışma saat',
-  'calisma saat',
-  'saatleri',
-  'kaçta',
-  'kacta',
-  'açık mısınız',
-  'acik misiniz',
-  'adresiniz',
-  'adresini',
-  'konumunuz',
-  'neredesiniz',
-  'telefon',
-  'numaranız',
-  'numaraniz',
-  'web siteniz',
-  'siteniz',
-  'web adresiniz',
-  'isminiz',
-  'adınız',
-  'business hours',
-  'opening hours',
-  'your address',
-  'where are you located',
-  'phone number',
-  'contact number',
-  'your website',
-  'your name',
+const END = '\\s*[?!.…]*$';
+
+const CONFIGURATION_QUESTIONS: readonly {
+  readonly field: keyof AgentBusinessContext;
+  readonly pattern: RegExp;
+}[] = [
+  // Address
+  { field: 'address', pattern: new RegExp(`^adres(iniz|in)?\\s*(ne|nedir|neresi|neresidir|nerede|nerededir)?${END}`, 'u') },
+  { field: 'address', pattern: new RegExp(`^neredesiniz${END}`, 'u') },
+  { field: 'address', pattern: new RegExp(`^konumunuz\\s*(ne|nedir|nerede)?${END}`, 'u') },
+  { field: 'address', pattern: new RegExp(`^(what\\s+is|what's|whats)\\s+your\\s+address${END}`, 'u') },
+  { field: 'address', pattern: new RegExp(`^where\\s+are\\s+you\\s+located${END}`, 'u') },
+  { field: 'address', pattern: new RegExp(`^(your\\s+)?address${END}`, 'u') },
+  // Business hours
+  { field: 'businessHours', pattern: new RegExp(`^(çalışma|calisma)?\\s*saatleriniz\\s*(ne|nedir|nelerdir)?${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^(saat\\s+)?kaçta\\s+(açılıyorsunuz|aciliyorsunuz|açıyorsunuz|aciyorsunuz|kapanıyorsunuz|kapaniyorsunuz|kapatıyorsunuz|kapatiyorsunuz)${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^(bugün|bugun|yarın|yarin|şu an|su an)?\\s*(açık|acik)\\s*mısınız|misiniz${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^(what\\s+are\\s+)?your\\s+(business|opening|working)\\s+hours${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^what\\s+time\\s+do\\s+you\\s+(open|close)${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^are\\s+you\\s+open(\\s+(today|tomorrow|now))?${END}`, 'u') },
+  // Phone
+  { field: 'phone', pattern: new RegExp(`^telefon\\s*(numaranız|numaraniz|numarası|numarasi)?\\s*(ne|nedir|kaç|kac)?${END}`, 'u') },
+  { field: 'phone', pattern: new RegExp(`^(numaranız|numaraniz)\\s*(ne|nedir)?${END}`, 'u') },
+  { field: 'phone', pattern: new RegExp(`^(what\\s+is|what's|whats)\\s+your\\s+(phone|contact)\\s+number${END}`, 'u') },
+  { field: 'phone', pattern: new RegExp(`^(your\\s+)?(phone|contact)\\s+number${END}`, 'u') },
+  // Website
+  { field: 'website', pattern: new RegExp(`^(web\\s*|internet\\s+)?(siteniz|sitenizin\\s+adresi|site\\s+adresiniz|web\\s+adresiniz)\\s*(ne|nedir)?${END}`, 'u') },
+  { field: 'website', pattern: new RegExp(`^(what\\s+is|what's|whats)\\s+your\\s+(web\\s*)?site${END}`, 'u') },
+  { field: 'website', pattern: new RegExp(`^(your\\s+)?website${END}`, 'u') },
+  // Business name
+  { field: 'name', pattern: new RegExp(`^(isminiz|adınız|adiniz)\\s*(ne|nedir)?${END}`, 'u') },
+  { field: 'name', pattern: new RegExp(`^(what\\s+is|what's|whats)\\s+your\\s+name${END}`, 'u') },
 ];
 
-/** Signals that a turn asks for something configuration cannot answer, even if it also asks hours. */
-const BEYOND_CONFIGURATION_TERMS: readonly string[] = [
-  'fiyat',
-  'ücret',
-  'ucret',
-  'politika',
-  'kural',
-  'şart',
-  'sart',
-  'gerek',
-  'kayıt',
-  'kayit',
-  'kayd',
-  'üye',
-  'uye',
-  'hesap',
-  'hizmet',
-  'yapıyor mu',
-  'yapiyor mu',
-  'sunuyor mu',
-  'var mı',
-  'var mi',
-  'price',
-  'pricing',
-  'cost',
-  'fee',
-  'policy',
-  'require',
-  'register',
-  'account',
-  'service',
-  'do you do',
-  'do you offer',
-  'do you perform',
-  'do you provide',
-];
-
-/** An appointment being acted on, rather than asked about. */
+/** An appointment, as the object of an action rather than the subject of a question. */
 const APPOINTMENT_NOUNS: readonly string[] = [
   'randevu',
   'rezervasyon',
@@ -184,45 +146,82 @@ const APPOINTMENT_NOUNS: readonly string[] = [
   'reservation',
 ];
 
-const APPOINTMENT_ACTIONS: readonly string[] = [
-  'iptal',
+/**
+ * Explicit intent to perform the action, in the first person or as an imperative.
+ *
+ * Co-occurrence is not intent. "Randevu almak için hangi belgeler gerekiyor?" contains an
+ * appointment and a booking verb and is a question about the business; only a stated wish or a
+ * command is an action.
+ */
+const ACTION_INTENT: readonly string[] = [
+  'istiyorum',
+  'istiyoruz',
+  'isterim',
+  'istedim',
+  'edebilir miyim',
+  'alabilir miyim',
+  'yapabilir miyim',
+  'iptal et',
+  'iptal edin',
   'ertele',
-  'değiştir',
-  'degistir',
-  'başka gün',
-  'baska gun',
-  'başka güne',
-  'baska gune',
-  'almak',
-  'alabilir',
-  'alayım',
-  'alayim',
-  'oluştur',
-  'olustur',
-  'ayarla',
-  'book',
-  'schedule',
-  'reschedul',
-  'rebook',
-  'cancel',
-  'move',
-  'change',
+  'erteleyin',
+  'i want to',
+  'i would like to',
+  "i'd like to",
+  'i need to',
+  'please cancel',
+  'please book',
+  'please reschedule',
+  'please move',
+  'can you cancel',
+  'can you book',
+  'can you reschedule',
+  'cancel my',
+  'book me',
+  'reschedule my',
+  'move my',
 ];
 
-/** Price and policy markers, which turn an appointment mention into a question about the business. */
-const POLICY_MARKERS: readonly string[] = [
+/**
+ * Markers that turn an appointment sentence back into a question about the business.
+ *
+ * Requirements, process and price are all things published knowledge may answer, and none of them
+ * are performed by the scheduling tools.
+ */
+const ENQUIRY_MARKERS: readonly string[] = [
+  'gerek',
+  'belge',
+  'evrak',
+  'ne yapmam',
+  'ne yapmalı',
+  'ne yapmali',
+  'nasıl işl',
+  'nasil isl',
+  'nasıl oluyor',
+  'nasil oluyor',
+  'süreç',
+  'surec',
+  'prosedür',
+  'prosedur',
+  'şart',
+  'sart',
   'ücret',
   'ucret',
   'fiyat',
   'politika',
   'kural',
-  'şart',
-  'sart',
   'ceza',
+  'requirement',
+  'required',
+  'document',
+  'what do i need',
+  'what should i',
+  'how does',
+  'process',
+  'policy',
   'fee',
   'cost',
   'price',
-  'policy',
   'charge',
   'penalty',
   'rule',
@@ -234,28 +233,35 @@ const MIN_ENQUIRY_CHARACTERS = 4;
 /**
  * True when the runtime must have published knowledge before this turn can be answered.
  *
- * Pure and synchronous: no provider, no network, no model. The same input always produces the same
- * answer, which is what makes it something a reviewer can hold the runtime to.
+ * Pure and synchronous: no provider, no network, no model. `business` is the trusted configuration
+ * the runtime was given, and it is consulted rather than assumed -- an exemption that cannot check
+ * whether the answer exists is not an exemption.
  */
-export function requiresBusinessKnowledge(message: string): boolean {
+export function requiresBusinessKnowledge(
+  message: string,
+  business?: AgentBusinessContext,
+): boolean {
   const normalized = normalize(message);
   if (normalized.length < MIN_ENQUIRY_CHARACTERS) return false;
   if (CONVERSATION_ONLY.test(normalized)) return false;
 
-  // Configuration answers it, and only configuration is being asked about.
-  if (
-    mentionsAny(normalized, CONFIGURATION_TERMS) &&
-    !mentionsAny(normalized, BEYOND_CONFIGURATION_TERMS)
-  ) {
-    return false;
+  // Configuration answers it, the whole turn asks only that, and the value is actually configured.
+  // All three, or the turn is grounded like any other.
+  for (const { field, pattern } of CONFIGURATION_QUESTIONS) {
+    if (!pattern.test(normalized)) continue;
+    const configured = business ? business[field] : null;
+    if (isPresent(typeof configured === 'string' ? configured : null)) return false;
+    // The shape matched but nothing is configured, so there is no authoritative answer to give.
+    // Falling through is the whole point: this is where the model used to be handed a blank page.
+    break;
   }
 
-  // An appointment is being acted on. Asking what an action *costs* or what the policy *is* is not
-  // acting on it, so a price or policy marker keeps the turn in knowledge territory.
+  // A scheduling action, stated as intent rather than merely mentioned -- and not a question about
+  // what the action requires, costs, or involves.
   if (
     mentionsAny(normalized, APPOINTMENT_NOUNS) &&
-    mentionsAny(normalized, APPOINTMENT_ACTIONS) &&
-    !mentionsAny(normalized, POLICY_MARKERS)
+    mentionsAny(normalized, ACTION_INTENT) &&
+    !mentionsAny(normalized, ENQUIRY_MARKERS)
   ) {
     return false;
   }

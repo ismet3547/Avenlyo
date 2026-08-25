@@ -194,7 +194,9 @@ export class AgentRuntime {
         const groundingRequired =
           !knowledgeSearchAttempted &&
           runtimeForcedSearches < MAX_RUNTIME_FORCED_SEARCHES_PER_TURN &&
-          requiresBusinessKnowledge(userMessage);
+          // The trusted business configuration, so a configuration exemption can check whether the
+          // answer actually exists rather than assuming it does.
+          requiresBusinessKnowledge(userMessage, input.business);
 
         if (groundingRequired) {
           runtimeForcedSearches += 1;

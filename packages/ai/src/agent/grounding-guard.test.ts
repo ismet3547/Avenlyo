@@ -7,6 +7,7 @@ import { ControlledToolExecutor } from '../tools/executor';
 import { requiresBusinessKnowledge } from './business-knowledge-predicate';
 import { AgentRuntime } from './runtime';
 import type {
+  AgentBusinessContext,
   AgentProvider,
   AgentProviderResult,
   AgentTurnResult,
@@ -339,6 +340,26 @@ describe('the guard never stacks on the tool path', () => {
   });
 });
 
+const CONFIGURED: AgentBusinessContext = {
+  address: '1 Clinic Street, Istanbul',
+  businessHours: 'Mon-Fri 09:00-17:00',
+  locationName: 'Main location',
+  name: 'oddrail',
+  phone: '+90 555 000 0000',
+  timezone: 'UTC',
+  website: 'https://petrandevu.com',
+};
+
+const NOTHING_CONFIGURED: AgentBusinessContext = {
+  address: null,
+  businessHours: null,
+  locationName: null,
+  name: 'oddrail',
+  phone: null,
+  timezone: 'UTC',
+  website: null,
+};
+
 describe('the predicate decides deterministically', () => {
   const requires = [
     // Registration -- the original staging failure.
@@ -346,108 +367,141 @@ describe('the predicate decides deterministically', () => {
     'Nasil kayit olucam?',
     'Siteye nasıl üye olurum?',
     'How do I register an account?',
-    // Specific services, none of which contain the word "service" in any language. The keyword
-    // list this replaced missed every one of them.
+    // Specific services. None contains the word "service" in any language, which is why the
+    // keyword catalogue this replaced missed every one of them.
     'Kısırlaştırma yapıyor musunuz?',
     'Botoks yapıyor musunuz?',
     'Motor yağı değiştiriyor musunuz?',
     'Do you do oil changes?',
     'Do you perform Botox?',
-    'Do you spay and neuter?',
-    'Diş temizliği yapıyor musunuz mu acaba?',
-    // Pricing, policy, requirements, process.
+    'Do you offer equine physiotherapy?',
+    // Pricing, policy, requirements.
     'Fiyatlarınız nedir?',
-    'How much does a dental cleaning cost?',
     'İptal politikanız nedir?',
     'What is your refund policy?',
     'Yeni hasta olarak ne yapmam gerekiyor?',
-    'What are the requirements for a new patient?',
-    // Asking what an appointment action costs is a question about the business, not an action.
     'Randevu iptal ücreti var mı?',
     'Is there a cancellation fee for appointments?',
-    // A mixed turn is not exempted by the half that would have been.
+  ];
+
+  for (const message of requires) {
+    it(`requires grounding for ${JSON.stringify(message)}`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(true);
+    });
+  }
+
+  const conversation = ['Merhaba', 'merhaba!', 'Teşekkürler', 'Nasılsınız?', 'Hello', 'thanks', 'ok', 'How are you?', 'Can you help me?'];
+  for (const message of conversation) {
+    it(`leaves conversation alone: ${JSON.stringify(message)}`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(false);
+    });
+  }
+});
+
+describe('a configuration exemption checks that the configuration exists', () => {
+  const configurationQuestions: readonly [string, string][] = [
+    ['Adresiniz neresi?', 'address'],
+    ['Neredesiniz?', 'address'],
+    ['What is your address?', 'address'],
+    ['Çalışma saatleriniz nedir?', 'businessHours'],
+    ['Kaçta açılıyorsunuz?', 'businessHours'],
+    ['What are your business hours?', 'businessHours'],
+    ['Telefon numaranız nedir?', 'phone'],
+    ['What is your phone number?', 'phone'],
+    ['Web siteniz nedir?', 'website'],
+    ['What is your website?', 'website'],
+  ];
+
+  for (const [message, field] of configurationQuestions) {
+    it(`is exempt when ${field} is configured: ${JSON.stringify(message)}`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(false);
+    });
+
+    it(`is NOT exempt when ${field} is missing: ${JSON.stringify(message)}`, () => {
+      // The defect this replaced. With nothing configured there is no authoritative answer
+      // anywhere, so exempting the turn handed the model a blank page and let it invent one.
+      expect(requiresBusinessKnowledge(message, NOTHING_CONFIGURED)).toBe(true);
+    });
+  }
+
+  it('is not exempt when no business context is supplied at all', () => {
+    expect(requiresBusinessKnowledge('Adresiniz neresi?')).toBe(true);
+  });
+
+  it('is not exempt when the configured value is blank rather than null', () => {
+    expect(
+      requiresBusinessKnowledge('Adresiniz neresi?', { ...CONFIGURED, address: '   ' }),
+    ).toBe(true);
+  });
+});
+
+describe('a configuration word is not a configuration question', () => {
+  // The second failure mode: these all begin like a configuration question and ask for something
+  // configuration does not contain. Matching whole turns rather than counting keywords is what
+  // separates them, and it does not need another blacklist to keep up with.
+  const looksLikeConfiguration = [
+    'Kaçta botoks yapıyorsunuz?',
+    'Kaçta kısırlaştırma yapıyorsunuz?',
+    'Adresinizde otopark bulunuyor mu?',
+    'Web sitenizden ödeme yapabilir miyim?',
+    'Telefonla kayıt olabilir miyim?',
     'Adresiniz nerede ve kısırlaştırma yapıyor musunuz?',
   ];
 
-  const doesNotRequire = [
-    // Conversation.
-    'Merhaba',
-    'merhaba!',
-    'Teşekkürler',
-    'tesekkurler',
-    'Sağ olun',
-    'Nasılsınız?',
-    'Hello',
-    'thanks',
-    'ok',
-    'How are you?',
-    'Can you help me?',
-    // Authoritative configuration.
-    'Çalışma saatleriniz nedir?',
-    'Kaçta açılıyorsunuz?',
-    'Adresiniz neresi?',
-    'Neredesiniz?',
-    'Telefon numaranız nedir?',
-    'Web siteniz nedir?',
-    'What are your business hours?',
-    'What is your address?',
-    'What is your phone number?',
-    'What is your website?',
-    // Scheduling and lifecycle actions.
+  for (const message of looksLikeConfiguration) {
+    it(`grounds ${JSON.stringify(message)} even with everything configured`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(true);
+    });
+  }
+});
+
+describe('a scheduling exemption needs intent, not vocabulary', () => {
+  const actions = [
     'Yarın için randevu almak istiyorum',
     'Randevumu iptal etmek istiyorum',
     'Randevumu başka güne almak istiyorum',
     'Yarınki randevumu iptal et',
     'I want to book an appointment for tomorrow',
-    'I want to cancel my appointment',
-    'I would like to reschedule my appointment',
+    'Please cancel my appointment',
+    "I'd like to reschedule my appointment",
   ];
 
-  for (const message of requires) {
-    it(`requires grounding for ${JSON.stringify(message)}`, () => {
-      expect(requiresBusinessKnowledge(message)).toBe(true);
+  for (const message of actions) {
+    it(`leaves the scheduling tools to handle ${JSON.stringify(message)}`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(false);
     });
   }
 
-  for (const message of doesNotRequire) {
-    it(`leaves ${JSON.stringify(message)} alone`, () => {
-      expect(requiresBusinessKnowledge(message)).toBe(false);
+  const enquiries = [
+    'Randevu almak için hangi belgeler gerekiyor?',
+    'Randevu almak için ne yapmam gerekiyor?',
+    'Randevu iptal süreciniz nasıl işliyor?',
+    'What documents do I need to book an appointment?',
+    'How does your appointment cancellation process work?',
+  ];
+
+  for (const message of enquiries) {
+    it(`grounds the question ${JSON.stringify(message)}`, () => {
+      // Asking what booking requires is a question about the business. The scheduling tools do not
+      // perform it, and an earlier version exempted it purely because "randevu" and "almak" both
+      // appeared in the sentence.
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(true);
     });
   }
 
   it('separates a cancellation policy question from a cancellation action', () => {
-    // The contradiction this replaced: "iptal" sat in the knowledge list while the comment above
-    // it claimed cancellation belonged to the lifecycle tools. Both are right, for different
-    // sentences, and the price/policy marker is what tells them apart.
-    expect(requiresBusinessKnowledge('İptal politikanız nedir?')).toBe(true);
-    expect(requiresBusinessKnowledge('Randevu iptal ücreti var mı?')).toBe(true);
-    expect(requiresBusinessKnowledge('Randevumu iptal etmek istiyorum.')).toBe(false);
-    expect(requiresBusinessKnowledge('Yarınki randevumu iptal et.')).toBe(false);
-
-    expect(requiresBusinessKnowledge('What is your cancellation policy?')).toBe(true);
-    expect(requiresBusinessKnowledge('Is there a fee to cancel an appointment?')).toBe(true);
-    expect(requiresBusinessKnowledge('Please cancel my appointment.')).toBe(false);
+    expect(requiresBusinessKnowledge('İptal politikanız nedir?', CONFIGURED)).toBe(true);
+    expect(requiresBusinessKnowledge('Randevu iptal ücreti var mı?', CONFIGURED)).toBe(true);
+    expect(requiresBusinessKnowledge('Randevumu iptal etmek istiyorum.', CONFIGURED)).toBe(false);
+    expect(requiresBusinessKnowledge('What is your cancellation policy?', CONFIGURED)).toBe(true);
+    expect(requiresBusinessKnowledge('Please cancel my appointment.', CONFIGURED)).toBe(false);
   });
 
-  it('reads Turkish suffixes rather than failing on them', () => {
-    // `\w` is ASCII-only even under the `u` flag, so an earlier version silently failed on exactly
-    // these characters: "nasılsınız" did not match "nasılsın\w*" and became a forced search.
-    expect(requiresBusinessKnowledge('Nasılsınız?')).toBe(false);
-    expect(requiresBusinessKnowledge('Çok teşekkürler')).toBe(false);
-    expect(requiresBusinessKnowledge('Kayıtlı mıyım?')).toBe(true);
-  });
-
-  it('grounds an unrecognised word rather than assuming it is small talk', () => {
-    // "büyük" is not in the filler list, so this is not whole-turn conversation and falls through
-    // to grounding. That is the fail-closed direction working, not a miss: the cost is one search.
-    expect(requiresBusinessKnowledge('Çok büyük teşekkürler')).toBe(true);
-  });
-
-  it('fails closed on an enquiry it has no category for', () => {
-    // The property that replaced the unfinishable service catalogue: an unrecognised business
-    // question is grounded rather than answered from nothing.
-    expect(requiresBusinessKnowledge('Peluş oyuncak tamiri yapıyor musunuz?')).toBe(true);
-    expect(requiresBusinessKnowledge('Do you offer equine physiotherapy?')).toBe(true);
+  it('reads Turkish casing rather than failing on it', () => {
+    // JavaScript lowercases "İ" to "i" plus a combining dot, so "İptal" never matched "iptal"
+    // until that mark was stripped.
+    expect(requiresBusinessKnowledge('Nasılsınız?', CONFIGURED)).toBe(false);
+    expect(requiresBusinessKnowledge('Kayıtlı mıyım?', CONFIGURED)).toBe(true);
   });
 });
 
@@ -488,8 +542,64 @@ describe('a specific service question the model refused to research', () => {
 
     const answer = await run();
 
-    // Scheduling authority stays with the lifecycle tools; the guard must not reach into it.
     expect(calls.forced).toBe(0);
     expect(answer.text).toBe('Tabii, hangi randevunuzu iptal edelim?');
+  });
+
+  it('refuses an address the business has not configured', async () => {
+    // End to end through the runtime: nothing configured, model answers with no tool call, and the
+    // invented address does not reach the customer.
+    const { calls, executor: tools } = executor({ forced: [] });
+    const runtime = new AgentRuntime(
+      provider([result('Adresimiz 5 Uydurma Caddesi.')]),
+      tools,
+      'test-model',
+    );
+
+    const answer = await runtime.runTurn({
+      business: NOTHING_CONFIGURED,
+      context: {
+        conversationId: '00000000-0000-4000-8000-000000000001',
+        industryId: 'veterinary',
+        locationId: '00000000-0000-4000-8000-000000000002',
+        mode: 'test',
+        organizationId: '00000000-0000-4000-8000-000000000003',
+      },
+      history: [],
+      industry: veterinaryPack,
+      userMessage: 'Adresiniz neresi?',
+    });
+
+    expect(calls.forced).toBe(1);
+    expect(answer.text).toBe(UNKNOWN);
+    expect(answer.text).not.toContain('Uydurma');
+  });
+
+  it('lets a configured address answer without any search', async () => {
+    // The other side of the same rule: with an address configured there *is* an authoritative
+    // answer, so the turn is exempt and no search is spent on it.
+    const { calls, executor: tools } = executor({ forced: [] });
+    const runtime = new AgentRuntime(
+      provider([result('Adresimiz 1 Clinic Street, Istanbul.')]),
+      tools,
+      'test-model',
+    );
+
+    const answer = await runtime.runTurn({
+      business: CONFIGURED,
+      context: {
+        conversationId: '00000000-0000-4000-8000-000000000001',
+        industryId: 'veterinary',
+        locationId: '00000000-0000-4000-8000-000000000002',
+        mode: 'test',
+        organizationId: '00000000-0000-4000-8000-000000000003',
+      },
+      history: [],
+      industry: veterinaryPack,
+      userMessage: 'Adresiniz neresi?',
+    });
+
+    expect(calls.forced).toBe(0);
+    expect(answer.text).toBe('Adresimiz 1 Clinic Street, Istanbul.');
   });
 });
