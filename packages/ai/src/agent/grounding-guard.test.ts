@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentToolServices, RuntimeKnowledgeSearchResult, ToolExecutor } from '../tools/types';
 import { ControlledToolExecutor } from '../tools/executor';
 
-import { requiresBusinessKnowledge } from './business-knowledge-predicate';
+import {
+  requiresBusinessKnowledge,
+  CONFIGURATION_QUESTIONS,
+} from './business-knowledge-predicate';
 import { AgentRuntime } from './runtime';
 import type {
   AgentBusinessContext,
@@ -602,4 +605,125 @@ describe('a specific service question the model refused to research', () => {
     expect(calls.forced).toBe(0);
     expect(answer.text).toBe('Adresimiz 1 Clinic Street, Istanbul.');
   });
+});
+
+
+describe('every configuration matcher is a true whole-turn matcher', () => {
+  /**
+   * Finds an alternation that is not inside a group.
+   *
+   * This is the bug that shipped: `^(a|b)?\\s*(c)\\s*mısınız|misiniz$` reads as two patterns, and
+   * the second one is anchored only at the end. Any turn finishing in "misiniz?" -- including
+   * "Botoks yapıyor misiniz?" -- matched the business-hours question and was exempted from
+   * grounding. A behavioural test catches the one phrasing someone thought of; this catches the
+   * shape, for every pattern, including ones added later.
+   */
+  function hasTopLevelAlternation(source: string): boolean {
+    let depth = 0;
+    let inClass = false;
+    for (let index = 0; index < source.length; index += 1) {
+      const character = source[index];
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+      if (inClass) {
+        if (character === ']') inClass = false;
+        continue;
+      }
+      if (character === '[') inClass = true;
+      else if (character === '(') depth += 1;
+      else if (character === ')') depth -= 1;
+      else if (character === '|' && depth === 0) return true;
+    }
+    return false;
+  }
+
+  it('detects the alternation shape that actually shipped', () => {
+    // The exact broken form, so the detector is proven to detect rather than merely assumed to.
+    expect(hasTopLevelAlternation('^(a|b)?[ ]*(c)[ ]*misiniz|musunuz[ ]*$')).toBe(true);
+    expect(hasTopLevelAlternation('^(?:a|b)?[ ]*(?:c)[ ]*(?:misiniz|musunuz)[ ]*$')).toBe(false);
+    // An escaped pipe and one inside a character class are not alternations.
+    expect(hasTopLevelAlternation('^a\\|b$')).toBe(false);
+    expect(hasTopLevelAlternation('^[a|b]c$')).toBe(false);
+  });
+
+  it.each(CONFIGURATION_QUESTIONS.map((entry) => [entry.field, entry.pattern.source] as const))(
+    '%s pattern is anchored at both ends with no top-level alternation',
+    (_field, source) => {
+      expect(source.startsWith('^')).toBe(true);
+      expect(source.endsWith('$')).toBe(true);
+      expect(hasTopLevelAlternation(source)).toBe(false);
+    },
+  );
+
+  it('rejects a padded or extended version of every configuration question it accepts', () => {
+    // Whole-turn means whole turn: nothing may match with an unrelated clause bolted on.
+    for (const { pattern } of CONFIGURATION_QUESTIONS) {
+      for (const sample of [
+        'botoks yapıyor misiniz',
+        'randevuda ödeme yapabilir miyim',
+        'kısırlaştırma yapıyor musunuz',
+      ]) {
+        expect(pattern.test(sample)).toBe(false);
+      }
+    }
+  });
+});
+
+describe('a turn ending like a configuration question is not one', () => {
+  it('grounds "Botoks yapıyor misiniz?" even with hours configured', () => {
+    // The shipped regression: this ended in "misiniz?" and was exempted as an hours question.
+    expect(requiresBusinessKnowledge('Botoks yapıyor misiniz?', CONFIGURED)).toBe(true);
+  });
+
+  it('grounds the same question in its correctly-voweled form', () => {
+    expect(requiresBusinessKnowledge('Kısırlaştırma yapıyor musunuz?', CONFIGURED)).toBe(true);
+  });
+
+  it('still exempts a real open-now question when hours are configured', () => {
+    expect(requiresBusinessKnowledge('Şu an açık mısınız?', CONFIGURED)).toBe(false);
+    expect(requiresBusinessKnowledge('Bugün açık mısınız?', CONFIGURED)).toBe(false);
+  });
+
+  it('grounds a real open-now question when hours are NOT configured', () => {
+    expect(requiresBusinessKnowledge('Şu an açık mısınız?', NOTHING_CONFIGURED)).toBe(true);
+    expect(requiresBusinessKnowledge('Bugün açık mısınız?', NOTHING_CONFIGURED)).toBe(true);
+  });
+});
+
+describe('an appointment mentioned is not an appointment being changed', () => {
+  const notScheduling = [
+    // "Can I have Botox at the appointment" -- the appointment is where it happens, not the thing
+    // being booked or cancelled. The earlier rule exempted it because "randevu" sat beside a modal.
+    'Randevuda botoks yapabilir miyim?',
+    'Randevuda kredi kartıyla ödeme yapabilir miyim?',
+    'Randevuda yanımda birini getirebilir miyim?',
+    'Randevu almak için hangi belgeler gerekiyor?',
+    'Randevu almak için ne yapmam gerekiyor?',
+    'Randevu iptal süreciniz nasıl işliyor?',
+  ];
+
+  for (const message of notScheduling) {
+    it(`grounds ${JSON.stringify(message)}`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(true);
+    });
+  }
+
+  const scheduling = [
+    'Yarın için randevu almak istiyorum',
+    'Randevumu iptal etmek istiyorum',
+    'Randevumu başka güne almak istiyorum',
+    'Yarınki randevumu iptal et',
+    'Randevu alabilir miyim?',
+    'I want to book an appointment for tomorrow',
+    'Please cancel my appointment',
+    "I'd like to reschedule my appointment",
+  ];
+
+  for (const message of scheduling) {
+    it(`leaves the scheduling tools to handle ${JSON.stringify(message)}`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(false);
+    });
+  }
 });

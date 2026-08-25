@@ -105,7 +105,7 @@ const CONVERSATION_ONLY = new RegExp(
  */
 const END = '\\s*[?!.…]*$';
 
-const CONFIGURATION_QUESTIONS: readonly {
+export const CONFIGURATION_QUESTIONS: readonly {
   readonly field: keyof AgentBusinessContext;
   readonly pattern: RegExp;
 }[] = [
@@ -119,7 +119,7 @@ const CONFIGURATION_QUESTIONS: readonly {
   // Business hours
   { field: 'businessHours', pattern: new RegExp(`^(çalışma|calisma)?\\s*saatleriniz\\s*(ne|nedir|nelerdir)?${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^(saat\\s+)?kaçta\\s+(açılıyorsunuz|aciliyorsunuz|açıyorsunuz|aciyorsunuz|kapanıyorsunuz|kapaniyorsunuz|kapatıyorsunuz|kapatiyorsunuz)${END}`, 'u') },
-  { field: 'businessHours', pattern: new RegExp(`^(bugün|bugun|yarın|yarin|şu an|su an)?\\s*(açık|acik)\\s*mısınız|misiniz${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^(?:bugün|bugun|yarın|yarin|şu an|su an)?\\s*(?:açık|acik)\\s*(?:mısınız|misiniz|mısın|misin)${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^(what\\s+are\\s+)?your\\s+(business|opening|working)\\s+hours${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^what\\s+time\\s+do\\s+you\\s+(open|close)${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^are\\s+you\\s+open(\\s+(today|tomorrow|now))?${END}`, 'u') },
@@ -147,11 +147,53 @@ const APPOINTMENT_NOUNS: readonly string[] = [
 ];
 
 /**
+ * Verbs that act on the appointment itself.
+ *
+ * The discriminator the earlier version lacked. It exempted any appointment noun beside any action
+ * phrase, so "Randevuda botoks yapabilir miyim?" -- "can I have Botox at the appointment" -- was
+ * treated as a scheduling mutation because "randevu" and "yapabilir miyim" both appeared. The
+ * appointment there is where something happens, not the thing being changed.
+ *
+ * Booking, cancelling and rescheduling are a small closed set; "do", "bring" and "pay" are not on
+ * it, and no blacklist of the things a customer might ask about is required to keep them off.
+ */
+const SCHEDULING_VERBS: readonly string[] = [
+  'almak',
+  'alabilir',
+  'alayım',
+  'alayim',
+  'alalım',
+  'alalim',
+  'alıyorum',
+  'aliyorum',
+  'alırım',
+  'alirim',
+  'iptal',
+  'ertele',
+  'erteleyin',
+  'değiştir',
+  'degistir',
+  'başka gün',
+  'baska gun',
+  'başka güne',
+  'baska gune',
+  'oluşturmak',
+  'olusturmak',
+  'ayarlamak',
+  'ayarlayabilir',
+  'book',
+  'cancel',
+  'reschedul',
+  'rebook',
+  'move my',
+];
+
+/**
  * Explicit intent to perform the action, in the first person or as an imperative.
  *
  * Co-occurrence is not intent. "Randevu almak için hangi belgeler gerekiyor?" contains an
- * appointment and a booking verb and is a question about the business; only a stated wish or a
- * command is an action.
+ * appointment and a booking verb and is still a question about the business; only a stated wish or
+ * a command is an action.
  */
 const ACTION_INTENT: readonly string[] = [
   'istiyorum',
@@ -160,7 +202,6 @@ const ACTION_INTENT: readonly string[] = [
   'istedim',
   'edebilir miyim',
   'alabilir miyim',
-  'yapabilir miyim',
   'iptal et',
   'iptal edin',
   'ertele',
@@ -195,10 +236,11 @@ const ENQUIRY_MARKERS: readonly string[] = [
   'ne yapmam',
   'ne yapmalı',
   'ne yapmali',
-  'nasıl işl',
-  'nasil isl',
-  'nasıl oluyor',
-  'nasil oluyor',
+  'nasıl',
+  'nasil',
+  'how do i',
+  'how can i',
+  'how does',
   'süreç',
   'surec',
   'prosedür',
@@ -256,10 +298,12 @@ export function requiresBusinessKnowledge(
     break;
   }
 
-  // A scheduling action, stated as intent rather than merely mentioned -- and not a question about
-  // what the action requires, costs, or involves.
+  // A scheduling action: the appointment is the thing being acted on, a scheduling verb acts on
+  // it, the customer states intent, and the turn is not asking what the action requires, costs, or
+  // involves. All four, because any three of them also describe a question about the business.
   if (
     mentionsAny(normalized, APPOINTMENT_NOUNS) &&
+    mentionsAny(normalized, SCHEDULING_VERBS) &&
     mentionsAny(normalized, ACTION_INTENT) &&
     !mentionsAny(normalized, ENQUIRY_MARKERS)
   ) {
