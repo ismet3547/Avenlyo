@@ -136,10 +136,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Pinned rather than floating. "latest" silently moved from v2.115.0 to v2.116.0 between
+      # two runs of an unchanged schema, and v2.116.0 restored the hosted platform's
+      # auto_expose_new_tables default -- which this suite promptly caught as fourteen real
+      # privilege failures. A security gate whose toolchain can change underneath it reports
+      # findings on a schedule nobody chose, so the version moves when someone reviews it.
       - name: Set up Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.116.0
 
       - name: Start local Supabase
         run: supabase start
