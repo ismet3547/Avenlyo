@@ -7,6 +7,7 @@ import { ControlledToolExecutor } from '../tools/executor';
 import {
   requiresBusinessKnowledge,
   CONFIGURATION_QUESTIONS,
+  SCHEDULING_ACTIONS,
 } from './business-knowledge-predicate';
 import { AgentRuntime } from './runtime';
 import type {
@@ -657,13 +658,36 @@ describe('every configuration matcher is a true whole-turn matcher', () => {
     },
   );
 
-  it('rejects a padded or extended version of every configuration question it accepts', () => {
+  it.each(SCHEDULING_ACTIONS.map((pattern, index) => [index, pattern.source] as const))(
+    'scheduling pattern %i is anchored at both ends with no top-level alternation',
+    (_index, source) => {
+      // The scheduling exemption used to be a co-occurrence count rather than a matcher at all,
+      // which is why a mixed turn could satisfy it. Holding these to the same structural rule as
+      // the configuration questions is what makes "whole turn" mean whole turn here too.
+      expect(source.startsWith('^')).toBe(true);
+      expect(source.endsWith('$')).toBe(true);
+      expect(hasTopLevelAlternation(source)).toBe(false);
+    },
+  );
+
+  it('rejects a padded or extended version of every whole-turn matcher it accepts', () => {
     // Whole-turn means whole turn: nothing may match with an unrelated clause bolted on.
     for (const { pattern } of CONFIGURATION_QUESTIONS) {
       for (const sample of [
         'botoks yapıyor misiniz',
         'randevuda ödeme yapabilir miyim',
         'kısırlaştırma yapıyor musunuz',
+      ]) {
+        expect(pattern.test(sample)).toBe(false);
+      }
+    }
+
+    for (const pattern of SCHEDULING_ACTIONS) {
+      for (const sample of [
+        'randevu almak istiyorum, botoks yapıyor musunuz',
+        'randevu alabilir miyim, kısırlaştırma da yapıyor musunuz',
+        'i want to book an appointment. do you perform botox',
+        "i'd like to reschedule my appointment, and do you offer oil changes",
       ]) {
         expect(pattern.test(sample)).toBe(false);
       }
@@ -726,4 +750,87 @@ describe('an appointment mentioned is not an appointment being changed', () => {
       expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(false);
     });
   }
+});
+
+describe('a scheduling clause does not exempt the rest of the turn', () => {
+  /**
+   * The bypass this replaced.
+   *
+   * The exemption used to be a co-occurrence test across the whole turn: an appointment noun, a
+   * scheduling verb, a stated intent, and no known enquiry marker. Every one of these turns
+   * satisfies all four while its second clause asks a business-specific factual question, so the
+   * whole turn was exempted and the model could answer "Evet, botoks yapıyoruz" with zero searches.
+   *
+   * The fix is not to teach the enquiry markers about botox, sterilisation and oil changes -- that
+   * is the unfinishable service catalogue again, one bypass behind whatever a customer says next.
+   * The scheduling shapes are matched against the whole turn, so a residual clause of any kind
+   * leaves no match and the turn is grounded.
+   */
+  const mixed = [
+    'Randevu almak istiyorum, botoks yapıyor musunuz?',
+    'Randevu alabilir miyim, kısırlaştırma da yapıyor musunuz?',
+    'Randevu almak istiyorum ve fiyatlarınız nedir?',
+    'I want to book an appointment. Do you perform Botox?',
+    "I'd like to reschedule my appointment, and do you offer oil changes?",
+  ];
+
+  for (const message of mixed) {
+    it(`requires grounding for ${JSON.stringify(message)}`, () => {
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(true);
+    });
+  }
+
+  const pure = [
+    'Yarın için randevu almak istiyorum',
+    'Randevu alabilir miyim?',
+    'Randevumu iptal etmek istiyorum',
+    'Randevumu başka güne almak istiyorum',
+    'Yarınki randevumu iptal et',
+    'I want to book an appointment for tomorrow',
+    'Please cancel my appointment',
+    "I'd like to reschedule my appointment",
+  ];
+
+  for (const message of pure) {
+    it(`stays exempt for ${JSON.stringify(message)}`, () => {
+      // The other half of the rule: a turn that really is only a scheduling mutation still goes
+      // straight to the scheduling tools without spending a knowledge search on it.
+      expect(requiresBusinessKnowledge(message, CONFIGURED)).toBe(false);
+    });
+  }
+
+  it('does not let a mixed turn through the runtime on an unsupported claim', async () => {
+    // End to end, on the exact branch the bypass lived on: the provider answers directly, makes no
+    // tool call at all, and the turn is a booking request with a service question attached. The
+    // corpus does not support the service claim, so the reply must not reach the customer.
+    const { calls, run } = turn(
+      [result('Evet, botoks yapıyoruz. Randevunuzu yarın için oluşturabilirim.')],
+      { forced: [] },
+      'Randevu almak istiyorum, botoks yapıyor musunuz?',
+    );
+
+    const answer = await run();
+
+    expect(calls.forced).toBe(1);
+    expect(calls.model).toBe(0);
+    expect(answer.text).toBe(UNKNOWN);
+    expect(answer.text).not.toContain('botoks');
+  });
+
+  it('grounds the same mixed turn rather than refusing when the corpus supports it', async () => {
+    const { calls, run } = turn(
+      [
+        result('Evet, botoks yapıyoruz.'),
+        result('Botoks uyguluyoruz; randevunuz için hangi gün uygun?'),
+      ],
+      { forced: [source(0.64, 'Hizmetler')] },
+      'I want to book an appointment. Do you perform Botox?',
+    );
+
+    const answer = await run();
+
+    expect(calls.forced).toBe(1);
+    expect(answer.text).toBe('Botoks uyguluyoruz; randevunuz için hangi gün uygun?');
+    expect(answer.sources.map((entry) => entry.title)).toEqual(['Hizmetler']);
+  });
 });

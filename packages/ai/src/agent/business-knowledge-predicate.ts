@@ -34,11 +34,14 @@ import type { AgentBusinessContext } from './types';
  *   it already replaced. Configuration questions are now matched as *whole turns* against anchored
  *   shapes, so a question that merely starts like one does not qualify.
  *
- * - It treated any co-occurrence of an appointment noun and an action word as a scheduling action,
- *   so "Randevu almak için hangi belgeler gerekiyor?" was exempted as if it were a booking. Asking
- *   what is required in order to book is a question about the business. The exemption now needs
- *   explicit first-person intent or an imperative, and stands down when the turn asks about
- *   requirements, process, or price.
+ * - It treated the co-occurrence of an appointment noun, a scheduling verb and an action phrase as
+ *   a scheduling action, anywhere across the turn. "Randevu almak istiyorum, botoks yapıyor
+ *   musunuz?" satisfies all three, so the whole turn was exempted and the Botox half reached the
+ *   customer ungrounded. Co-occurrence is not a whole-turn test at any level of narrowness, and the
+ *   answer is not another marker list -- a list of the services a customer might ask about is
+ *   exactly the unfinishable thing this predicate exists to avoid. Scheduling actions are now
+ *   matched as whole turns against anchored mutation shapes, so any residual clause grounds the
+ *   turn.
  *
  * Missing a genuine action phrase costs a wasted search. Accepting an ungrounded factual answer
  * costs a customer being told something untrue about a business. Those are not comparable, and
@@ -58,26 +61,6 @@ function normalize(message: string): string {
     .replace(/\s+/g, ' ')
     .toLowerCase()
     .replace(/̇/g, '');
-}
-
-/**
- * Matches a term at the start of a word.
- *
- * Word-initial rather than anywhere, so a short term cannot fire from inside an unrelated word, and
- * rather than whole-word, so Turkish suffixes still match: "randevumu" starts a word with
- * "randevu".
- */
-function mentions(normalized: string, term: string): boolean {
-  let index = normalized.indexOf(term);
-  while (index !== -1) {
-    if (index === 0 || !/\p{L}|\p{N}/u.test(normalized.charAt(index - 1))) return true;
-    index = normalized.indexOf(term, index + 1);
-  }
-  return false;
-}
-
-function mentionsAny(normalized: string, terms: readonly string[]): boolean {
-  return terms.some((term) => mentions(normalized, term));
 }
 
 function isPresent(value: string | null | undefined): boolean {
@@ -137,136 +120,75 @@ export const CONFIGURATION_QUESTIONS: readonly {
   { field: 'name', pattern: new RegExp(`^(what\\s+is|what's|whats)\\s+your\\s+name${END}`, 'u') },
 ];
 
-/** An appointment, as the object of an action rather than the subject of a question. */
-const APPOINTMENT_NOUNS: readonly string[] = [
-  'randevu',
-  'rezervasyon',
-  'appointment',
-  'booking',
-  'reservation',
-];
+/**
+ * Date, time and target qualifiers a scheduling turn is allowed to carry.
+ *
+ * A closed set, and deliberately a boring one: every member says *when* or *which occurrence*, and
+ * none of them says anything about the business. Admitting them around the scheduling clause
+ * therefore cannot smuggle a factual question into an exempt turn. Anything outside the set is
+ * residual content, and residual content grounds the turn.
+ */
+const TR_QUALIFIER =
+  "(?:bugün|bugun|bugünkü|bugunku|yarın|yarin|yarınki|yarinki|yarına|yarina|öbür gün|obur gun|haftaya|bu hafta|gelecek hafta|pazartesi|salı|sali|çarşamba|carsamba|perşembe|persembe|cuma|cumartesi|pazar|sabah|sabaha|öğleden sonra|ogleden sonra|akşam|aksam|akşama|aksama|başka bir güne|baska bir gune|başka güne|baska gune|başka saate|baska saate|için|icin|günü|gunu|saat|\\d{1,2}(?:[:.]\\d{2})?(?:'\\p{L}{1,3})?)";
+
+/** The appointment itself, with the possessive suffixes that make it the object of an action. */
+const TR_APPOINTMENT = "(?:randevu|rezervasyon)(?:m|mu|muzu|nuzu|umu|umuzu|unuzu)?";
+
+/** A stated wish. Co-occurrence is not intent, and neither is a bare infinitive. */
+const TR_INTENT = "(?:istiyorum|istiyoruz|isterim|istedim|istiyordum)";
 
 /**
- * Verbs that act on the appointment itself.
+ * The predicate half of a scheduling mutation: booking, cancelling, rescheduling.
  *
- * The discriminator the earlier version lacked. It exempted any appointment noun beside any action
- * phrase, so "Randevuda botoks yapabilir miyim?" -- "can I have Botox at the appointment" -- was
- * treated as a scheduling mutation because "randevu" and "yapabilir miyim" both appeared. The
- * appointment there is where something happens, not the thing being changed.
- *
- * Booking, cancelling and rescheduling are a small closed set; "do", "bring" and "pay" are not on
- * it, and no blacklist of the things a customer might ask about is required to keep them off.
+ * A small closed set of complete verb phrases rather than verb stems. "iptal ücreti" and "iptal
+ * süreciniz" begin with the same word as "iptal etmek istiyorum" and are questions about the
+ * business; requiring the whole phrase is what separates them, without knowing anything about fees
+ * or processes.
  */
-const SCHEDULING_VERBS: readonly string[] = [
-  'almak',
-  'alabilir',
-  'alayım',
-  'alayim',
-  'alalım',
-  'alalim',
-  'alıyorum',
-  'aliyorum',
-  'alırım',
-  'alirim',
-  'iptal',
-  'ertele',
-  'erteleyin',
-  'değiştir',
-  'degistir',
-  'başka gün',
-  'baska gun',
-  'başka güne',
-  'baska gune',
-  'oluşturmak',
-  'olusturmak',
-  'ayarlamak',
-  'ayarlayabilir',
-  'book',
-  'cancel',
-  'reschedul',
-  'rebook',
-  'move my',
-];
+const TR_SCHEDULING_PREDICATE =
+  `(?:(?:al|oluştur|olustur|ayarla)(?:mak|ma)\\s+${TR_INTENT}` +
+  `|(?:alabilir|oluşturabilir|olusturabilir|ayarlayabilir)\\s+mi(?:yim|yiz)` +
+  `|al(?:ayım|ayim|alım|alim)` +
+  `|iptal\\s+et(?:mek|me)\\s+${TR_INTENT}` +
+  `|iptal\\s+edebilir\\s+mi(?:yim|yiz)` +
+  `|iptal\\s+et(?:in|iniz|elim)?` +
+  `|(?:ertele|değiştir|degistir|taşı|tasi)(?:mek|mak|me|ma)\\s+${TR_INTENT}` +
+  `|(?:erteleyebilir|değiştirebilir|degistirebilir|taşıyabilir|tasiyabilir)\\s+mi(?:yim|yiz)` +
+  `|(?:erteleyin|ertele|değiştirin|degistirin|değiştir|degistir|taşıyın|tasiyin)` +
+  `)`;
+
+const EN_QUALIFIER =
+  "(?:for|on|at|in|to|this|next|the|today|tomorrow|tonight|morning|afternoon|evening|week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|am|pm|o'clock|asap|please|\\d{1,2}(?::\\d{2})?(?:am|pm)?)";
+
+const EN_APPOINTMENT = "(?:appointment|booking|reservation)s?";
+
+const EN_INTENT =
+  "(?:i want to|i wanna|i would like to|i'd like to|i need to|i'm looking to|im looking to|can you please|could you please|would you please|can you|could you|would you|can i|could i|may i|please)";
+
+const EN_SCHEDULING_VERB =
+  "(?:book|schedule|make|set up|arrange|cancel|reschedule|rebook|move|change|postpone)";
 
 /**
- * Explicit intent to perform the action, in the first person or as an imperative.
+ * Whole-turn shapes for a scheduling mutation.
  *
- * Co-occurrence is not intent. "Randevu almak için hangi belgeler gerekiyor?" contains an
- * appointment and a booking verb and is still a question about the business; only a stated wish or
- * a command is an action.
- */
-const ACTION_INTENT: readonly string[] = [
-  'istiyorum',
-  'istiyoruz',
-  'isterim',
-  'istedim',
-  'edebilir miyim',
-  'alabilir miyim',
-  'iptal et',
-  'iptal edin',
-  'ertele',
-  'erteleyin',
-  'i want to',
-  'i would like to',
-  "i'd like to",
-  'i need to',
-  'please cancel',
-  'please book',
-  'please reschedule',
-  'please move',
-  'can you cancel',
-  'can you book',
-  'can you reschedule',
-  'cancel my',
-  'book me',
-  'reschedule my',
-  'move my',
-];
-
-/**
- * Markers that turn an appointment sentence back into a question about the business.
+ * Anchored end to end, exactly like the configuration questions above and for exactly the same
+ * reason. The turn has to *be* the scheduling action: an optional qualifier, the appointment, the
+ * mutation phrase, an optional qualifier, end of turn. A second clause -- "..., botoks yapıyor
+ * musunuz?", "... and do you offer oil changes?" -- leaves nothing to match, and no match means the
+ * turn is grounded like any other.
  *
- * Requirements, process and price are all things published knowledge may answer, and none of them
- * are performed by the scheduling tools.
+ * The cost of that strictness is a search on a phrasing nobody enumerated here. The cost of the
+ * co-occurrence test it replaces was a business claim nobody checked.
  */
-const ENQUIRY_MARKERS: readonly string[] = [
-  'gerek',
-  'belge',
-  'evrak',
-  'ne yapmam',
-  'ne yapmalı',
-  'ne yapmali',
-  'nasıl',
-  'nasil',
-  'how do i',
-  'how can i',
-  'how does',
-  'süreç',
-  'surec',
-  'prosedür',
-  'prosedur',
-  'şart',
-  'sart',
-  'ücret',
-  'ucret',
-  'fiyat',
-  'politika',
-  'kural',
-  'ceza',
-  'requirement',
-  'required',
-  'document',
-  'what do i need',
-  'what should i',
-  'how does',
-  'process',
-  'policy',
-  'fee',
-  'cost',
-  'price',
-  'charge',
-  'penalty',
-  'rule',
+export const SCHEDULING_ACTIONS: readonly RegExp[] = [
+  new RegExp(
+    `^(?:${TR_QUALIFIER}\\s+){0,5}${TR_APPOINTMENT}\\s+(?:${TR_QUALIFIER}\\s+){0,5}${TR_SCHEDULING_PREDICATE}(?:\\s+${TR_QUALIFIER}){0,5}${END}`,
+    'u',
+  ),
+  new RegExp(
+    `^(?:${EN_INTENT}\\s+){0,2}${EN_SCHEDULING_VERB}\\s+(?:a|an|my|our|the)\\s+(?:${EN_QUALIFIER}\\s+){0,3}${EN_APPOINTMENT}(?:\\s+${EN_QUALIFIER}){0,6}${END}`,
+    'u',
+  ),
 ];
 
 /** Shorter than this is an acknowledgement, not an enquiry about the business. */
@@ -298,17 +220,8 @@ export function requiresBusinessKnowledge(
     break;
   }
 
-  // A scheduling action: the appointment is the thing being acted on, a scheduling verb acts on
-  // it, the customer states intent, and the turn is not asking what the action requires, costs, or
-  // involves. All four, because any three of them also describe a question about the business.
-  if (
-    mentionsAny(normalized, APPOINTMENT_NOUNS) &&
-    mentionsAny(normalized, SCHEDULING_VERBS) &&
-    mentionsAny(normalized, ACTION_INTENT) &&
-    !mentionsAny(normalized, ENQUIRY_MARKERS)
-  ) {
-    return false;
-  }
+  // A scheduling mutation, tested against the whole turn rather than counted across it.
+  if (SCHEDULING_ACTIONS.some((pattern) => pattern.test(normalized))) return false;
 
   return true;
 }
