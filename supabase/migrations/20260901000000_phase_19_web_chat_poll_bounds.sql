@@ -123,6 +123,25 @@ grant execute on function public.get_web_chat_messages(text, text, timestamptz) 
 -- coarser than the current path, and deliberately so: it still bounds any single session's polling,
 -- and a rolled-back release is a temporary state, not the model to optimise for.
 --
+-- ## Why this path checks the session first, and the three-argument one does not
+--
+-- The authoritative function charges the quota *before* the session lookup, so an invalid token
+-- cannot be used as an unmetered probe. That is right there, because its scope comes from the
+-- canonical client address: the key space is the set of client addresses, and rotating chat tokens
+-- mints no new scopes.
+--
+-- It is wrong here. A rolled-back Phase 18 binary has no edge limiter and accepts any syntactically
+-- valid 43-character token, so the scope this wrapper derives is attacker-controlled. Delegating
+-- straight through would mean every rotated token became a fresh `web-poll:` scope and therefore a
+-- fresh row in `messaging_rate_limits`, whose primary key is `scope_key` -- unbounded durable state
+-- created by a caller who never held a session, with the 42501 arriving only afterwards.
+--
+-- So this path proves the session exists before it creates any limiter state, using the
+-- (token_hash, expires_at) index that already exists for exactly this lookup. A caller without a
+-- live session gets the same bounded 42501 and leaves nothing behind. The three-argument function
+-- then repeats the lookup, which is one indexed read on the path that already succeeded -- a cost
+-- worth paying to keep one implementation of the actual polling behaviour rather than two.
+--
 -- Overload resolution is unambiguous in both directions and asserted in
 -- supabase/tests/database/web_chat_poll_bounds.test.sql: only this function has `target_after`
 -- without `target_rate_scope`, and only the three-argument one has `target_rate_scope` at all.
@@ -133,8 +152,23 @@ create function public.get_web_chat_messages(
 returns table (message_id uuid, direction text, author_type text, body text, created_at timestamptz)
 language plpgsql security definer set search_path = '' as $$
 begin
-  -- No guard of its own on purpose: the delegate below performs the service-role check, the token
-  -- validation and the quota, so there is exactly one implementation of each.
+  perform public.require_messaging_service_role();
+  if target_token_hash !~ '^[0-9a-f]{64}$' then
+    raise exception using errcode = '22023', message = 'Web chat session is invalid';
+  end if;
+
+  -- The gate. Existence only -- no columns are read, nothing is written, and no limiter scope is
+  -- derived until a live session is proven. Same error and message the authoritative function
+  -- raises for the same condition, so a rolled-back binary sees no behavioural difference.
+  if not exists (
+    select 1 from public.web_chat_sessions
+    where token_hash = target_token_hash and expires_at > now()
+  ) then
+    raise exception using errcode = '42501', message = 'Web chat session is unavailable';
+  end if;
+
+  -- Everything that actually polls -- quota, session lookup, coalesced touch, 100-row bound --
+  -- belongs to the three-argument function. This wrapper adds a gate and a scope, nothing else.
   return query select * from public.get_web_chat_messages(
     target_token_hash,
     pg_catalog.encode(

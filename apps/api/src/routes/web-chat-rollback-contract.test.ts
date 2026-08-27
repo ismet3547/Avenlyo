@@ -42,10 +42,34 @@ describe('the Phase 18 poll call shape survives in the Phase 19 schema', () => {
       sql.lastIndexOf('create function public.get_web_chat_messages('),
     );
 
-    // It must call the authoritative function, and must not carry its own query or its own touch.
+    // It must call the authoritative function, and must not carry the polling behaviour itself.
+    // A narrow existence lookup against web_chat_sessions is expected and asserted below -- what is
+    // forbidden is duplicating the message query or the session touch.
     expect(compatibility).toContain('return query select * from public.get_web_chat_messages(');
     expect(compatibility).not.toContain('update public.web_chat_sessions');
     expect(compatibility).not.toContain('from public.messages');
+    expect(compatibility).not.toContain('limit 100');
+  });
+
+  it('gates on a live session before it derives a limiter scope', async () => {
+    const sql = await migration();
+    const compatibility = sql.slice(
+      sql.lastIndexOf('create function public.get_web_chat_messages('),
+    );
+
+    // The authoritative path deliberately charges the quota before its session lookup, because its
+    // scope comes from the canonical client address and has bounded cardinality. This path cannot:
+    // a rolled-back binary supplies no address, so the scope is derived from a caller-supplied
+    // token. Proving the session first keeps an unknown token from reaching the limiter at all.
+    const gate = compatibility.indexOf('from public.web_chat_sessions');
+    const delegate = compatibility.indexOf(
+      'return query select * from public.get_web_chat_messages(',
+    );
+
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(delegate);
+    expect(compatibility).toContain("errcode = '42501'");
+    expect(compatibility).toContain('public.require_messaging_service_role()');
   });
 
   it('keeps both overloads service-role only', async () => {

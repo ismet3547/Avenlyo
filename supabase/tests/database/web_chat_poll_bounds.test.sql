@@ -7,7 +7,7 @@
 
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(19);
+select extensions.plan(24);
 
 set local role postgres;
 
@@ -192,6 +192,101 @@ select extensions.lives_ok(
        target_after => null
      ) $$,
   'the Phase 19 named-argument call shape resolves to the three-argument overload'
+);
+
+-- ---------------------------------------------------------------------------------------
+-- An invalid legacy token must leave nothing behind.
+--
+-- The concern: a rolled-back Phase 18 binary has no edge limiter and accepts any syntactically
+-- valid token, so if the wrapper delegated straight through, every rotated token would derive a
+-- fresh `web-poll:` scope and therefore a fresh row in messaging_rate_limits, whose primary key is
+-- scope_key -- durable state from a caller who never held a session.
+--
+-- Two separate things are asserted below, and it is worth being exact about which is which,
+-- because they are not equally strong.
+--
+-- The row-count assertions pin the *invariant*: rotating unknown tokens must not grow durable
+-- limiter state. They hold both with and without the wrapper's gate, because the 42501 aborts the
+-- transaction and rolls back the INSERT ... ON CONFLICT the limiter made moments earlier. Verified
+-- directly against a real database, outside any test harness, with the gate removed. So these are
+-- a guard on the property, not a demonstration that the gate is what provides it.
+--
+-- The structural assertion below pins the *gate*. It is what fails if someone deletes the check,
+-- and it exists because the invariant currently rests on transactional rollback -- which is true
+-- today and would stop being true the moment any caller wrapped this RPC in an exception handler,
+-- a subtransaction, or a retry loop that swallowed the error. The gate makes the property
+-- independent of that.
+--
+-- The refusal assertions use correctly formatted 64-hex hashes that map to no session, which is the
+-- shape that matters; a malformed hash is caught by the format check and proves nothing here.
+-- ---------------------------------------------------------------------------------------
+
+select extensions.ok(
+  (select position('web_chat_sessions' in p.prosrc) > 0
+            and position('web_chat_sessions' in p.prosrc)
+                < position('get_web_chat_messages' in p.prosrc)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'get_web_chat_messages'
+      and pg_get_function_identity_arguments(p.oid) not like '%rate_scope%'),
+  'the rollback overload proves a live session BEFORE it delegates and derives a limiter scope'
+);
+
+reset role;
+create temp table limiter_before as
+  select count(*)::integer as rows from public.messaging_rate_limits;
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('d', 64), target_after => null) $$,
+  '42501',
+  'Web chat session is unavailable',
+  'a well-formed but unknown legacy token is refused'
+);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('e', 64), target_after => null) $$,
+  '42501',
+  'Web chat session is unavailable',
+  'and so is the next one, and the next'
+);
+
+do $$
+declare index integer;
+begin
+  -- Rotate a batch, the way an attacker would.
+  for index in 1..25 loop
+    begin
+      perform * from public.get_web_chat_messages(
+        target_token_hash => pg_catalog.encode(
+          pg_catalog.sha256(pg_catalog.convert_to('rotated-' || index::text, 'UTF8')), 'hex'),
+        target_after => null);
+    exception when others then null;
+    end;
+  end loop;
+end $$;
+
+reset role;
+
+select extensions.is(
+  (select count(*)::integer from public.messaging_rate_limits),
+  (select rows from limiter_before),
+  'rotating 27 unknown legacy tokens grew durable limiter state by nothing'
+);
+
+-- Named precisely rather than by pattern: no scope derived from any rotated token exists.
+select extensions.is_empty(
+  $q$ select limits.scope_key
+        from public.messaging_rate_limits limits
+        join generate_series(1, 25) as rotated(index)
+          on limits.scope_key = 'web-poll:' || encode(
+               sha256(convert_to('legacy-poll:' || encode(
+                 sha256(convert_to('rotated-' || rotated.index::text, 'UTF8')), 'hex'), 'UTF8')),
+               'hex') $q$,
+  'not one rotated token minted a durable limiter scope'
 );
 
 -- The compatibility path is a delegate, not a restoration: it consumes the same durable quota. Its
