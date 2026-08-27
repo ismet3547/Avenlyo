@@ -29,15 +29,39 @@
 -- service_role holds none either because the backend goes through SECURITY DEFINER RPCs, and
 -- authenticated holds only the narrow, RLS-gated surface the dashboard actually reads.
 --
--- So the privileges are stated here rather than inherited. The revokes strip the four DML
--- privileges and EXECUTE from every object in public; the grants that follow restore exactly
--- the surface the migration history intended, verified against the privilege state this
--- schema produced under the previous CLI default. TRUNCATE, REFERENCES and TRIGGER are left
--- alone -- they were identical under both defaults and are not a client-reachable surface.
+-- ## Intended surface, not effective surface
+--
+-- The grants below are the privileges the migration history *decided* to give, read from the
+-- explicit grantee entries in each object's ACL. That distinction is the whole correctness
+-- argument, and getting it wrong is easy: PostgreSQL grants EXECUTE on a new function to
+-- PUBLIC unless told otherwise, so a function nobody ever granted to anyone is still callable
+-- by every role. Sixteen functions here are in exactly that state. Reading the *effective*
+-- privilege -- has_function_privilege(), which folds PUBLIC in -- would have turned each of
+-- those accidents into an explicit anon and authenticated grant, and written a decision nobody
+-- made into the schema permanently.
+--
+-- get_google_backend_authorization() is the clearest case. Phase 6 granted it to service_role
+-- and its body opens with require_scheduling_service_role(); it is a backend RPC by
+-- construction. It is reachable by anon today only because Phase 6's PUBLIC revoke list
+-- omitted it. That is a bug to close, not a surface to preserve, and "the guard inside rejects
+-- them anyway" is not the criterion -- the role boundary is. The guard stays as defence in
+-- depth behind it.
+--
+-- So the revokes strip the four DML privileges and EXECUTE from every object in public --
+-- PUBLIC included -- and the grants that follow restore exactly the intended surface: 33 table
+-- grants, every one to authenticated, and 215 function grants across authenticated and
+-- service_role. anon receives nothing at all. TRUNCATE, REFERENCES and TRIGGER are left alone;
+-- they were identical under both defaults and are not a client-reachable surface.
+--
+-- Trigger functions and internal helpers are granted to no role. A trigger's function is
+-- privilege-checked when the trigger is created, not when it fires, so set_updated_at() and
+-- its neighbours need no grant to keep working -- they only ever needed one to be *callable
+-- directly*, which is not something a browser should be able to do.
 --
 -- Historical migrations are untouched, no policy is relaxed, and no security test is
--- weakened. Objects added after this migration will inherit the platform default again, so a
--- new backend-owned table still needs its own explicit revoke.
+-- weakened. Objects added after this migration inherit the platform default again, which is
+-- why privilege_regression.test.sql now asserts these invariants globally rather than trusting
+-- the next author to remember a revoke.
 
 revoke select, insert, update, delete on all tables in schema public
   from public, anon, authenticated, service_role;
@@ -45,31 +69,31 @@ revoke select, insert, update, delete on all tables in schema public
 -- The dashboard's read and write surface. Every one of these is still behind RLS; the grant
 -- only decides whether the role may reach the table at all.
 grant select on table public.action_logs to authenticated;
-grant select, insert, update, delete on table public.agent_rules to authenticated;
+grant delete, insert, select, update on table public.agent_rules to authenticated;
 grant select on table public.agent_test_runs to authenticated;
-grant select, insert, update, delete on table public.ai_agents to authenticated;
+grant delete, insert, select, update on table public.ai_agents to authenticated;
 grant select on table public.appointment_change_intents to authenticated;
 grant select on table public.appointment_reminder_settings to authenticated;
 grant select on table public.appointment_reminders to authenticated;
-grant select, insert, update, delete on table public.appointments to authenticated;
-grant select, insert, update, delete on table public.calls to authenticated;
-grant select, insert, update, delete on table public.channels to authenticated;
-grant select, insert, update, delete on table public.conversations to authenticated;
+grant delete, insert, select, update on table public.appointments to authenticated;
+grant delete, insert, select, update on table public.calls to authenticated;
+grant delete, insert, select, update on table public.channels to authenticated;
+grant delete, insert, select, update on table public.conversations to authenticated;
 grant select on table public.handoffs to authenticated;
-grant select, insert, update, delete on table public.industry_templates to authenticated;
-grant select, insert, update, delete on table public.integrations to authenticated;
+grant delete, insert, select, update on table public.industry_templates to authenticated;
+grant delete, insert, select, update on table public.integrations to authenticated;
 grant select on table public.knowledge_documents to authenticated;
 grant select on table public.knowledge_imports to authenticated;
 grant select on table public.lead_followup_jobs to authenticated;
 grant select on table public.lead_followup_settings to authenticated;
 grant select on table public.leads to authenticated;
 grant select on table public.location_scheduling_settings to authenticated;
-grant select, insert, update, delete on table public.locations to authenticated;
-grant select, insert, update, delete on table public.messages to authenticated;
+grant delete, insert, select, update on table public.locations to authenticated;
+grant delete, insert, select, update on table public.messages to authenticated;
 grant select on table public.organization_member_locations to authenticated;
 grant select on table public.organization_members to authenticated;
 grant select on table public.organization_onboarding to authenticated;
-grant select, update, delete on table public.organizations to authenticated;
+grant delete, select, update on table public.organizations to authenticated;
 grant select on table public.phone_numbers to authenticated;
 grant select on table public.scheduling_appointment_type_resources to authenticated;
 grant select on table public.scheduling_appointment_types to authenticated;
@@ -81,9 +105,10 @@ grant select on table public.voice_configurations to authenticated;
 revoke execute on all functions in schema public
   from public, anon, authenticated, service_role;
 
--- The RPCs each role is intended to call. Backend RPCs are service_role only; the guards
--- inside them stay exactly as they were, and now they are no longer the only thing standing
--- between a browser and a backend entry point.
+-- The RPCs each role is intended to call. Backend RPCs are service_role only, and now the
+-- guards inside them are no longer the only thing standing between a browser and a backend
+-- entry point. Anything absent from this list -- every trigger function, every internal helper
+-- -- is callable by no client role at all.
 grant execute on function public.accept_my_organization_invitation(target_token text) to authenticated;
 grant execute on function public.advance_onboarding_website() to authenticated;
 grant execute on function public.append_web_chat_message(target_token_hash text, target_client_message_id uuid, target_body text, target_rate_scope text) to service_role;
@@ -100,9 +125,6 @@ grant execute on function public.begin_stripe_billing_reconciliation(target_orga
 grant execute on function public.bootstrap_inbound_sms(target_message_sid text, target_from_e164 text, target_to_e164 text, target_body text, target_media jsonb, target_provider_metadata jsonb) to service_role;
 grant execute on function public.bootstrap_inbound_voice_call(target_event_id text, target_event_type text, target_external_call_id text, target_sip_call_id text, target_dialed_e164 text, target_caller_e164 text) to service_role;
 grant execute on function public.bootstrap_workspace() to authenticated;
-grant execute on function public.can_transition_message_delivery(current_status text, next_status text) to anon;
-grant execute on function public.can_transition_message_delivery(current_status text, next_status text) to authenticated;
-grant execute on function public.can_transition_message_delivery(current_status text, next_status text) to service_role;
 grant execute on function public.capture_conversation_lead(target_inbound_message_id uuid, target_tool_call_id text, target_service_category text, target_urgency text, target_customer_goal text, target_customer_name text, target_details jsonb, target_qualification text, target_voice_call_id text) to service_role;
 grant execute on function public.claim_appointment_change_intent(target_conversation_id uuid, target_inbound_message_id uuid, target_change_intent_id uuid, target_tool_call_id text) to service_role;
 grant execute on function public.claim_appointment_change_slot_lease(target_change_intent_id uuid) to service_role;
@@ -138,9 +160,7 @@ grant execute on function public.create_conversation_booking_candidates(target_c
 grant execute on function public.create_google_oauth_state(target_user_id uuid, target_location_id uuid, target_state_hash text) to service_role;
 grant execute on function public.create_knowledge_import(root_url_input text, requested_location_id uuid) to authenticated;
 grant execute on function public.create_lead_followup_message(target_job_id uuid) to service_role;
-grant execute on function public.create_my_google_appointment_type(target_location_id uuid, target_name text, target_duration_minutes integer) to anon;
 grant execute on function public.create_my_google_appointment_type(target_location_id uuid, target_name text, target_duration_minutes integer) to authenticated;
-grant execute on function public.create_my_google_appointment_type(target_location_id uuid, target_name text, target_duration_minutes integer) to service_role;
 grant execute on function public.create_my_human_reply(target_conversation_id uuid, target_body text) to authenticated;
 grant execute on function public.create_my_organization_invitation(target_organization_id uuid, target_email text, target_role text, target_location_ids uuid[]) to authenticated;
 grant execute on function public.create_staff_appointment_cancellation_intent(target_user_id uuid, target_location_id uuid, target_appointment_id uuid) to service_role;
@@ -149,15 +169,6 @@ grant execute on function public.create_voice_booking_candidates(target_call_id 
 grant execute on function public.create_web_chat_session(target_widget_public_key uuid, target_origin text, target_token_hash text, target_rate_scope text) to service_role;
 grant execute on function public.disable_ezyvet_integration(target_organization_id uuid, target_location_id uuid) to service_role;
 grant execute on function public.disable_google_calendar_integration(target_organization_id uuid, target_location_id uuid) to service_role;
-grant execute on function public.enforce_booking_intent_transport_phone() to anon;
-grant execute on function public.enforce_booking_intent_transport_phone() to authenticated;
-grant execute on function public.enforce_booking_intent_transport_phone() to service_role;
-grant execute on function public.enforce_call_transport_caller_e164() to anon;
-grant execute on function public.enforce_call_transport_caller_e164() to authenticated;
-grant execute on function public.enforce_call_transport_caller_e164() to service_role;
-grant execute on function public.enforce_message_transport_sender_e164() to anon;
-grant execute on function public.enforce_message_transport_sender_e164() to authenticated;
-grant execute on function public.enforce_message_transport_sender_e164() to service_role;
 grant execute on function public.fail_agent_test_turn(target_run_id uuid, safe_failure_code text) to authenticated;
 grant execute on function public.fail_appointment_change_intent(target_change_intent_id uuid, target_status text, target_error_category text) to service_role;
 grant execute on function public.fail_knowledge_import(target_import_id uuid, safe_error_code text, safe_error_message text) to authenticated;
@@ -182,8 +193,6 @@ grant execute on function public.get_ezyvet_backend_authorization(target_user_id
 grant execute on function public.get_ezyvet_bookable_catalog(target_integration_id uuid) to service_role;
 grant execute on function public.get_ezyvet_execution_credentials(target_integration_id uuid) to service_role;
 grant execute on function public.get_ezyvet_integration_for_location(target_organization_id uuid, target_location_id uuid) to service_role;
-grant execute on function public.get_google_backend_authorization(target_user_id uuid, target_location_id uuid) to anon;
-grant execute on function public.get_google_backend_authorization(target_user_id uuid, target_location_id uuid) to authenticated;
 grant execute on function public.get_google_backend_authorization(target_user_id uuid, target_location_id uuid) to service_role;
 grant execute on function public.get_google_calendar_execution_credentials(target_integration_id uuid) to service_role;
 grant execute on function public.get_google_calendar_integration_for_location(target_organization_id uuid, target_location_id uuid) to service_role;
@@ -203,9 +212,7 @@ grant execute on function public.get_my_customer_directory(target_location_id uu
 grant execute on function public.get_my_customer_overview(target_location_id uuid, target_contact_id uuid) to authenticated;
 grant execute on function public.get_my_customer_timeline(target_location_id uuid, target_contact_id uuid, cursor_event_at timestamp with time zone, cursor_event_kind text, cursor_event_id uuid, page_limit integer) to authenticated;
 grant execute on function public.get_my_ezyvet_integration_configuration(target_location_id uuid) to authenticated;
-grant execute on function public.get_my_google_scheduling_configuration(target_location_id uuid) to anon;
 grant execute on function public.get_my_google_scheduling_configuration(target_location_id uuid) to authenticated;
-grant execute on function public.get_my_google_scheduling_configuration(target_location_id uuid) to service_role;
 grant execute on function public.get_my_handoff_queue(target_location_id uuid, target_filter text, target_limit integer) to authenticated;
 grant execute on function public.get_my_handoff_queue_summary(target_location_id uuid) to authenticated;
 grant execute on function public.get_my_inbox_conversations(target_location_id uuid) to authenticated;
@@ -238,9 +245,6 @@ grant execute on function public.get_voice_ezyvet_scheduling_context(target_call
 grant execute on function public.get_voice_scheduling_context(target_call_id text) to service_role;
 grant execute on function public.get_voice_transcript_message_id(target_call_id text, target_external_item_id text) to service_role;
 grant execute on function public.get_web_chat_messages(target_token_hash text, target_after timestamp with time zone) to service_role;
-grant execute on function public.handle_new_user() to anon;
-grant execute on function public.handle_new_user() to authenticated;
-grant execute on function public.handle_new_user() to service_role;
 grant execute on function public.has_location_access(target_organization_id uuid, target_location_id uuid) to authenticated;
 grant execute on function public.has_location_write_access(target_organization_id uuid, target_location_id uuid) to authenticated;
 grant execute on function public.has_persisted_ai_reply(target_inbound_message_id uuid) to service_role;
@@ -256,9 +260,6 @@ grant execute on function public.mark_inbound_voice_call_active(target_call_id t
 grant execute on function public.mark_sms_delivery_unknown(target_message_id uuid, target_error_code text) to service_role;
 grant execute on function public.match_inbound_voice_knowledge(target_organization_id uuid, target_location_id uuid, query_embedding_text text, requested_match_count integer) to service_role;
 grant execute on function public.match_my_knowledge(query_embedding_text text, requested_match_count integer, requested_location_id uuid) to authenticated;
-grant execute on function public.normalized_twilio_delivery_status(target_status text) to anon;
-grant execute on function public.normalized_twilio_delivery_status(target_status text) to authenticated;
-grant execute on function public.normalized_twilio_delivery_status(target_status text) to service_role;
 grant execute on function public.organization_has_members(target_organization_id uuid) to authenticated;
 grant execute on function public.persist_ai_message_reply(target_inbound_message_id uuid, target_body text, target_handoff_requested boolean) to service_role;
 grant execute on function public.persist_appointment_change_mutation_target(target_change_intent_id uuid, target_mutation_target_id text) to service_role;
@@ -290,16 +291,10 @@ grant execute on function public.register_runtime_instance(target_instance_id uu
 grant execute on function public.release_booking_slot_lease(target_booking_intent_id uuid) to service_role;
 grant execute on function public.release_knowledge_publish(target_import_id uuid, safe_error_code text, safe_error_message text) to authenticated;
 grant execute on function public.release_my_handoff(target_handoff_id uuid) to authenticated;
-grant execute on function public.reminder_local_time(target_time timestamp with time zone, target_timezone text, quiet_start time without time zone, quiet_end time without time zone) to anon;
-grant execute on function public.reminder_local_time(target_time timestamp with time zone, target_timezone text, quiet_start time without time zone, quiet_end time without time zone) to authenticated;
-grant execute on function public.reminder_local_time(target_time timestamp with time zone, target_timezone text, quiet_start time without time zone, quiet_end time without time zone) to service_role;
 grant execute on function public.renew_knowledge_import_lease(target_import_id uuid, target_claim_token uuid, target_lease_seconds integer) to service_role;
 grant execute on function public.request_agent_test_handoff(target_conversation_id uuid, tool_call_id text, handoff_reason text, handoff_urgency text) to authenticated;
 grant execute on function public.request_inbound_voice_handoff(target_call_id text, target_tool_call_id text, target_reason text, target_urgency text) to service_role;
 grant execute on function public.request_message_handoff(target_inbound_message_id uuid, target_tool_call_id text, target_reason text, target_urgency text) to service_role;
-grant execute on function public.require_scheduling_service_role() to anon;
-grant execute on function public.require_scheduling_service_role() to authenticated;
-grant execute on function public.require_scheduling_service_role() to service_role;
 grant execute on function public.reserve_billing_checkout_subscription_from_event(target_session_id text, target_customer_id text, target_subscription_id text, target_livemode boolean) to service_role;
 grant execute on function public.resolve_my_handoff(target_handoff_id uuid) to authenticated;
 grant execute on function public.resume_my_conversation_ai(target_conversation_id uuid) to authenticated;
@@ -312,33 +307,20 @@ grant execute on function public.save_knowledge_import_pages(target_import_id uu
 grant execute on function public.save_onboarding_business(business_name text, business_website_url text, normalized_business_phone text) to authenticated;
 grant execute on function public.save_onboarding_industry(selected_industry_id text) to authenticated;
 grant execute on function public.save_onboarding_location(location_name text, location_timezone text, location_address jsonb, location_business_hours jsonb) to authenticated;
-grant execute on function public.set_my_active_scheduling_integration(target_location_id uuid, target_integration_id uuid, target_minimum_lead_minutes integer) to anon;
 grant execute on function public.set_my_active_scheduling_integration(target_location_id uuid, target_integration_id uuid, target_minimum_lead_minutes integer) to authenticated;
-grant execute on function public.set_my_active_scheduling_integration(target_location_id uuid, target_integration_id uuid, target_minimum_lead_minutes integer) to service_role;
 grant execute on function public.set_sms_phone_number_enabled(target_phone_number_id uuid, target_enabled boolean) to service_role;
 grant execute on function public.set_sms_phone_number_enabled_for_user(target_user_id uuid, target_phone_number_id uuid, target_enabled boolean) to service_role;
-grant execute on function public.set_updated_at() to anon;
-grant execute on function public.set_updated_at() to authenticated;
-grant execute on function public.set_updated_at() to service_role;
 grant execute on function public.set_voice_provider_transfer_capability(target_organization_id uuid, target_location_id uuid, target_enabled boolean) to service_role;
 grant execute on function public.start_knowledge_import(target_import_id uuid) to authenticated;
 grant execute on function public.stop_runtime_instance(target_instance_id uuid) to service_role;
 grant execute on function public.store_ezyvet_connection(target_organization_id uuid, target_location_id uuid, target_client_id text, target_client_secret text, target_environment text, target_site_uid text, target_provider_site_id text, target_provider_timezone text) to service_role;
 grant execute on function public.store_google_calendar_connection(target_organization_id uuid, target_location_id uuid, target_refresh_token text) to service_role;
-grant execute on function public.sync_booking_slot_lease_to_scheduling_namespace() to anon;
-grant execute on function public.sync_booking_slot_lease_to_scheduling_namespace() to authenticated;
-grant execute on function public.sync_booking_slot_lease_to_scheduling_namespace() to service_role;
 grant execute on function public.take_over_my_conversation(target_conversation_id uuid) to authenticated;
 grant execute on function public.update_knowledge_document_draft(target_document_id uuid, draft_title text, draft_content text, is_included boolean) to authenticated;
 grant execute on function public.update_my_ezyvet_booking_policy(target_location_id uuid, selected_appointment_type_ids uuid[], selected_resource_ids uuid[]) to authenticated;
-grant execute on function public.update_my_google_booking_policy(target_location_id uuid, selected_appointment_type_ids uuid[], selected_resource_ids uuid[], mappings jsonb) to anon;
 grant execute on function public.update_my_google_booking_policy(target_location_id uuid, selected_appointment_type_ids uuid[], selected_resource_ids uuid[], mappings jsonb) to authenticated;
-grant execute on function public.update_my_google_booking_policy(target_location_id uuid, selected_appointment_type_ids uuid[], selected_resource_ids uuid[], mappings jsonb) to service_role;
 grant execute on function public.update_my_organization_member_access(target_membership_id uuid, target_role text, target_location_ids uuid[]) to authenticated;
 grant execute on function public.upsert_my_appointment_reminder_settings(target_location_id uuid, target_sms_enabled boolean, target_24h_enabled boolean, target_2h_enabled boolean, target_quiet_hours_start time without time zone, target_quiet_hours_end time without time zone) to authenticated;
 grant execute on function public.upsert_my_lead_followup_settings(target_location_id uuid, target_enabled boolean, target_delay_minutes integer, target_quiet_hours_start time without time zone, target_quiet_hours_end time without time zone, target_business_hours_only boolean, target_sender_phone_number_id uuid, target_acknowledge_sender boolean) to authenticated;
 grant execute on function public.upsert_my_voice_configuration(target_location_id uuid, target_enabled boolean, target_voice text, target_transfer_enabled boolean, target_transfer_target_e164 text) to authenticated;
 grant execute on function public.upsert_my_web_chat_widget(target_location_id uuid, target_enabled boolean, target_allowed_origins jsonb, target_welcome_message text) to authenticated;
-grant execute on function public.validate_ai_agent_template_scope() to anon;
-grant execute on function public.validate_ai_agent_template_scope() to authenticated;
-grant execute on function public.validate_ai_agent_template_scope() to service_role;
