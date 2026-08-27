@@ -6,9 +6,9 @@ import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
 import {
-  importWebsiteKnowledge,
   KnowledgeServiceError,
   publishKnowledgeImport,
+  requestWebsiteImport,
   saveKnowledgeDraft,
   searchKnowledge,
 } from '@/lib/knowledge/service';
@@ -47,12 +47,16 @@ export async function startKnowledgeImportAction(
   const context = await getKnowledgeActionContext();
   if (!context) return errorState('Only organization owners and admins can import knowledge.');
 
-  // Only the import is inside the error boundary. `redirect` reports success by throwing a control
-  // signal, so leaving it in the try turned every successful import into a knowledge error and
-  // stranded the operator on the form with a message about a job that had actually run.
+  // Queueing only. The crawl belongs to the API worker, so this action returns as soon as the
+  // request is durable and the operator watches it progress on the review page.
+  //
+  // Only the queueing is inside the error boundary. `redirect` reports success by throwing a
+  // control signal, so leaving it in the try turned every successful request into a knowledge
+  // error and stranded the operator on the form with a message about work that had actually
+  // started.
   let importId: string;
   try {
-    importId = await importWebsiteKnowledge(
+    importId = await requestWebsiteImport(
       context.supabase,
       parsed.data.rootUrl,
       context.workspace.locationId,
@@ -61,7 +65,7 @@ export async function startKnowledgeImportAction(
     return errorState(
       error instanceof KnowledgeServiceError
         ? error.message
-        : 'Knowledge import could not be completed.',
+        : 'This website import could not be started.',
     );
   }
 

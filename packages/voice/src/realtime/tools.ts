@@ -1,7 +1,7 @@
 import {
-  MIN_AGENT_KNOWLEDGE_SIMILARITY,
   captureLeadFunction,
   captureLeadSchema,
+  reliableKnowledgeSources,
   requestHumanHelpFunction,
   requestHumanHelpSchema,
   searchBusinessKnowledgeFunction,
@@ -306,20 +306,28 @@ function rejected(summary: string): VoiceToolExecution {
   };
 }
 
-function reliableSources(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[] {
-  return matches
-    .filter(
-      (match) =>
-        Number.isFinite(match.similarity) && match.similarity >= MIN_AGENT_KNOWLEDGE_SIMILARITY,
-    )
-    .slice(0, 3)
-    .map((match) => ({
-      content: match.content.slice(0, 1_200),
-      similarity: Math.max(0, Math.min(1, match.similarity)),
-      sourceUrl: match.sourceUrl,
-      title: match.title.slice(0, 240),
-    }));
-}
+/**
+ * Voice trusts knowledge on exactly the terms chat does.
+ *
+ * This used to be a second copy of the filter, sharing only the threshold constant. Two copies of
+ * a trust rule is one rule and one latent divergence: the calibration fix would have landed on
+ * chat alone and left the phone answering "I don't have reliable information about that" to a
+ * question the chat agent had just answered from the same published pages.
+ *
+ * Known limitation, deliberate. Chat also has a trusted-query recovery: when the model's own
+ * rewritten search finds nothing usable, the customer's actual words get one more search through
+ * the same evaluator. Voice does not, because voice has nothing trustworthy to re-search --
+ * `VoiceCallContext` carries no current utterance, and it cannot: the realtime model owns the audio
+ * stream, so the only text the server sees is what the model chose to pass as a tool argument, and
+ * re-searching model output would defeat the entire point of the recovery. Threading realtime
+ * transcription into the tool executor is a redesign, not a small change, and doing it under a
+ * reliability correction would be the risky kind of symmetry.
+ *
+ * What must not diverge is the *rule*, and it does not: both channels evaluate through
+ * `evaluateKnowledgeReliability` at identical thresholds, so no corpus is trusted over one channel
+ * and refused over the other.
+ */
+const reliableSources = reliableKnowledgeSources;
 
 /** Controlled, sequential live-call executor. Routing and transfer targets are never model inputs. */
 export class VoiceToolExecutor {

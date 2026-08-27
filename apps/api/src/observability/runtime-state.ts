@@ -10,11 +10,16 @@ import { randomUUID } from 'node:crypto';
  */
 
 export type RuntimeComponent =
-  'message_processing' | 'appointment_reminders' | 'lead_followups' | 'billing_events';
+  | 'message_processing'
+  | 'appointment_reminders'
+  | 'lead_followups'
+  | 'billing_events'
+  | 'knowledge_imports';
 
 export const RUNTIME_COMPONENTS: readonly RuntimeComponent[] = [
   'appointment_reminders',
   'billing_events',
+  'knowledge_imports',
   'lead_followups',
   'message_processing',
 ];

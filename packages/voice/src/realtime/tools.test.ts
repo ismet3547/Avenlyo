@@ -14,6 +14,84 @@ const context = {
   phoneNumberId: '00000000-0000-0000-0000-000000000013',
 } as const;
 
+function knowledgeExecutor(matches: readonly unknown[]) {
+  return new VoiceToolExecutor(
+    context,
+    {
+      requestHumanHelp: vi.fn().mockResolvedValue({ created: true }),
+      searchBusinessKnowledge: vi.fn().mockResolvedValue(matches),
+      transferCall: vi.fn(),
+    },
+    false,
+  );
+}
+
+function knowledgeMatch(similarity: number, title: string) {
+  return {
+    content: 'Published page text the caller may be answered from.',
+    similarity,
+    sourceUrl: `https://clinic.test/${title.toLowerCase()}`,
+    title,
+  };
+}
+
+describe('voice trusts knowledge on the same terms as chat', () => {
+  // Voice used to hold its own copy of the filter, sharing only the threshold constant. Two copies
+  // of a trust rule is one rule and one latent divergence: recalibrating chat alone would have left
+  // the phone refusing a question chat had just answered from the same published pages.
+  const call = { arguments: '{"query":"hesap"}', callId: 'fc_knowledge', name: 'search_business_knowledge' };
+
+  it('answers from a moderately scored match that clearly leads the field', async () => {
+    const executor = knowledgeExecutor([
+      knowledgeMatch(0.573, 'Giris'),
+      knowledgeMatch(0.422, 'Hesap'),
+      knowledgeMatch(0.296, 'Unrelated'),
+    ]);
+
+    const result = await executor.execute(call);
+
+    expect(result.status).toBe('succeeded');
+    expect(result.modelOutput).toContain('Giris');
+    // Only the winner reaches the phone too: the runner-up earned the lead its comparison proved,
+    // not the right to answer, and the third result is below the floor.
+    expect(result.modelOutput).not.toContain('Hesap');
+    expect(result.modelOutput).not.toContain('Unrelated');
+  });
+
+  it('refuses a lone moderate match', async () => {
+    const executor = knowledgeExecutor([knowledgeMatch(0.44, 'Alone')]);
+
+    const result = await executor.execute(call);
+
+    expect(result.modelOutput).not.toContain('Alone');
+  });
+
+  it('does not let a strong match carry weak runners-up', async () => {
+    const executor = knowledgeExecutor([
+      knowledgeMatch(0.62, 'Strong'),
+      knowledgeMatch(0.36, 'Weak'),
+    ]);
+
+    const result = await executor.execute(call);
+
+    expect(result.modelOutput).toContain('Strong');
+    expect(result.modelOutput).not.toContain('Weak');
+  });
+
+  it('refuses a flat, ambiguous field', async () => {
+    const executor = knowledgeExecutor([
+      knowledgeMatch(0.46, 'One'),
+      knowledgeMatch(0.44, 'Two'),
+      knowledgeMatch(0.41, 'Three'),
+    ]);
+
+    const result = await executor.execute(call);
+
+    expect(result.modelOutput).not.toContain('One');
+    expect(result.modelOutput).not.toContain('Two');
+  });
+});
+
 describe('voice tool boundary', () => {
   it('only exposes transfer when trusted configuration permits it', () => {
     expect(

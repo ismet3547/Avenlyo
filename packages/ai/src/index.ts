@@ -11,6 +11,14 @@ export { buildAgentInstructions, coreAgentInstructions } from './agent/prompt-bu
 export { AgentRuntime, agentTurnFingerprint } from './agent/runtime';
 export { AgentProviderError } from './agent/types';
 export type {
+  KnowledgeMatchDecision,
+  KnowledgeMatchDiagnostic,
+  KnowledgeReliabilityDiagnostics,
+  KnowledgeReliabilityEvaluation,
+  KnowledgeSearchDiagnostic,
+  KnowledgeSearchOrigin,
+} from './agent/knowledge-reliability';
+export type {
   AgentBusinessContext,
   AgentConversationMessage,
   AgentExecutionContext,
@@ -34,11 +42,22 @@ export {
   OpenAIResponsesProvider,
 } from './providers/openai-responses';
 export { FakeAgentProvider } from './testing/fake-provider';
+export { requiresBusinessKnowledge } from './agent/business-knowledge-predicate';
 export {
-  ControlledToolExecutor,
+  evaluateKnowledgeReliability,
+  isKnowledgeReliable,
+  normalizeKnowledgeQuery,
+  reliableKnowledgeSources,
+  MAX_AGENT_KNOWLEDGE_DIAGNOSTIC_MATCHES,
+  MAX_AGENT_KNOWLEDGE_QUERY_LENGTH,
+  MAX_TRUSTED_QUERY_CHARACTERS,
+  MAX_TRUSTED_QUERY_RECOVERIES_PER_TURN,
+  MAX_AGENT_KNOWLEDGE_SOURCES,
+  MIN_AGENT_KNOWLEDGE_LEAD_RATIO,
   MIN_AGENT_KNOWLEDGE_SIMILARITY,
-  policyHandoffCallId,
-} from './tools/executor';
+  STRONG_AGENT_KNOWLEDGE_SIMILARITY,
+} from './agent/knowledge-reliability';
+export { ControlledToolExecutor, policyHandoffCallId } from './tools/executor';
 export { activeToolDefinitions, activeToolsForIndustry } from './tools/registry';
 export {
   availableAppointmentsSchema,
@@ -58,6 +77,7 @@ export { futureToolContracts, futureToolNames } from './tools/types';
 export type {
   ActiveToolName,
   AgentToolServices,
+  RuntimeKnowledgeSearchResult,
   FutureToolContract,
   FutureToolName,
   ToolExecutor,

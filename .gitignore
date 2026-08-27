@@ -9,6 +9,7 @@ coverage/
 .env.*.local
 *.tsbuildinfo
 supabase/.temp/
+supabase/.branches/
 
 # Editor and operating-system files
 .DS_Store
@@ -16,3 +17,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+rendered-report.json

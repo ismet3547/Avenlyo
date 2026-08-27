@@ -2,8 +2,15 @@ import { createHash } from 'node:crypto';
 
 import { requiresUrgentLeadHandoff } from '@avenlyo/industries';
 
+import {
+  evaluateKnowledgeReliability,
+  normalizeKnowledgeQuery,
+  MAX_AGENT_KNOWLEDGE_QUERY_LENGTH,
+  MAX_TRUSTED_QUERY_CHARACTERS,
+  MAX_TRUSTED_QUERY_RECOVERIES_PER_TURN,
+} from '../agent/knowledge-reliability';
 import { MAX_TOOL_OUTPUT_CHARACTERS } from '../agent/limits';
-import type { AgentExecutionContext, AgentToolCall, KnowledgeSource } from '../agent/types';
+import type { AgentExecutionContext, AgentToolCall } from '../agent/types';
 
 import { activeToolDefinitions } from './registry';
 import {
@@ -19,10 +26,20 @@ import {
   rescheduleOptionsSchema,
   upcomingAppointmentsSchema,
 } from './schemas';
-import type { AgentToolServices, ToolExecutionResult, ToolExecutor } from './types';
+import type {
+  AgentToolServices,
+  RuntimeKnowledgeSearchResult,
+  ToolExecutionResult,
+  ToolExecutor,
+} from './types';
 
-/** Conservative starting floor: a nearest neighbour is not necessarily a reliable business fact. */
-export const MIN_AGENT_KNOWLEDGE_SIMILARITY = 0.78;
+/**
+ * Stands where a tool call id would be, and is deliberately not one.
+ *
+ * A runtime search has no provider call to point at. Using a recognisable constant rather than a
+ * synthesised id keeps anyone reading a diagnostic from believing the model made this call.
+ */
+const RUNTIME_FORCED_SEARCH_ID = 'runtime-forced-search';
 
 function truncate(value: string, maximum: number): string {
   return value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
@@ -32,19 +49,15 @@ function safeJson(value: unknown): string {
   return truncate(JSON.stringify(value), MAX_TOOL_OUTPUT_CHARACTERS);
 }
 
-function sanitizedSources(matches: readonly KnowledgeSource[]): readonly KnowledgeSource[] {
-  return matches
-    .filter(
-      (match) =>
-        Number.isFinite(match.similarity) && match.similarity >= MIN_AGENT_KNOWLEDGE_SIMILARITY,
-    )
-    .slice(0, 3)
-    .map((match) => ({
-      content: truncate(match.content, 1_200),
-      similarity: Math.max(0, Math.min(1, match.similarity)),
-      sourceUrl: match.sourceUrl ? truncate(match.sourceUrl, 1_000) : null,
-      title: truncate(match.title, 240),
-    }));
+/**
+ * The customer's own words, bounded to what the tool schema would have allowed anyway.
+ *
+ * Returns null when there is nothing usable to search -- no turn, or a turn too short to be a
+ * question -- so the recovery simply does not happen rather than issuing a degenerate query.
+ */
+function trustedRecoveryQuery(customerMessage: string | undefined): string | null {
+  const trimmed = (customerMessage ?? '').trim().slice(0, MAX_TRUSTED_QUERY_CHARACTERS);
+  return trimmed.length >= 3 ? trimmed : null;
 }
 
 function rejected(call: AgentToolCall, summary: string): ToolExecutionResult {
@@ -59,6 +72,57 @@ function rejected(call: AgentToolCall, summary: string): ToolExecutionResult {
 /** Executes only predeclared tools through trusted services; no model data path reaches a database. */
 export class ControlledToolExecutor implements ToolExecutor {
   public readonly tools;
+  /** One executor is built per agent turn, so this counter is the per-turn recovery budget. */
+  private trustedQueryRecoveries = 0;
+
+  /**
+   * Searches published knowledge for the runtime, with a query the runtime already trusts.
+   *
+   * Not a tool call and never recorded as one. The runtime reaches for this only when the model
+   * declined to search a question that needs searching, so the trusted-query recovery inside
+   * `execute` is not involved and is not consumed: this *is* the trusted query, and running the
+   * recovery on top of it would search the same words twice.
+   */
+  public async searchKnowledgeForRuntime(
+    query: string,
+    context: AgentExecutionContext,
+  ): Promise<RuntimeKnowledgeSearchResult> {
+    const trusted = trustedRecoveryQuery(query);
+    const empty = {
+      knowledgeOutcome: 'failed' as const,
+      matches: [],
+      origin: 'runtime_forced_search' as const,
+      qualifiedCount: 0,
+      queryLength: Math.min(query.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
+      queryMatchesCustomerTurn: true,
+      retrievedCount: 0,
+      toolCallId: RUNTIME_FORCED_SEARCH_ID,
+    };
+    if (trusted === null) return { diagnostic: empty, failed: true, sources: [] };
+    try {
+      const { diagnostics, qualifyingSources } = evaluateKnowledgeReliability(
+        await this.services.searchBusinessKnowledge(
+          { query: trusted, toolCallId: RUNTIME_FORCED_SEARCH_ID },
+          context,
+        ),
+      );
+      return {
+        diagnostic: {
+          ...diagnostics,
+          knowledgeOutcome: qualifyingSources.length ? 'reliable' : 'empty_or_unreliable',
+          origin: 'runtime_forced_search',
+          queryLength: Math.min(trusted.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
+          // By construction: this search is the customer's own turn.
+          queryMatchesCustomerTurn: true,
+          toolCallId: RUNTIME_FORCED_SEARCH_ID,
+        },
+        failed: false,
+        sources: qualifyingSources,
+      };
+    } catch {
+      return { diagnostic: empty, failed: true, sources: [] };
+    }
+  }
 
   public constructor(
     private readonly industry: Parameters<typeof activeToolDefinitions>[0],
@@ -94,12 +158,53 @@ export class ControlledToolExecutor implements ToolExecutor {
       if (call.name === 'search_business_knowledge') {
         const parsed = searchBusinessKnowledgeSchema.safeParse(rawArguments);
         if (!parsed.success) return rejected(call, 'Tool arguments did not pass validation.');
-        const sources = sanitizedSources(
+        // The trust decision lives in one module shared with the voice executor, so a customer
+        // cannot get an answer over chat that the same corpus would refuse over the phone.
+        const modelQuery = parsed.data.query;
+        let evaluation = evaluateKnowledgeReliability(
           await this.services.searchBusinessKnowledge(
-            { query: parsed.data.query, toolCallId: call.callId },
+            { query: modelQuery, toolCallId: call.callId },
             context,
           ),
         );
+
+        // Measured on staging: the model rewrites the customer's question before searching, and
+        // the rewrite retrieves materially worse. A Turkish registration question scored 0.611 --
+        // strong -- when searched as the customer asked it, while the model's own 99-character
+        // reformulation of the same question returned 0.533/0.487, a flat field that qualifies
+        // nothing. The customer was told there was no reliable information about a page that had
+        // been published minutes earlier.
+        //
+        // So when the model's query finds nothing usable, the customer's actual words get one
+        // search. The recovery query comes from trusted runtime input, never from another model
+        // call and never from a tool argument, and its results face the identical evaluator at the
+        // identical thresholds -- this widens which *query* is tried, never what counts as
+        // reliable. A corpus that genuinely lacks the answer stays flat for both queries and the
+        // deterministic refusal still stands.
+        const trustedQuery = trustedRecoveryQuery(context.customerMessage);
+        const alreadySearchedTheCustomerTurn =
+          trustedQuery !== null &&
+          normalizeKnowledgeQuery(modelQuery) === normalizeKnowledgeQuery(trustedQuery);
+        const mayRecover =
+          evaluation.qualifyingSources.length === 0 &&
+          trustedQuery !== null &&
+          !alreadySearchedTheCustomerTurn &&
+          this.trustedQueryRecoveries < MAX_TRUSTED_QUERY_RECOVERIES_PER_TURN;
+        if (mayRecover) {
+          this.trustedQueryRecoveries += 1;
+          evaluation = evaluateKnowledgeReliability(
+            await this.services.searchBusinessKnowledge(
+              { query: trustedQuery, toolCallId: call.callId },
+              context,
+            ),
+          );
+        }
+
+        // One evaluation produces both the sources and the record of why. Deriving the diagnostic
+        // separately would let the two disagree, and a diagnostic that can lie about the decision
+        // is worse than none.
+        const { diagnostics, qualifyingSources: sources } = evaluation;
+        const customerMessage = context.customerMessage;
         return {
           execution: {
             callId: call.callId,
@@ -111,6 +216,18 @@ export class ControlledToolExecutor implements ToolExecutor {
           },
           handoffRequested: false,
           knowledgeOutcome: sources.length ? 'reliable' : 'empty_or_unreliable',
+          knowledgeDiagnostic: {
+            ...diagnostics,
+            knowledgeOutcome: sources.length ? 'reliable' : 'empty_or_unreliable',
+            // Length, never the text. The model chose these words; recording them would put an
+            // unbounded model-authored string, derived from a customer's message, into a log.
+            queryLength: Math.min(modelQuery.length, MAX_AGENT_KNOWLEDGE_QUERY_LENGTH),
+            queryMatchesCustomerTurn:
+              customerMessage !== undefined &&
+              normalizeKnowledgeQuery(modelQuery) === normalizeKnowledgeQuery(customerMessage),
+            origin: mayRecover ? 'trusted_query_retry' : 'model_search',
+            toolCallId: call.callId,
+          },
           modelOutput: safeJson({ matches: sources }),
           sources,
         };

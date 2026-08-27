@@ -34,6 +34,23 @@ function toResponseInput(item: AgentProviderInputItem): readonly ResponseInputIt
   if (item.type === 'message') {
     return [{ content: item.content, role: item.role, type: 'message' }];
   }
+  if (item.type === 'runtime_knowledge') {
+    // `user`, deliberately, even though the customer did not write it.
+    //
+    // The tempting choice is `developer`, because Avenlyo performed this search rather than the
+    // model. That reasoning is about *authorship* and gets the wrong answer, because the thing
+    // that matters here is *trust*. The payload is text crawled from a third-party website, which
+    // is the least trustworthy input in the system: a hostile page can contain "ignore previous
+    // instructions" as easily as it can contain opening hours. Routing it through a developer-role
+    // message would hand attacker-controlled prose the same standing as Avenlyo's own policy, and
+    // `JSON.stringify` is not a boundary -- it escapes quotes, not intent.
+    //
+    // So retrieved knowledge stays at the lowest available priority, exactly where the same
+    // content sits when it arrives as a normal tool result. The wrapper the runtime puts around it
+    // says what it is and that its instructions are never to be followed; the standing developer
+    // instruction that retrieved knowledge is untrusted remains the authority.
+    return [{ content: item.content, role: 'user', type: 'message' }];
+  }
   if (item.type === 'function_call') {
     return [
       {

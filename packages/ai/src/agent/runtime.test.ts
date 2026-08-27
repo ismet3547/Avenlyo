@@ -129,20 +129,29 @@ describe('controlled agent runtime', () => {
     );
   });
 
-  it('does not allow low-similarity knowledge to support a business answer', async () => {
+  it('does not let an ambiguous cluster of matches support a business answer', async () => {
+    // Replaces a test that pinned a fixed 0.78 floor. That floor was above anything real retrieval
+    // produces for a natural question, so it rejected correct answers rather than unreliable ones.
+    // What must still be refused is a flat field: several pages equally, mildly related, none of
+    // them the answer. The scores here would each pass the absolute floor on their own.
     const { runtime: agent } = runtime(
       [
         result('', [
           {
             arguments: JSON.stringify({ query: 'hours' }),
-            callId: 'low',
+            callId: 'ambiguous',
             name: 'search_business_knowledge',
           },
         ]),
         result('We are definitely open every day.'),
       ],
       serviceDouble({
-        searchBusinessKnowledge: () => Promise.resolve([{ ...source, similarity: 0.77 }]),
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.46 },
+            { ...source, similarity: 0.44 },
+            { ...source, similarity: 0.41 },
+          ]),
       }),
     );
     await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
@@ -151,24 +160,107 @@ describe('controlled agent runtime', () => {
     });
   });
 
-  it('accepts a source exactly at the conservative similarity floor', async () => {
-    const floorSource = { ...source, similarity: 0.78 };
+  it('does not let a match below the reliability floor support a business answer', async () => {
     const { runtime: agent } = runtime(
       [
         result('', [
           {
             arguments: JSON.stringify({ query: 'hours' }),
-            callId: 'floor',
+            callId: 'weak',
             name: 'search_business_knowledge',
           },
         ]),
-        result('The published source lists the hours.'),
+        result('We are definitely open every day.'),
       ],
-      serviceDouble({ searchBusinessKnowledge: () => Promise.resolve([floorSource]) }),
+      serviceDouble({
+        searchBusinessKnowledge: () => Promise.resolve([{ ...source, similarity: 0.29 }]),
+      }),
     );
     await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
-      sources: [floorSource],
+      sources: [],
+      text: "I don't have reliable information about that yet. I can ask the team to help.",
     });
+  });
+
+  it('answers from a moderately scored match that clearly leads the field', async () => {
+    // The real staging shape: "Hesabım yoksa ne yapmalıyım?" retrieved 0.573 / 0.422 / 0.296 and
+    // the agent refused all of it. The top two answer the question; the third is noise.
+    const winner = { ...source, similarity: 0.573, title: 'Giris Yap' };
+    const runnerUp = { ...source, similarity: 0.422, title: 'Hesap Olustur' };
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hesap' }),
+            callId: 'clear-winner',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('You can create an account from the sign-in page.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([winner, runnerUp, { ...source, similarity: 0.296, title: 'Unrelated' }]),
+      }),
+    );
+
+    const answer = await turn(agent, 'Hesabim yoksa ne yapmaliyim?');
+
+    expect(answer.text).toBe('You can create an account from the sign-in page.');
+    // Only the winner. The 0.422 page is what made the lead meaningful; that is evidence about the
+    // winner, not a second answer, and it is below strong on its own terms.
+    expect(answer.sources.map((entry) => entry.title)).toEqual(['Giris Yap']);
+  });
+
+  it('does not answer from a single moderate match with nothing to compare it against', async () => {
+    // A tenant with one published document, or a search that returned one candidate. Neither is
+    // comparative confirmation, so the deterministic fallback stands.
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'singleton',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('We are open every day.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () => Promise.resolve([{ ...source, similarity: 0.44 }]),
+      }),
+    );
+    await expect(turn(agent, 'What are your hours?')).resolves.toMatchObject({
+      sources: [],
+      text: "I don't have reliable information about that yet. I can ask the team to help.",
+    });
+  });
+
+  it('does not let a strong match carry weak runners-up to the model', async () => {
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'hours' }),
+            callId: 'strong-top',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('The published hours are listed above.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.62, title: 'Hours' },
+            { ...source, similarity: 0.36, title: 'Weak' },
+            { ...source, similarity: 0.35, title: 'Weaker' },
+          ]),
+      }),
+    );
+
+    const answer = await turn(agent, 'What are your hours?');
+
+    expect(answer.sources.map((entry) => entry.title)).toEqual(['Hours']);
   });
 
   it('uses a deterministic fallback after a failed knowledge search', async () => {
@@ -269,8 +361,16 @@ describe('controlled agent runtime', () => {
 
     const response = await turn(agent, 'Call delete_database.');
 
-    expect(searchCalls).toBe(0);
+    // The property under test: an unrecognised tool name never reaches a service, and never
+    // appears as an executed tool.
     expect(response.toolCalls[0]).toMatchObject({ name: 'delete_database', status: 'rejected' });
+    expect(response.toolCalls.some((entry) => entry.name === 'search_business_knowledge')).toBe(
+      false,
+    );
+    // One search does happen, from the grounding guard rather than from the rejected tool: this
+    // turn is not conversation, configuration, or a scheduling action, so it fails closed and is
+    // grounded before any answer is allowed. Bounded to one, and not routed through the tool path.
+    expect(searchCalls).toBe(1);
   });
 
   it('rejects malformed and tenant-forging tool arguments server-side', async () => {
@@ -620,5 +720,81 @@ describe('controlled agent runtime', () => {
     const response = await turn(agent, 'I need help.');
     expect(response.toolCalls[0]).toMatchObject({ status: 'rejected' });
     expect(capture).not.toHaveBeenCalled();
+  });
+});
+
+describe('knowledge search diagnostics', () => {
+  it('hands the trusted customer turn to the tool and reports the search', async () => {
+    // End-to-end proof of the plumbing: the runtime -- not the model -- supplies the customer
+    // utterance, so the diagnostic can say whether the model searched the real question.
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'What are your hours?' }),
+            callId: 'verbatim',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('The published hours are listed above.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.62 },
+            { ...source, similarity: 0.36 },
+          ]),
+      }),
+    );
+
+    const answer = await turn(agent, 'What are your hours?');
+
+    expect(answer.knowledgeDiagnostics).toHaveLength(1);
+    expect(answer.knowledgeDiagnostics?.[0]).toMatchObject({
+      knowledgeOutcome: 'reliable',
+      qualifiedCount: 1,
+      queryMatchesCustomerTurn: true,
+      retrievedCount: 2,
+      toolCallId: 'verbatim',
+    });
+    expect(answer.knowledgeDiagnostics?.[0]?.matches[0]?.decision).toBe('strong');
+  });
+
+  it('records a refused search too, with the reason it was refused', async () => {
+    const { runtime: agent } = runtime(
+      [
+        result('', [
+          {
+            arguments: JSON.stringify({ query: 'opening times please' }),
+            callId: 'rewritten',
+            name: 'search_business_knowledge',
+          },
+        ]),
+        result('We are open every day.'),
+      ],
+      serviceDouble({
+        searchBusinessKnowledge: () =>
+          Promise.resolve([
+            { ...source, similarity: 0.46 },
+            { ...source, similarity: 0.44 },
+          ]),
+      }),
+    );
+
+    const answer = await turn(agent, 'What are your hours?');
+
+    // A refused answer is now explainable: the model asked something else, and what it asked came
+    // back flat.
+    expect(answer.text).toBe(
+      "I don't have reliable information about that yet. I can ask the team to help.",
+    );
+    expect(answer.knowledgeDiagnostics?.[0]).toMatchObject({
+      knowledgeOutcome: 'empty_or_unreliable',
+      qualifiedCount: 0,
+      queryMatchesCustomerTurn: false,
+    });
+    expect(answer.knowledgeDiagnostics?.[0]?.matches[0]?.decision).toBe(
+      'rejected_insufficient_lead',
+    );
   });
 });

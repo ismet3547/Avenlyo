@@ -4,6 +4,7 @@ import {
   OpenAIResponsesProvider,
   type AgentConversationMessage,
   type AgentMode,
+  type KnowledgeSearchDiagnostic,
 } from '@avenlyo/ai';
 import { getIndustryPack, resolveIndustryPack } from '@avenlyo/industries';
 import type { Json } from '@avenlyo/database';
@@ -200,6 +201,38 @@ function requireIndustry(workspace: TenantContext) {
   return getIndustryPack(pack.id);
 }
 
+/**
+ * Writes the bounded knowledge-search diagnostic to the server log, and nowhere else.
+ *
+ * A log line rather than a table on purpose. The diagnostic exists to answer one operational
+ * question during Phase 18 verification -- did the model search the customer's actual question, and
+ * what numbers came back -- and a persisted diagnostic would need a read surface, and a read
+ * surface needs authorization, and every one of those is a new way for test-mode data to escape.
+ * There is nothing to authorize here because there is nothing to read back and nothing identifying
+ * in it: no query, no customer words, no page text, no title, no URL, no tenant or location id.
+ *
+ * Test mode only. Customer-mode turns never reach this path.
+ */
+function recordAgentTestKnowledgeDiagnostics(
+  diagnostics: readonly KnowledgeSearchDiagnostic[] | undefined,
+): void {
+  for (const diagnostic of diagnostics ?? []) {
+    console.info(
+      JSON.stringify({
+        event: 'agent_test.knowledge_search',
+        knowledgeOutcome: diagnostic.knowledgeOutcome,
+        matches: diagnostic.matches,
+        qualifiedCount: diagnostic.qualifiedCount,
+        queryLength: diagnostic.queryLength,
+        queryMatchesCustomerTurn: diagnostic.queryMatchesCustomerTurn,
+        retrievedCount: diagnostic.retrievedCount,
+        toolCallId: diagnostic.toolCallId,
+        origin: diagnostic.origin,
+      }),
+    );
+  }
+}
+
 export async function createAgentTestConversation(
   client: AvenlyoSupabaseClient,
   workspace: TenantContext,
@@ -322,6 +355,8 @@ export async function runAgentTestTurn(
       industry,
       userMessage,
     });
+
+    recordAgentTestKnowledgeDiagnostics(result.knowledgeDiagnostics);
 
     await requireVoidRpc(
       agentRpc(client)('complete_agent_test_turn', {

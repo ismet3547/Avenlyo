@@ -50,6 +50,68 @@ jobs:
       - name: Production build
         run: pnpm build
 
+  rendered-browser-security:
+    name: Rendered browser security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The rendered import runs hostile third-party JavaScript, so its confinement has to be proven
+    # by a real browser rather than skipped. This job installs Chromium and fails if it is absent:
+    # a silent skip here would mean the WebRTC, private-address, navigation, and resource-bound
+    # regressions never ran. It is separate so the ordinary application job stays fast.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # playwright-core never downloads a browser, so the binary is provided explicitly here and
+      # nowhere else. Ordinary installs and the application job stay free of a Chromium download.
+      - name: Install Chromium
+        run: pnpm --filter @avenlyo/api exec playwright-core install --with-deps chromium
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, and unprivileged user
+      # namespaces are exactly what Chromium's sandbox needs to build its own as a non-root user.
+      # Without this the sandboxed launch fails on the runner -- and the tempting fix, dropping the
+      # sandbox, is the defect this job now exists to catch. So the host capability is enabled and
+      # CI runs the same launch configuration production does, sandbox included.
+      - name: Allow unprivileged user namespaces for the Chromium sandbox
+        run: |
+          # Tolerant of the key being absent: which of the two knobs exists is a kernel and
+          # distribution detail, and an image that already permits this needs neither. Whether the
+          # sandbox actually works is then decided by the suite launching a browser, not by these.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          echo "unprivileged_userns_clone=$(cat /proc/sys/kernel/unprivileged_userns_clone 2>/dev/null || echo n/a)"
+
+      - name: Require a usable Chromium
+        run: pnpm --filter @avenlyo/api exec node --input-type=module -e "import { chromium } from 'playwright-core'; import { existsSync } from 'node:fs'; const path = chromium.executablePath(); if (!existsSync(path)) { console.error('Chromium is required for the rendered browser security suite.'); process.exit(1); } console.log('Chromium present.');"
+
+      # Every case here launches through the production launch options, sandbox included, against
+      # loopback fixtures: no public website, no DNS, and certificate errors are never ignored. A
+      # host that cannot start a sandboxed Chromium fails this job rather than falling back, because
+      # falling back is what put unsandboxed hostile JavaScript in the worker process.
+      - name: Rendered browser security suite
+        run: pnpm vitest run --config vitest.chromium.config.ts --reporter=verbose
+
+      # A skipped security test is a security test that did not run. The suite is required to
+      # execute every case, so the guard fails the job if any were skipped.
+      - name: Fail if any rendered security test was skipped
+        run: pnpm vitest run --config vitest.chromium.config.ts --reporter=json --outputFile=rendered-report.json && node -e "const r=require('./rendered-report.json'); const notRun=r.testResults.flatMap(f=>f.assertionResults).filter(a=>a.status!=='passed'); if(notRun.length||!r.numTotalTests){console.error('Rendered security tests did not all run:', notRun.map(a=>a.title)); process.exit(1);} console.log('All', r.numTotalTests, 'rendered tests executed.');"
+
   database-security:
     name: Database security tests
     runs-on: ubuntu-latest
@@ -74,10 +136,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Pinned rather than floating. "latest" silently moved from v2.115.0 to v2.116.0 between
+      # two runs of an unchanged schema, and v2.116.0 restored the hosted platform's
+      # auto_expose_new_tables default -- which this suite promptly caught as fourteen real
+      # privilege failures. A security gate whose toolchain can change underneath it reports
+      # findings on a schedule nobody chose, so the version moves when someone reviews it.
       - name: Set up Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.116.0
 
       - name: Start local Supabase
         run: supabase start

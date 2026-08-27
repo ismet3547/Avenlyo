@@ -48,8 +48,9 @@ export default async function KnowledgePage() {
           <div>
             <h2 className="font-semibold text-ink">Website source</h2>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Static public HTML only. New pages are saved as drafts and never become searchable
-              until an owner or admin publishes them.
+              Imports run in the background, so you can leave this page. Public pages only; a site
+              that needs JavaScript is rendered when this deployment supports it. New pages are
+              saved as drafts and never become searchable until an owner or admin publishes them.
             </p>
           </div>
         </div>

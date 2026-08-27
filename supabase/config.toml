@@ -6,6 +6,11 @@ port = 54321
 schemas = ["public", "graphql_public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
+# Stated rather than inherited. This is the hosted platform's behaviour, and leaving it unset
+# means the local security suite tests whatever the CLI defaults to that week -- which is how a
+# real anon/authenticated table exposure sat unnoticed while the default happened to be off.
+# Local runs now carry the same posture as production, so the pgTAP grants suite is meaningful.
+auto_expose_new_tables = true
 
 [db]
 port = 54322
