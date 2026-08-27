@@ -363,6 +363,38 @@ jobs:
         run: |
           docker compose -f deploy/compose.yaml exec -T web node -e "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
 
+      # The API's trusted-proxy boundary is only as narrow as the set of containers that can open a
+      # socket to it. deploy/compose.yaml puts web and api on separate bridge networks so that set is
+      # exactly {caddy}; these two steps prove that separation on a real Docker daemon rather than by
+      # reading the YAML back. Before the split, both services shared one network and web could
+      # present a forwarding chain the API would have trusted.
+      - name: web cannot reach the API directly
+        run: |
+          # A short timeout, because the expected outcome is a DNS failure or a refused connection --
+          # not a slow response. Success here would mean the network separation is not real.
+          if docker compose -f deploy/compose.yaml exec -T web node -e "
+            const t = setTimeout(() => { console.error('timed out'); process.exit(1); }, 5000);
+            fetch('http://api:4000/health/live')
+              .then(r => { clearTimeout(t); console.error('REACHED api:4000, status ' + r.status); process.exit(0); })
+              .catch(e => { clearTimeout(t); console.log('unreachable as expected: ' + e.constructor.name); process.exit(1); })
+          "; then
+            echo "::error::web reached api:4000 directly -- the api_edge/web_edge separation is not in effect."
+            exit 1
+          fi
+          echo "Confirmed: web cannot address api:4000."
+
+      - name: a peer on the API network can reach the API
+        run: |
+          # Caddy's position, without starting Caddy itself (its Caddyfile names real hostnames and
+          # would attempt ACME from a runner IP DNS does not point at). A throwaway container joined
+          # to the same api_edge network proves the network permits exactly what Caddy needs.
+          network="$(docker network ls --format '{{.Name}}' | grep -E '_api_edge$' | head -1)"
+          test -n "$network" || { echo "::error::api_edge network not found"; exit 1; }
+          echo "Using network: $network"
+          docker run --rm --network "$network" curlimages/curl:8.10.1 \
+            -sS --fail --max-time 10 http://api:4000/health/live > /dev/null
+          echo "Confirmed: a peer on $network reaches api:4000."
+
       - name: Tear down
         if: always()
         run: docker compose -f deploy/compose.yaml down -v

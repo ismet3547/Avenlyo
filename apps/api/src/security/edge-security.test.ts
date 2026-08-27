@@ -126,11 +126,59 @@ describe('the trusted-proxy boundary decides who the client is', () => {
   });
 });
 
-describe('the API is not published to the host', () => {
-  it('exposes 4000 on the compose network only', async () => {
+describe('only Caddy can peer with the API', () => {
+  /** Configuration lines only. An assertion that matches a file's own explanatory prose is not one. */
+  function withoutComments(text: string): string {
+    return text
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#'))
+      .join('\n');
+  }
+
+  async function compose(): Promise<string> {
     const { readFile } = await import('node:fs/promises');
-    const compose = await readFile('deploy/compose.yaml', 'utf8');
-    const apiBlock = compose.slice(compose.indexOf('\n  api:'), compose.indexOf('\n  caddy:'));
+    return readFile('deploy/compose.yaml', 'utf8');
+  }
+
+  function serviceBlock(text: string, name: 'web' | 'api' | 'caddy'): string {
+    const order = ['web', 'api', 'caddy'] as const;
+    const start = text.indexOf(`\n  ${name}:`);
+    const next = order[order.indexOf(name) + 1];
+    return text.slice(start, next ? text.indexOf(`\n  ${next}:`) : undefined);
+  }
+
+  it('puts web and api on separate networks', async () => {
+    // This is what makes "an internal peer means Caddy" true. With one shared network the web
+    // container was also an internal peer of api:4000 and could have presented a forwarding chain
+    // the API would have trusted -- the boundary was "any private container", not one hop.
+    const text = await compose();
+
+    expect(serviceBlock(text, 'web')).toContain('- web_edge');
+    expect(serviceBlock(text, 'web')).not.toContain('- api_edge');
+    expect(serviceBlock(text, 'api')).toContain('- api_edge');
+    expect(serviceBlock(text, 'api')).not.toContain('- web_edge');
+  });
+
+  it('keeps Caddy on both, as the only bridge between them', async () => {
+    const caddy = serviceBlock(await compose(), 'caddy');
+
+    expect(caddy).toContain('- web_edge');
+    expect(caddy).toContain('- api_edge');
+  });
+
+  it('declares both networks without cutting off provider egress', async () => {
+    const text = await compose();
+
+    expect(text).toMatch(/^ {2}web_edge:/m);
+    expect(text).toMatch(/^ {2}api_edge:/m);
+    // `internal: true` would remove the outbound access Supabase, OpenAI, Stripe, Twilio and
+    // Chromium all need. Comment lines are stripped first -- the file explains why it is absent,
+    // and an assertion that reads its own prose proves nothing.
+    expect(withoutComments(text)).not.toMatch(/internal:\s*true/);
+  });
+
+  it('exposes 4000 on the compose network only', async () => {
+    const apiBlock = serviceBlock(await compose(), 'api');
 
     expect(apiBlock).toContain('expose:');
     expect(apiBlock).toContain('"4000"');
@@ -139,21 +187,34 @@ describe('the API is not published to the host', () => {
     expect(apiBlock).not.toMatch(/^\s{4}ports:/m);
   });
 
-  it('publishes host ports from Caddy alone', async () => {
-    const { readFile } = await import('node:fs/promises');
-    const compose = await readFile('deploy/compose.yaml', 'utf8');
-    const webBlock = compose.slice(compose.indexOf('\n  web:'), compose.indexOf('\n  api:'));
+  it('publishes host ports from Caddy alone, and only 80/443', async () => {
+    const text = await compose();
 
-    expect(webBlock).not.toMatch(/^\s{4}ports:/m);
-    expect(compose.slice(compose.indexOf('\n  caddy:'))).toMatch(/^\s{4}ports:/m);
+    expect(serviceBlock(text, 'web')).not.toMatch(/^\s{4}ports:/m);
+    const caddy = serviceBlock(text, 'caddy');
+    expect(caddy).toMatch(/^\s{4}ports:/m);
+    // The internal listener the web container uses must never be published.
+    expect(caddy).not.toContain('8080:');
   });
 
-  it('has Caddy replace the forwarding chain rather than append to it', async () => {
+  it('routes the web container to the API through Caddy, never directly', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const webEnv = await readFile('deploy/env/web.env.example', 'utf8');
+    const caddyfile = await readFile('deploy/Caddyfile', 'utf8');
+
+    expect(withoutComments(webEnv)).toContain('AVENLYO_API_URL=http://caddy:8080');
+    expect(withoutComments(webEnv)).not.toContain('AVENLYO_API_URL=http://api:4000');
+    expect(caddyfile).toMatch(/^:8080 \{/m);
+  });
+
+  it('has Caddy replace the forwarding chain rather than append to it, on every upstream', async () => {
     const { readFile } = await import('node:fs/promises');
     const caddyfile = await readFile('deploy/Caddyfile', 'utf8');
 
     expect(caddyfile).toContain('header_up X-Forwarded-For {remote_host}');
     expect(caddyfile).toContain('header_up X-Real-IP {remote_host}');
+    // Applied to all three upstreams via the shared snippet, not just the public API site.
+    expect(caddyfile.match(/import sanitized_forwarding/g)).toHaveLength(3);
   });
 });
 
@@ -266,6 +327,30 @@ describe('edge rate limits refuse a flood before it becomes work', () => {
     const responses = await hit(EDGE_POLICIES.global.max + 5, REAL_CLIENT, '/health/live', 'GET');
 
     expect(responses.every((response) => response.statusCode === 200)).toBe(true);
+  });
+
+  it('applies the documented ordinary ceiling to an authenticated route', async () => {
+    // The correction this pins: EDGE_POLICIES once carried a separate `authenticated: 600` that was
+    // wired to nothing, so the documented authenticated ceiling was 600 while the enforced one was
+    // the global 300. There is now one generous default that every route inherits, and this asserts
+    // the enforced number on a real authenticated route rather than reading it back from config.
+    expect(EDGE_POLICIES.global.max).toBe(600);
+    expect(EDGE_POLICIES).not.toHaveProperty('authenticated');
+
+    const responses = await hit(EDGE_POLICIES.global.max, REAL_CLIENT, '/v1/me', 'GET');
+    expect(responses.every((response) => response.statusCode !== 429)).toBe(true);
+
+    const overTheLine = await hit(1, REAL_CLIENT, '/v1/me', 'GET');
+    expect(overTheLine[0]?.statusCode).toBe(429);
+  });
+
+  it('gives a new authenticated route the ceiling without anyone wiring it up', async () => {
+    // The reason there is no separate authenticated policy: attaching one to every route by hand
+    // fails silently the first time somebody forgets. Inheritance cannot be forgotten.
+    const responses = await hit(3, OTHER_CLIENT, '/v1/me', 'GET');
+
+    expect(responses.every((response) => response.statusCode !== 429)).toBe(true);
+    expect(responses[0]?.headers['x-ratelimit-limit']).toBe(String(EDGE_POLICIES.global.max));
   });
 
   it('exempts provider webhook routes deliberately, and says so in one place', () => {

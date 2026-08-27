@@ -23,11 +23,19 @@
 --
 -- 2. The touch is coalesced. `last_active_at` and `expires_at` only move when the recorded activity
 --    is already at least a minute stale, so a polling browser writes at most once a minute instead
---    of once a request. Session lifetime semantics are deliberately preserved: an active session
---    still rolls forward to 24 hours from now, and an idle one still expires exactly as before.
---    The only thing that changes is how often the same conclusion is written down. The one-minute
---    coalescing window is two orders of magnitude smaller than the 24-hour lifetime, so no session
---    can expire while its owner is still polling.
+--    of once a request.
+--
+--    This is a real, bounded change to expiry timing, and worth stating precisely rather than
+--    calling the lifetime "unchanged". Expiry is now 24 hours after the last *persisted* activity,
+--    not 24 hours after the last request. A poll landing inside the coalescing window leaves
+--    `expires_at` where the previous write put it, so the effective TTL can sit up to 60 seconds
+--    behind an exact "last poll + 24h" model, and never ahead of it.
+--
+--    What that cannot do is expire a session someone is still using: the drift is bounded by the
+--    one-minute window, which is roughly three orders of magnitude smaller than the 24-hour
+--    lifetime, so any client still polling refreshes the row long before expiry approaches. An idle
+--    session still expires on exactly the same schedule as before, because the last write is the
+--    last activity either way.
 --
 -- The signature gains `target_rate_scope`, matching the two sibling RPCs, so the old two-argument
 -- form is dropped and replaced rather than left behind as an unlimited path. Every caller is

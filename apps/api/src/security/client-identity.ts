@@ -18,22 +18,30 @@ import type { FastifyRequest } from 'fastify';
  * `X-Forwarded-For` from whoever sent it, so any internet client could pick its own rate-limit
  * identity by writing a header, and could equally pick somebody else's.
  *
- * ## The boundary
+ * ## The boundary, and what actually enforces it
  *
- * A forwarding header is only meaningful if the hop that added it is one of ours. So a proxy is
- * trusted when, and only when, it is on a private or loopback address -- which in this deployment
- * means it is inside the compose network, and `deploy/compose.yaml` publishes no host port for the
- * API, so nothing on the public internet can be that peer. If the API is ever reached directly from
- * a public address, that peer is untrusted, every forwarding header it sent is ignored, and its own
- * socket address becomes the identity. It fails closed rather than open.
+ * A forwarding header is only meaningful if the hop that added it is one of ours, so this module
+ * trusts a peer only on a private or loopback address. On its own that is a weak statement: "any
+ * private container", which is not the same as "Caddy". An earlier version of this file claimed the
+ * two were equivalent, and they were not -- `deploy/compose.yaml` put `web`, `api` and `caddy` on
+ * one shared network, so the web container was also an internal peer of `api:4000` and could have
+ * presented a forwarding chain this predicate would have believed.
  *
- * This is deliberately not a hop count. A count says "believe the Nth entry" without ever asking
- * who wrote it; if the topology gains a hop, or the API is exposed by mistake, a count keeps
- * believing. Asking whether the peer is internal stays correct under both changes.
+ * The fix is topological, not textual. `web` and `api` now sit on separate bridge networks with
+ * Caddy on both, so no container except Caddy can open a socket to the API at all, and the API
+ * publishes no host port. The set of peers able to present forwarding information is therefore
+ * exactly one process, and this predicate is the second line rather than the only one.
+ *
+ * If the API is ever reached from a public address, that peer is untrusted, every forwarding header
+ * it sent is ignored, and its own socket address becomes the identity. It fails closed.
+ *
+ * Deliberately not a hop count. A count says "believe the Nth entry" without ever asking who wrote
+ * it; if the topology gains a hop, or the API is exposed by mistake, a count keeps believing.
  *
  * `deploy/Caddyfile` additionally replaces `X-Forwarded-For` with the real remote host rather than
- * appending to whatever arrived, so an injected chain does not survive the hop at all. That is the
- * first line; this module is the second, and neither depends on the other being perfect.
+ * appending to whatever arrived, so an injected chain does not survive the hop at all. Three
+ * controls -- network separation, header replacement, peer predicate -- and no one of them is
+ * relied on to be perfect.
  */
 
 /** Longest textual address worth considering. Anything larger is malformed, not exotic. */

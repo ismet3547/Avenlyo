@@ -360,8 +360,22 @@ its own headers and its own threat model, and none of this is imposed on it.
 ### Trusted proxy, and why public forwarding headers are not believed
 
 Caddy is the only internet-facing process, and `deploy/compose.yaml` gives `api` an `expose:` entry
-rather than a `ports:` mapping, so nothing outside the compose network can open a socket to it. That
-topology is what makes a forwarding header meaningful at all.
+rather than a `ports:` mapping, so nothing outside the compose network can open a socket to it.
+
+The compose file also runs **two** bridge networks rather than one. `web_edge` carries `web` and
+Caddy; `api_edge` carries `api` and Caddy. `web` and `api` never share a network, so the set of
+containers that can open a socket to the API is exactly one: Caddy. That is what makes a forwarding
+header meaningful. A single shared network -- which is what this ran on before -- made the boundary
+"any private container", because the web container was also an internal peer of `api:4000`.
+
+Neither network is `internal: true`: both containers need outbound access for Supabase, OpenAI,
+Stripe, Twilio and Chromium.
+
+Because `web` can no longer address `api` directly, its server-side dashboard actions (appointments,
+billing, integrations) go through an **unpublished** Caddy listener on `:8080`, reachable from the
+compose networks alone and never from the host or the internet. `AVENLYO_API_URL` is therefore
+`http://caddy:8080`, not `http://api:4000`. **A host still carrying the old value must be updated at
+the next deploy or those three action groups stop resolving.**
 
 Fastify is configured with a `trustProxy` **predicate**, not `true` and not a hop count. It honours
 `X-Forwarded-For` only when the peer that presented it holds a private or loopback address -- which
@@ -391,8 +405,13 @@ line holds an address.
 | Web-chat session create | 20/min | 10/min, authoritative |
 | Web-chat message | 60/min | 30/min, authoritative |
 | Web-chat poll | 120/min | 240/min, authoritative |
-| Authenticated API | 600/min | n/a |
+| Authenticated / general API | 600/min (the global default) | n/a |
 | Provider webhooks | **exempt** | n/a |
+
+There is deliberately no separate `authenticated` policy. One earlier existed at 600/minute and was
+wired to nothing, so the documented ceiling was 600 while the enforced one was a 300 global default.
+Authenticated routes now inherit the generous global ceiling, which a newly added route cannot
+forget to opt into; only Web Chat carries explicit stricter overrides.
 
 The edge layer is a shield: it makes a flood cheap to refuse before it becomes database, AI or
 provider work. It is **per replica and in memory** -- run two API containers and a client gets two
@@ -435,6 +454,22 @@ Helmet's default CORP is `same-origin`, which instructs browsers to block cross-
 responses -- exactly what the embedded chat widget does on every session, message and poll. Enabling
 them to be able to say "Helmet is on" would break Web Chat on every customer site. CORS remains the
 access control for this surface.
+
+### Poll coalescing and session expiry
+
+`get_web_chat_messages` previously ran an unconditional `UPDATE` on `web_chat_sessions` per call. The
+touch is now coalesced to at most once a minute, which is a real if bounded change to expiry timing
+and is worth stating exactly rather than calling the lifetime unchanged.
+
+Expiry is 24 hours after the last **persisted** activity, not the last request. A poll landing inside
+the one-minute coalescing window leaves `expires_at` where the previous write put it, so the
+effective TTL can sit up to 60 seconds behind an exact "last poll + 24h" model — and never ahead of
+it. What it cannot do is expire a session someone is still using: the drift is bounded by a window
+roughly three orders of magnitude smaller than the lifetime, so a client that is still polling
+refreshes the row long before expiry approaches. An idle session expires on exactly the schedule it
+always did, because the last write is the last activity either way.
+
+Both bounds are asserted in `supabase/tests/database/web_chat_poll_bounds.test.sql`.
 
 ### Intentionally deferred
 

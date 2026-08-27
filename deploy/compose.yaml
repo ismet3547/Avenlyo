@@ -28,7 +28,23 @@ x-logging: &default-logging
     max-file: "5"
 
 networks:
-  internal:
+  # Two ingress networks, not one shared `internal`.
+  #
+  # The API's trusted-proxy boundary depends on which containers can open a socket to it, so that
+  # set has to be the smallest one that works: Caddy, and nothing else. With a single shared network
+  # the web container was also an internal peer of api:4000 and could therefore present a forwarding
+  # chain the API would trust -- the boundary was really "any private peer", not "the one Caddy hop"
+  # it was described as. Splitting the network is what makes that description true.
+  #
+  # Caddy sits on both. `web` and `api` never share one, so web cannot address api at all; its
+  # server-side calls go through Caddy's unpublished internal listener instead (see deploy/Caddyfile
+  # and AVENLYO_API_URL in deploy/env/web.env.example).
+  #
+  # Neither is marked `internal: true`: both containers need outbound internet for Supabase, OpenAI,
+  # Stripe, Twilio, and Chromium's own fetches during a rendered import.
+  web_edge:
+    driver: bridge
+  api_edge:
     driver: bridge
 
 volumes:
@@ -59,7 +75,7 @@ services:
     expose:
       - "3000"
     networks:
-      - internal
+      - web_edge
     restart: unless-stopped
     cap_drop:
       - ALL
@@ -94,7 +110,7 @@ services:
     expose:
       - "4000"
     networks:
-      - internal
+      - api_edge
     restart: unless-stopped
     # Without this, `node dist/server.js` is the container's own PID 1, and PID 1 gets kernel-level
     # special treatment that breaks a specific step of Chromium's namespace sandbox setup (a
@@ -155,7 +171,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     networks:
-      - internal
+      - web_edge
+      - api_edge
     restart: unless-stopped
     cap_drop:
       - ALL

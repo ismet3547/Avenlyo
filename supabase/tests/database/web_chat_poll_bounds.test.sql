@@ -2,12 +2,12 @@
 --
 -- Before this, `get_web_chat_messages` was the only public web-chat entry point with no rate limit,
 -- and it wrote to `web_chat_sessions` on every single call. These assertions pin both halves of the
--- repair: the durable quota now exists, and the session touch is coalesced without changing what a
--- session's lifetime means.
+-- repair: the durable quota now exists, and the session touch is coalesced -- along with the price
+-- of that coalescing, which is a bounded sub-minute expiry drift rather than an unchanged lifetime.
 
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(12);
+select extensions.plan(14);
 
 set local role postgres;
 
@@ -111,7 +111,7 @@ select extensions.ok(
 
 select extensions.ok(
   (select expires_at > now() + interval '23 hours' from poll_probe),
-  'the rolling 24-hour lifetime is unchanged -- an active session still rolls forward'
+  'an active session still rolls forward to roughly 24 hours from the persisted activity'
 );
 
 -- The touch just happened, so a second poll must not write the same conclusion again.
@@ -124,6 +124,21 @@ select extensions.is(
   (select xmin::text from public.web_chat_sessions where id = 'c1500000-0000-0000-0000-000000000001'),
   (select row_version from poll_probe),
   'a second poll inside the coalescing window produces no new row version'
+);
+
+-- The cost of that: expiry tracks the last *persisted* activity, not the last request. The drift is
+-- bounded by the coalescing window and is always behind, never ahead -- stated here rather than
+-- claiming the lifetime is untouched, because it is not.
+select extensions.ok(
+  (select expires_at <= now() + interval '24 hours' from public.web_chat_sessions
+    where id = 'c1500000-0000-0000-0000-000000000001'),
+  'expiry after a coalesced poll is never ahead of last-request + 24h'
+);
+
+select extensions.ok(
+  (select expires_at > now() + interval '24 hours' - interval '60 seconds'
+     from public.web_chat_sessions where id = 'c1500000-0000-0000-0000-000000000001'),
+  'and never more than the one-minute coalescing window behind it'
 );
 
 set local role service_role;

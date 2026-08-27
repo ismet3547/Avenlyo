@@ -43,13 +43,20 @@ const MINUTE = 60_000;
  */
 export const EDGE_POLICIES = {
   /**
-   * Ordinary authenticated dashboard traffic. Deliberately generous: a bulk operation or a busy
-   * Inbox session issues a lot of legitimate requests, and breaking those would be a worse outcome
-   * than the abuse this bounds.
+   * Everything without a more specific rule, which is every authenticated dashboard route.
+   *
+   * Deliberately generous: a bulk operation or a busy Inbox session issues a lot of legitimate
+   * requests, and breaking those is a worse outcome than the abuse this bounds.
+   *
+   * There is deliberately no separate `authenticated` policy. An earlier version of this file
+   * defined one at 600/minute and wired it to nothing, so the documented authenticated ceiling was
+   * 600 while the enforced one was the 300 of this policy -- a claim the code did not keep. A
+   * distinct policy would also have to be attached to every authenticated route by hand, and the
+   * failure mode of forgetting one is silent. One generous default that every route inherits, with
+   * explicit stricter overrides only where the traffic shape genuinely differs, cannot drift that
+   * way: a new authenticated route is covered the moment it is registered.
    */
-  authenticated: { max: 600, name: 'authenticated', timeWindowMs: MINUTE },
-  /** Everything without a more specific rule. */
-  global: { max: 300, name: 'global', timeWindowMs: MINUTE },
+  global: { max: 600, name: 'global', timeWindowMs: MINUTE },
   /**
    * Web-chat polling. The widget polls a few times a minute; 120 leaves an order of magnitude of
    * headroom while still bounding how much database work one browser can demand.
