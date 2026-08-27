@@ -37,15 +37,21 @@
 --    session still expires on exactly the same schedule as before, because the last write is the
 --    last activity either way.
 --
--- The signature gains `target_rate_scope`, matching the two sibling RPCs, so the old two-argument
--- form is dropped and replaced rather than left behind as an unlimited path. Every caller is
--- updated in the same change.
+-- The signature gains `target_rate_scope`, matching the two sibling RPCs. The old two-argument form
+-- is not left behind as an unlimited path -- its implementation is removed -- but the signature is
+-- recreated at the bottom of this file as a bounded delegate, so a rolled-back Phase 18 binary can
+-- still make its exact old call. See the note above that function for why.
+--
+-- This migration also advances `platform_schema_contract` to 19, because a Phase 19 build genuinely
+-- depends on the three-argument function existing and must refuse to report ready without it.
 --
 -- Privileges are stated explicitly. A function created after the Phase 18 hardening inherits the
 -- hosted platform's `auto_expose_new_tables` default again, so without these lines this RPC would
 -- be born executable by anon and authenticated -- exactly the regression
 -- supabase/tests/database/privilege_regression.test.sql exists to catch.
 
+-- The old two-argument implementation is replaced, not merely shadowed: it is recreated further
+-- down as a bounded delegate so a rolled-back Phase 18 binary keeps working.
 drop function if exists public.get_web_chat_messages(text, timestamptz);
 
 create function public.get_web_chat_messages(
@@ -96,3 +102,57 @@ $$;
 revoke all on function public.get_web_chat_messages(text, text, timestamptz)
   from public, anon, authenticated, service_role;
 grant execute on function public.get_web_chat_messages(text, text, timestamptz) to service_role;
+
+-- Rollback compatibility: the Phase 18 call shape must keep working, without its old behaviour.
+--
+-- The readiness contract in apps/api/src/observability/readiness.ts deliberately accepts a schema
+-- newer than the running build requires, so a release can be rolled back to the previous image
+-- without a destructive down-migration. Dropping the two-argument overload outright would have
+-- broken that promise in the worst way: readiness would stay green while a rolled-back Phase 18
+-- binary got "function does not exist" on every web-chat poll.
+--
+-- So the old signature survives -- exact parameter names and types, because PostgREST calls RPCs by
+-- name and the old binary sends {target_token_hash, target_after} -- but it is a thin delegate, not
+-- the old implementation. It cannot reintroduce the unlimited poll path, because it has no path of
+-- its own: rate limiting, session lookup, coalesced touch and the 100-row bound all happen inside
+-- the three-argument function it calls.
+--
+-- The one thing it must supply that the old binary cannot is a rate scope. That build predates the
+-- trusted-proxy work and has no client address to offer, so the scope is derived deterministically
+-- from the session token hash instead. That is a per-session bucket rather than a per-client one --
+-- coarser than the current path, and deliberately so: it still bounds any single session's polling,
+-- and a rolled-back release is a temporary state, not the model to optimise for.
+--
+-- Overload resolution is unambiguous in both directions and asserted in
+-- supabase/tests/database/web_chat_poll_bounds.test.sql: only this function has `target_after`
+-- without `target_rate_scope`, and only the three-argument one has `target_rate_scope` at all.
+create function public.get_web_chat_messages(
+  target_token_hash text,
+  target_after timestamptz default null
+)
+returns table (message_id uuid, direction text, author_type text, body text, created_at timestamptz)
+language plpgsql security definer set search_path = '' as $$
+begin
+  -- No guard of its own on purpose: the delegate below performs the service-role check, the token
+  -- validation and the quota, so there is exactly one implementation of each.
+  return query select * from public.get_web_chat_messages(
+    target_token_hash,
+    pg_catalog.encode(
+      pg_catalog.sha256(pg_catalog.convert_to('legacy-poll:' || target_token_hash, 'UTF8')),
+      'hex'
+    ),
+    target_after
+  );
+end;
+$$;
+
+revoke all on function public.get_web_chat_messages(text, timestamptz)
+  from public, anon, authenticated, service_role;
+grant execute on function public.get_web_chat_messages(text, timestamptz) to service_role;
+
+-- The Phase 19 application depends on the three-argument poll contract above. A Phase 19 build must
+-- refuse to report ready against an 18 database, which is exactly what this version bump makes the
+-- readiness probe do.
+update public.platform_schema_contract
+set schema_version = 19, updated_at = now()
+where id;

@@ -7,7 +7,7 @@
 
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(14);
+select extensions.plan(19);
 
 set local role postgres;
 
@@ -51,36 +51,53 @@ reset role;
 -- Shape and privilege
 -- ---------------------------------------------------------------------------------------
 
-select extensions.is(
-  (select count(*)::integer from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'get_web_chat_messages'),
-  1,
-  'exactly one get_web_chat_messages remains -- the unlimited two-argument form is gone'
+-- Exactly two overloads, and exactly these two. The current three-argument path, and the Phase 18
+-- signature kept so a rolled-back binary can still make its old call. Anything else appearing here
+-- is either an unlimited path returning or a rollback path being deleted.
+select extensions.set_eq(
+  $q$ select pg_get_function_identity_arguments(p.oid)
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'get_web_chat_messages' $q$,
+  $q$ values
+      ('target_token_hash text, target_rate_scope text, target_after timestamp with time zone'),
+      ('target_token_hash text, target_after timestamp with time zone')
+  $q$,
+  'exactly the current overload and the Phase 18 rollback overload exist'
 );
 
 select extensions.ok(
-  has_function_privilege('service_role', 'public.get_web_chat_messages(text,text,timestamptz)', 'EXECUTE'),
-  'the backend can still read a session history'
+  has_function_privilege('service_role', 'public.get_web_chat_messages(text,text,timestamptz)', 'EXECUTE')
+    and has_function_privilege('service_role', 'public.get_web_chat_messages(text,timestamptz)', 'EXECUTE'),
+  'the backend can execute both overloads'
 );
 
 select extensions.ok(
   not has_function_privilege('anon', 'public.get_web_chat_messages(text,text,timestamptz)', 'EXECUTE')
-    and not has_function_privilege('authenticated', 'public.get_web_chat_messages(text,text,timestamptz)', 'EXECUTE'),
-  'no client role can execute it, despite being created after the Phase 18 hardening'
-);
-
-select extensions.is(
-  (select p.prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'get_web_chat_messages'),
-  true,
-  'it is still security definer'
+    and not has_function_privilege('authenticated', 'public.get_web_chat_messages(text,text,timestamptz)', 'EXECUTE')
+    and not has_function_privilege('anon', 'public.get_web_chat_messages(text,timestamptz)', 'EXECUTE')
+    and not has_function_privilege('authenticated', 'public.get_web_chat_messages(text,timestamptz)', 'EXECUTE'),
+  'no client role can execute either overload, despite both being created after the Phase 18 hardening'
 );
 
 select extensions.ok(
-  (select p.proconfig @> array['search_path=""']
+  (select bool_and(p.prosecdef) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'get_web_chat_messages'),
+  'both overloads are security definer'
+);
+
+select extensions.ok(
+  (select bool_and(p.proconfig @> array['search_path=""'])
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public' and p.proname = 'get_web_chat_messages'),
-  'it still pins an empty search_path'
+  'both overloads pin an empty search_path'
+);
+
+-- The whole point of the version bump: a Phase 19 build must refuse an 18 database, because its
+-- poll RPC does not exist there.
+select extensions.is(
+  (select schema_version from public.platform_schema_contract where id),
+  19,
+  'the schema contract is 19 after every Phase 19 migration'
 );
 
 -- ---------------------------------------------------------------------------------------
@@ -143,6 +160,63 @@ select extensions.ok(
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
+
+-- ---------------------------------------------------------------------------------------
+-- Rollback compatibility
+--
+-- These pin the exact call a Phase 18 binary makes. PostgREST invokes an RPC with named
+-- arguments, so the parameter *names* are part of the contract, not just the types -- which is why
+-- the assertions below use named-argument syntax rather than positional. A future migration that
+-- deletes or renames this overload fails here rather than in production after a rollback.
+-- ---------------------------------------------------------------------------------------
+
+select extensions.lives_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('a', 64),
+       target_after => null
+     ) $$,
+  'the Phase 18 named-argument call shape still resolves and runs'
+);
+
+select extensions.is(
+  (select count(*)::integer from public.get_web_chat_messages(
+     target_token_hash => repeat('a', 64), target_after => null)),
+  1,
+  'and returns the same session history the current overload does'
+);
+
+select extensions.lives_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('a', 64),
+       target_rate_scope => repeat('b', 64),
+       target_after => null
+     ) $$,
+  'the Phase 19 named-argument call shape resolves to the three-argument overload'
+);
+
+-- The compatibility path is a delegate, not a restoration: it consumes the same durable quota. Its
+-- scope is derived from the token hash, so spending that bucket directly must refuse it. Spent as
+-- postgres: the limiter helper is internal and executable by no client or backend role.
+reset role;
+do $$
+declare index integer;
+  legacy_scope text := encode(sha256(convert_to('legacy-poll:' || repeat('a', 64), 'UTF8')), 'hex');
+begin
+  for index in 1..240 loop
+    perform public.consume_messaging_rate_limit('web-poll:' || legacy_scope, 240, 60);
+  end loop;
+end $$;
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('a', 64), target_after => null) $$,
+  '42901',
+  'Too many web chat polls',
+  'the rollback overload is durably bounded, not the old unlimited path'
+);
 
 select extensions.throws_ok(
   $$ select * from public.get_web_chat_messages(repeat('a', 64), 'not-a-scope', null) $$,

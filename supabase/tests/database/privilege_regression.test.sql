@@ -325,7 +325,8 @@ select extensions.is_empty(
         'public.match_inbound_voice_knowledge(uuid,uuid,text,integer)',
         'public.get_google_backend_authorization(uuid,uuid)',
         'public.create_web_chat_session(uuid,text,text,text)',
-        'public.get_web_chat_messages(text,text,timestamptz)'
+        'public.get_web_chat_messages(text,text,timestamptz)',
+        'public.get_web_chat_messages(text,timestamptz)'
       ]) as proc
       where has_function_privilege('anon', proc, 'EXECUTE')
          or has_function_privilege('authenticated', proc, 'EXECUTE') $q$,

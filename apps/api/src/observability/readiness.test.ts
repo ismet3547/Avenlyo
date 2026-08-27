@@ -100,6 +100,34 @@ describe('readiness evaluation', () => {
     expect(result.ready).toBe(true);
   });
 
+  /**
+   * Phase 19's contract, pinned to absolute numbers rather than to the constant.
+   *
+   * The relative assertions above would have passed unchanged while this build required 18 and its
+   * web-chat poll RPC needed a function only a 19 database has -- which is exactly the state the
+   * review caught. Naming the versions is what makes the bump provable rather than assumed.
+   */
+  describe('the Phase 19 schema contract', () => {
+    it('requires 19, because the poll RPC gained an argument that only 19 has', () => {
+      expect(REQUIRED_SCHEMA_VERSION).toBe(19);
+    });
+
+    it('refuses an 18 database, where get_web_chat_messages has no rate-scope argument', () => {
+      const result = readinessFor({ probe: { ok: true, schemaVersion: 18 } });
+
+      expect(result.ready).toBe(false);
+      expect(result.reasons).toEqual(['schema_incompatible']);
+      expect(result.schemaVersion).toBe(18);
+    });
+
+    it('accepts a 19 database', () => {
+      expect(readinessFor({ probe: { ok: true, schemaVersion: 19 } })).toMatchObject({
+        ready: true,
+        schemaVersion: 19,
+      });
+    });
+  });
+
   it('is not ready while draining', () => {
     expect(readinessFor({ draining: true })).toMatchObject({
       ready: false,

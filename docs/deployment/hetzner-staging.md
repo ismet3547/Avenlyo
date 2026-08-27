@@ -471,6 +471,34 @@ always did, because the last write is the last activity either way.
 
 Both bounds are asserted in `supabase/tests/database/web_chat_poll_bounds.test.sql`.
 
+### Schema contract 19 and rollback compatibility
+
+Phase 19 advances `platform_schema_contract.schema_version` to **19**, and
+`REQUIRED_SCHEMA_VERSION` in `apps/api/src/observability/readiness.ts` moves with it.
+
+That is not bookkeeping. This build's web-chat poll calls
+`get_web_chat_messages(target_token_hash, target_rate_scope, target_after)`, which does not exist on
+an 18 database. Left at 18, a Phase 19 process would have reported **ready** against a schema where
+every poll fails — the exact outcome the contract exists to prevent.
+
+The readiness comparison stays `>=`, so a schema newer than the running build remains compatible and
+a rollback still needs no destructive down-migration. That promise only holds if the newer schema
+keeps answering the older build's calls, so the Phase 19 migration **recreates** the Phase 18
+two-argument signature — same parameter names, because PostgREST calls RPCs by name — as a thin
+delegate to the current implementation.
+
+The delegate is not a restoration of the old behaviour. It has no query, no session touch and no
+bound of its own; rate limiting, session lookup, the coalesced touch and the 100-row ceiling all
+happen inside the function it calls. The one thing a rolled-back binary cannot supply is a client
+rate scope, since it predates the trusted-proxy work, so the scope is derived deterministically from
+the session token hash: a per-session bucket rather than a per-client one. Coarser on purpose — it
+still bounds any single session's polling, and a rolled-back release is a temporary state.
+
+Both overloads are `service_role` only, both are `security definer` with an empty `search_path`, and
+`supabase/tests/database/web_chat_poll_bounds.test.sql` asserts that exactly those two exist,
+that both named-argument call shapes resolve to the intended overload, and that the compatibility
+path consumes the durable quota rather than bypassing it.
+
 ### Intentionally deferred
 
 - **Redis-backed limiting.** Would make the edge layer global rather than per replica. Deferred, not
