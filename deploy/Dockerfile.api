@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1
+#
+# Production image for @avenlyo/api.
+#
+# This image also owns Chromium: the Phase 18 rendered-import fallback (`apps/api/src/services/
+# knowledge/playwright-renderer.ts`) runs inside this API runtime, not as a separate service, so the
+# browser and its OS-level sandbox requirements are provisioned here.
+#
+# Two things are treated as hard requirements throughout, not aspirations:
+#   1. No source TypeScript loader at runtime -- the final CMD is plain `node dist/server.js`.
+#   2. Chromium never runs as root and never launches with `--no-sandbox`. There is no fallback path
+#      in this file that disables the sandbox; a container that cannot start one is a container with
+#      no rendered capability, exactly as the application code itself already decides
+#      (`RenderCapabilityError`, `apps/api/src/services/knowledge/playwright-renderer.ts`).
+#
+# Chromium is installed by the exact `playwright-core` version pinned in `pnpm-lock.yaml`, never a
+# separately-versioned base image or a floating tag.
+
+FROM node:22-bookworm-slim AS base
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+WORKDIR /app
+
+# ---------------------------------------------------------------------------------------------
+# build: the only stage that ever sees devDependencies, the TypeScript source, or the esbuild
+# toolchain. None of this reaches the final image.
+# ---------------------------------------------------------------------------------------------
+FROM base AS build
+
+# A monorepo-wide `pnpm install` needs every workspace package's manifest to resolve the graph, and
+# the raw-TypeScript source esbuild reads directly (see apps/api/esbuild.config.mjs) -- so the whole
+# repository is copied here rather than hand-listing each package.json. `.dockerignore` keeps this
+# from ever including node_modules, build output, or a real .env file.
+COPY . .
+RUN pnpm install --frozen-lockfile
+
+RUN pnpm --filter @avenlyo/api build
+
+# devDependencies (esbuild, typescript, vitest, ...) are no longer needed once dist/ exists; pruning
+# them here, before anything crosses the stage boundary, is what keeps the runtime stage's
+# node_modules to just the 12 runtime npm packages apps/api/esbuild.config.mjs marks `external`.
+RUN pnpm prune --prod
+
+# ---------------------------------------------------------------------------------------------
+# runtime: fresh base image. Only apps/api's build output and pnpm's own node_modules layout for it
+# cross the stage boundary -- no repository source, no build toolchain.
+#
+# pnpm's workspace node_modules is two linked layers: apps/api/node_modules holds symlinks scoped to
+# this package's own dependencies, each pointing two directories up into the root node_modules/.pnpm
+# content store. Both layers have to be copied together, at the same relative paths they had in the
+# build stage, or the symlinks resolve to nothing.
+# ---------------------------------------------------------------------------------------------
+FROM base AS runtime
+
+RUN groupadd --system --gid 10001 avenlyo \
+    && useradd --system --uid 10001 --gid avenlyo --home-dir /home/avenlyo --create-home avenlyo
+
+COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/apps/api/package.json ./apps/api/package.json
+COPY --from=build /app/apps/api/node_modules ./apps/api/node_modules
+COPY --from=build /app/apps/api/dist ./apps/api/dist
+
+WORKDIR /app/apps/api
+
+# Chromium and every OS-level shared library it needs (libnss3, libatk*, libgtk*, libasound2, fonts,
+# ...) are installed with playwright-core's own `install-deps` in this exact stage, not copied from
+# elsewhere -- copying a browser binary across a different base image without also copying its
+# shared libraries is the standard way to ship a browser that cannot start.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN apt-get update \
+    && node node_modules/playwright-core/cli.js install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# The installed revision directory (e.g. /opt/ms-playwright/chromium-1234/chrome-linux/chrome) is an
+# implementation detail of this specific playwright-core version and must never be hardcoded
+# anywhere else in this image or in KNOWLEDGE_RENDERER_EXECUTABLE_PATH. It is resolved exactly once,
+# here, from the same package's own executablePath() logic, and exposed at a stable path instead.
+RUN mkdir -p /opt/avenlyo/chromium \
+    && node -e "const { chromium } = require('/app/apps/api/node_modules/playwright-core'); const fs = require('fs'); const target = chromium.executablePath(); if (!fs.existsSync(target)) { throw new Error('playwright-core install-deps did not produce ' + target); } fs.symlinkSync(target, '/opt/avenlyo/chromium/chrome');"
+
+ENV KNOWLEDGE_RENDERER_EXECUTABLE_PATH=/opt/avenlyo/chromium/chrome
+ENV NODE_ENV=production
+ENV API_HOST=0.0.0.0
+ENV API_PORT=4000
+
+# Browser files, the resolved symlink, and dist/ all belong to this image layer -- never a mounted
+# volume. Rolling back the image rolls back the matching browser revision with it, by construction.
+RUN chown -R avenlyo:avenlyo /app /home/avenlyo /opt/ms-playwright /opt/avenlyo
+
+USER avenlyo
+
+EXPOSE 4000
+
+# Liveness only -- see docs/deployment/hetzner-staging.md. Docker must never restart this container
+# merely because Supabase or a provider is temporarily unreachable; that is what /health/ready is
+# for, and it is checked separately during deployment verification, not by the container runtime.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:4000/health/live').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["node", "dist/server.js"]

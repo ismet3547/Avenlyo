@@ -1,0 +1,17 @@
+# Avenlyo Hetzner staging reverse proxy.
+#
+# Caddy is the only internet-facing process (ports 80/443). Both upstreams are reached by Docker's
+# internal DNS -- `web` and `api` are the compose service names in deploy/compose.yaml, not
+# 127.0.0.1, which from inside this container would loop back to Caddy itself.
+#
+# TLS is fully automatic: Caddy requests and renews certificates via ACME (Let's Encrypt) the
+# moment DNS for these two hostnames resolves to this host and 80/443 are reachable. No certificate
+# file is ever committed to this repository, and no Certbot or other separate ACME client is used.
+
+staging.avenlyo.com {
+	reverse_proxy web:3000
+}
+
+api-staging.avenlyo.com {
+	reverse_proxy api:4000
+}
