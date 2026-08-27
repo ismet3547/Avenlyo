@@ -598,7 +598,7 @@ update public.billing_accounts set billing_state = 'inactive' where stripe_custo
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.lives_ok(
-  $$ select * from public.get_web_chat_messages(repeat('3', 64), null) $$,
+  $$ select * from public.get_web_chat_messages(repeat('3', 64), repeat('7', 64), null) $$,
   'an existing authorized session keeps reading its history while billing is unavailable'
 );
 select extensions.ok((select pg_temp.error_matches($sql$

@@ -26,6 +26,8 @@ import { build } from 'esbuild';
 const external = [
   '@fastify/cors',
   '@fastify/formbody',
+  '@fastify/helmet',
+  '@fastify/rate-limit',
   '@supabase/supabase-js',
   'dotenv',
   'fastify',

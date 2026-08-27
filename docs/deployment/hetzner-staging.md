@@ -351,3 +351,100 @@ Everything this document describes as a procedure, not something this PR execute
 - `supabase db push` against the staging project.
 - The first `docker compose up`.
 - Verifying the Chromium sandbox on the real host, per the note above.
+
+## API edge security (Phase 19)
+
+Everything below concerns the Fastify API only. The Next.js application is a separate surface with
+its own headers and its own threat model, and none of this is imposed on it.
+
+### Trusted proxy, and why public forwarding headers are not believed
+
+Caddy is the only internet-facing process, and `deploy/compose.yaml` gives `api` an `expose:` entry
+rather than a `ports:` mapping, so nothing outside the compose network can open a socket to it. That
+topology is what makes a forwarding header meaningful at all.
+
+Fastify is configured with a `trustProxy` **predicate**, not `true` and not a hop count. It honours
+`X-Forwarded-For` only when the peer that presented it holds a private or loopback address -- which
+here means Caddy. A request arriving from a public address is treated as its own client no matter
+what headers it carries, so an internet caller can never nominate its own abuse-control identity, or
+somebody else's. `trustProxy: true` would have handed exactly that ability to anyone.
+
+A hop count was rejected for the same reason: it says "believe the Nth entry" without asking who
+wrote it, and keeps believing if the topology gains a hop or the API is ever exposed by mistake.
+
+`deploy/Caddyfile` independently replaces `X-Forwarded-For` and `X-Real-IP` with `{remote_host}`
+rather than appending to whatever arrived, so an injected chain does not survive the hop. Two
+controls, either sufficient on its own.
+
+**The defect this fixed.** Before Phase 19 `request.ip` was the socket peer, which behind Caddy is
+Caddy. Every visitor therefore collapsed to one identity, and the Phase 7 per-client web-chat quotas
+behaved as a single global quota shared across every tenant -- one abuser could exhaust it and lock
+out every widget. Addresses are now canonicalised before use (IPv4 whole, IPv6 to its `/64`, so one
+subscriber cannot rotate through a subnet to mint identities) and hashed, so no limiter store or log
+line holds an address.
+
+### Rate limiting: which layer answers which question
+
+| Route class | Edge (per process) | Durable (database) |
+|---|---|---|
+| Health / readiness | **exempt** | n/a |
+| Web-chat session create | 20/min | 10/min, authoritative |
+| Web-chat message | 60/min | 30/min, authoritative |
+| Web-chat poll | 120/min | 240/min, authoritative |
+| Authenticated API | 600/min | n/a |
+| Provider webhooks | **exempt** | n/a |
+
+The edge layer is a shield: it makes a flood cheap to refuse before it becomes database, AI or
+provider work. It is **per replica and in memory** -- run two API containers and a client gets two
+allowances. That is an accepted limitation, not an oversight. Anything that must be exactly enforced
+lives in the database, where `consume_messaging_rate_limit` counts correctly across every replica.
+
+Health is exempt because Docker treats a non-200 healthcheck as a dead container: letting public
+traffic consume a shared health allowance would let an outsider convince the orchestrator to restart
+a healthy process.
+
+Provider webhooks are exempt because Twilio, Stripe and OpenAI legitimately burst from a small pool
+of addresses, and a retry wave after an outage is precisely the shape a per-IP quota rejects.
+Dropping those is data loss with retry amplification behind it. Those routes are gated by something
+better than an IP guess -- a mandatory signature check, unchanged by this phase -- plus a body limit
+bounding what an unsigned request can cost.
+
+**HTTP 429 operationally** means the edge or the durable quota refused the request; it is not an
+error condition to page on. Each refusal writes one `warn` line carrying the policy name, normalised
+route, method, status, request id and a truncated hash of the limiter key -- never an address.
+
+### Request size policy
+
+Fastify's undocumented 1 MiB default is replaced with explicit ceilings: 256 KiB globally, 64 KiB
+for Twilio form callbacks, 16 KiB for a web-chat message (the contract is 2,000 characters), 4 KiB
+for a session request. Stripe (128 KiB) and OpenAI (64 KiB) keep the limits they already had --
+those were sized against real provider payloads and lowering them risks rejecting valid events.
+Oversized bodies are refused by the parser, before any handler, RPC or provider call runs, and no
+raw body is logged on failure.
+
+### Security headers
+
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, a
+`Permissions-Policy` denying camera/microphone/geolocation/payment, and a CSP that is a genuine API
+policy (`default-src 'none'`, `frame-ancestors 'none'`) rather than Helmet's document defaults --
+those permit scripts and inline styles, which would be both untrue and looser here. HSTS is emitted
+in production only, where the API is actually behind Caddy's TLS.
+
+Deliberately **not** enabled: `Cross-Origin-Resource-Policy` and `Cross-Origin-Embedder-Policy`.
+Helmet's default CORP is `same-origin`, which instructs browsers to block cross-origin reads of API
+responses -- exactly what the embedded chat widget does on every session, message and poll. Enabling
+them to be able to say "Helmet is on" would break Web Chat on every customer site. CORS remains the
+access control for this surface.
+
+### Intentionally deferred
+
+- **Redis-backed limiting.** Would make the edge layer global rather than per replica. Deferred, not
+  forgotten: it is a new stateful runtime dependency, staging runs one API container today, and the
+  durable layer already provides the correctness the edge only approximates.
+- **WAF / CDN.** Not a Phase 19 dependency. Volumetric absorption in front of Caddy is a separate
+  decision with its own operational surface.
+- **The web-chat `OPTIONS` handler is unreachable.** `@fastify/cors` answers the preflight first, so
+  the route's own iframe-origin check never runs. Not a vulnerability -- the plugin replies with the
+  configured origin rather than the caller's, so a foreign origin's request is still refused by the
+  browser, and the real `GET`/`POST` handlers enforce the iframe origin server-side regardless.
+  Recorded here because it is dead code that reads as if it were load-bearing.

@@ -5,6 +5,7 @@ import { isTwilioMessageSid, normalizeE164 } from '@avenlyo/messaging';
 
 import { env, isTwilioMessagingConfigured } from '../env.js';
 import { createServiceSupabaseClient } from '../lib/supabase.js';
+import { BODY_LIMITS } from '../security/edge-policy.js';
 import { validateTwilioSignature, type TwilioFormFields } from '../services/messaging/twilio.js';
 
 const inboundRoute = '/v1/webhooks/twilio/messaging/inbound' as const;
@@ -48,7 +49,7 @@ const statusPayload = z.object({
 });
 
 export const twilioMessagingWebhookRoutes: FastifyPluginCallback = (app, _options, done) => {
-  app.post(inboundRoute, async (request, reply) => {
+  app.post(inboundRoute, { bodyLimit: BODY_LIMITS.twilioForm }, async (request, reply) => {
     if (
       !isTwilioMessagingConfigured ||
       !env.TWILIO_AUTH_TOKEN ||
@@ -98,7 +99,7 @@ export const twilioMessagingWebhookRoutes: FastifyPluginCallback = (app, _option
     return reply.type('text/xml').send(twimlEmptyResponse);
   });
 
-  app.post(statusRoute, async (request, reply) => {
+  app.post(statusRoute, { bodyLimit: BODY_LIMITS.twilioForm }, async (request, reply) => {
     if (
       !isTwilioMessagingConfigured ||
       !env.TWILIO_AUTH_TOKEN ||

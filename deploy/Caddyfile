@@ -13,5 +13,21 @@ staging.avenlyo.com {
 }
 
 api-staging.avenlyo.com {
-	reverse_proxy api:4000
+	reverse_proxy api:4000 {
+		# Replace the forwarding chain, never append to it.
+		#
+		# Caddy's default is to append the connecting address to whatever X-Forwarded-For arrived,
+		# which means an internet client can prepend entries of its choosing and they survive the
+		# hop. The API decides a caller's abuse-control identity from this header, so an attacker
+		# writing its own value there is an attacker choosing its own rate-limit bucket -- or
+		# someone else's. `{remote_host}` is the address Caddy actually accepted the connection
+		# from, so anything the client wrote is discarded here, at the only hop that knows the
+		# truth.
+		#
+		# The API does not depend on this being correct: apps/api/src/security/client-identity.ts
+		# trusts a forwarding header only from an internal peer, so a spoofed chain would be
+		# ignored there too. Two independent controls, either sufficient.
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+	}
 }
