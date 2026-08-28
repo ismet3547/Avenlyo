@@ -6,9 +6,15 @@ Runbook for the production-like staging deployment.
 Caddy holds certificates for both hostnames, and Phase 18 was verified end to end on it — health,
 sandboxed Chromium, hosted migrations and the Agent Test path.
 
-**Phase 19 is not deployed.** Its code and its migration are on the branch and green in CI; nothing
-from this phase has been applied to the staging host or its hosted Supabase project. Everything
-below is the procedure a human runs.
+**Phase 19 is deployed.** It was merged, its migration was applied to the hosted staging project, and
+real staging verification passed on the host. The hosted staging schema is at **19**, the Phase 19
+rollback drill was performed and passed, and the runtime now running on the host is Phase-19
+tree-equivalent.
+
+**Phase 20 is not deployed.** Its code is on `feat/phase-20-production-readiness` and green in CI;
+nothing from Phase 20 has been applied to the staging host, and Phase 20 adds no migration — the
+schema contract stays at 19. Production does not exist at all; see `docs/deployment/production.md`.
+Everything below is the procedure a human runs.
 
 ```
                                 Internet
@@ -84,7 +90,17 @@ Never commit a real env file. Templates only:
 |---|---|---|
 | `deploy/env/web.env.example` | `/etc/avenlyo/web.env` | Runtime, server-only web config (includes `OPENAI_API_KEY`) |
 | `deploy/env/api.env.example` | `/etc/avenlyo/api.env` | Runtime, server-only API config |
-| `deploy/env/build.env.example` | `deploy/env/build.env` (on whichever machine runs `docker build`) | `NEXT_PUBLIC_*` build args |
+| `deploy/env/staging.public.env.example` | assembled into `deploy/env/build.env` | The non-secret staging deployment profile: identity, release, hostnames, public URLs, internal boundary |
+| `deploy/env/production.public.env.example` | assembled into `deploy/env/build.env` | The same contract, production values. Production is not deployed |
+| `deploy/env/build.env.example` | `deploy/env/build.env` (on whichever machine runs `docker build`) | The two `NEXT_PUBLIC_SUPABASE_*` build args that cannot be committed |
+
+`deploy/env/build.env` is the **one** `--env-file` every command in a deploy reads -- build, profile
+assertion, preflight and `up`. Assemble it as `build.env.example` documents:
+
+```bash
+cat deploy/env/staging.public.env.example deploy/env/build.env.example > deploy/env/build.env
+# then fill in the two NEXT_PUBLIC_SUPABASE_* values and AVENLYO_RELEASE
+```
 
 Permissions on the host: `0640`, owned by a dedicated `avenlyo` user/group -- never world-readable,
 never readable by any container that doesn't need them.
@@ -146,17 +162,33 @@ Staging runs `NODE_ENV=production` -- it exercises production runtime behavior, 
 project decision, not the more permissive `NODE_ENV=development` an earlier draft audit of this
 repository considered.
 
-Payments are intentionally not configured at this project stage. `apps/api/src/env.ts`'s production
-guard only rejects the specific combination `NODE_ENV=production` **and** `STRIPE_MODE=test`:
+Because staging runs `NODE_ENV=production`, staging also has to declare which deployment it is:
+
+```
+AVENLYO_DEPLOYMENT_ENV=staging
+```
+
+A production-mode container without it refuses to start. `NODE_ENV` cannot answer the question —
+production will run `NODE_ENV=production` too.
+
+Payments are intentionally not configured at this project stage. The Stripe rule keys off the
+deployment identity, not off `NODE_ENV`:
 
 ```ts
-if (env.NODE_ENV === 'production' && env.STRIPE_MODE === 'test') {
-  throw new Error('STRIPE_MODE must be live in production.');
+if (deploymentEnvironment === 'production' && env.STRIPE_MODE === 'test') {
+  throw new Error('STRIPE_MODE must be live in a production deployment.');
 }
 ```
 
-Leaving `STRIPE_MODE` and every `STRIPE_*` variable **entirely unset** in `api.env` avoids this
-guard without weakening it: the application's own capability system (`isStripeBillingConfigured` in
+So `STRIPE_MODE=test` is permitted on staging, which is the correct mode for staging. It was
+previously keyed on `NODE_ENV`, which rejected a test key on staging — harmless only because staging
+leaves Stripe unset, and wrong the moment staging configured it.
+
+The key/mode prefix rule is independent of environment and still applies everywhere:
+`STRIPE_MODE=test` requires an `sk_test_…` secret, `STRIPE_MODE=live` requires `sk_live_…`.
+
+Leaving `STRIPE_MODE` and every `STRIPE_*` variable **entirely unset** in `api.env` remains the
+current staging posture: the application's own capability system (`isStripeBillingConfigured` in
 `apps/api/src/env.ts`) already reports the billing boundary unconfigured when its secrets are
 absent, and every billing-dependent code path fails closed exactly as it is designed to. Do not set
 fake or placeholder Stripe credentials merely to make staging boot -- it already boots correctly
@@ -180,9 +212,9 @@ exact already-built image; never rebuild during rollback.**
 
 ## Migration deployment order
 
-**Never automated.** No container startup runs a migration, and none should. Phase 18's migrations
-were pushed to the linked staging project by hand, in this order. Phase 19's has not been. The order
-a human follows:
+**Never automated.** No container startup runs a migration, and none should. Phase 18's and Phase
+19's migrations were pushed to the linked staging project by hand, in this order. Phase 20 adds no
+migration. The order a human follows:
 
 1. CI green on the PR that needs the new schema.
 2. Take whatever backup/checkpoint the team's standard practice calls for.
@@ -194,9 +226,11 @@ a human follows:
 6. Verify API `GET /health/ready` reports `ready`.
 7. Verify web `GET /api/health` reports `ok`.
 
-Phase 19 adds one migration, `20260901000000_phase_19_web_chat_poll_bounds.sql`, and requires
+Phase 19 added one migration, `20260901000000_phase_19_web_chat_poll_bounds.sql`, and requires
 **schema version 19** (`REQUIRED_SCHEMA_VERSION` in `apps/api/src/observability/readiness.ts`). It is
-additive; no destructive down-migration exists or is needed.
+additive; no destructive down-migration exists or is needed. It has been applied to hosted staging,
+and the hosted staging schema is at 19. **Phase 20 adds no migration and does not move the
+contract.**
 
 The readiness contract is what makes this safe to sequence this way. `evaluateReadiness` accepts a
 schema version greater than or equal to what the running build requires, so a newer schema keeps an
@@ -266,7 +300,8 @@ itself, never a mounted volume, so the previous image's tag is also the previous
 
 A routine rollback switches **only the SHA-tagged images**. Keep the Phase 19 runtime exactly as it
 is: the `web_edge` / `api_edge` split, Caddy's internal `:8080` listener, and
-`AVENLYO_API_URL=http://caddy:8080` in `/etc/avenlyo/web.env`.
+`AVENLYO_API_URL=http://caddy:8080` — which, from Phase 20 onward, is declared in the deployment
+profile rather than in `/etc/avenlyo/web.env`.
 
 Do **not** check out the Phase 18 `deploy/compose.yaml` or `deploy/Caddyfile` while leaving the
 Phase 19 environment in place. Those two are a matched pair: the old compose file puts every service
@@ -396,13 +431,23 @@ above is live. What stays manual on every release, by design:
 - The `build` / `up -d --no-build` pair, with `AVENLYO_RELEASE` exported once.
 - Health verification afterwards: API `/health/ready`, web `/api/health`.
 
-Outstanding for **Phase 19** specifically, none of which has been done:
+**Phase 19 is complete on staging**: its migration was pushed to hosted staging, its images were
+built and deployed, the `AVENLYO_API_URL` cutover to `http://caddy:8080` was made, and the rollback
+drill passed.
 
-- Its migration has not been pushed to hosted staging.
-- Its images have not been built or deployed.
-- `/etc/avenlyo/web.env` on the host still carries `AVENLYO_API_URL=http://api:4000` and **must** be
-  updated to `http://caddy:8080` as part of that deploy, or the dashboard's appointment, billing and
-  integration server actions stop resolving once `web` and `api` no longer share a network.
+Outstanding for **Phase 20** specifically, none of which has been done:
+
+- Phase 20 has not been deployed to the staging host. No image has been built or deployed from it,
+  and no file under `/etc/avenlyo/` has been touched.
+- On the next deploy, `deploy/env/build.env` must be reassembled from
+  `deploy/env/staging.public.env.example` plus the two `NEXT_PUBLIC_SUPABASE_*` values, because the
+  profile now carries `AVENLYO_DEPLOYMENT_ENV` and `AVENLYO_API_URL`, and `docker compose config`
+  fails closed without them.
+- `/etc/avenlyo/api.env` must gain `AVENLYO_DEPLOYMENT_ENV=staging`, or the container refuses to
+  start under `NODE_ENV=production`. It must equal the profile's value.
+- Any `AVENLYO_API_URL` line left in `/etc/avenlyo/web.env` should be deleted: Compose's
+  `environment:` now supplies it from the profile, so the stale line is inert rather than dangerous,
+  but leaving it preserves the two-authority ambiguity Phase 20 removed.
 
 ## API edge security (Phase 19)
 

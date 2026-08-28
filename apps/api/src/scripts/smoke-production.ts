@@ -1,4 +1,5 @@
 import {
+  evaluateReleaseCheck,
   evaluateSmokeCheck,
   smokeTargets,
   summarizeSmokeResults,
@@ -39,6 +40,16 @@ async function main(): Promise<number> {
     webBaseUrl: process.env.AVENLYO_WEB_BASE_URL,
   })) {
     results.push(evaluateSmokeCheck(target.name, await probe(target.url)));
+  }
+
+  // Post-deploy the question is not only "is it up" but "is it the release we just shipped". A
+  // smoke that skips this passes just as happily when `up` silently kept the previous image.
+  // Asserted only when the operator states an expectation, so a run against an unknown deployment
+  // stays useful rather than failing on one it invented.
+  const expectedRelease = process.env.AVENLYO_EXPECTED_RELEASE;
+  if (expectedRelease) {
+    const live = await probe(`${apiBaseUrl.replace(/\/+$/, '')}/health/live`);
+    results.push(evaluateReleaseCheck(live, expectedRelease));
   }
 
   for (const result of results) {

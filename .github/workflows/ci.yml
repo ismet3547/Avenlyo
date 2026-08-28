@@ -250,20 +250,31 @@ jobs:
       # not merely present. /etc/avenlyo/api.env needs enough to satisfy apps/api/src/env.ts's
       # NODE_ENV=production HTTPS guard; /etc/avenlyo/web.env can stay empty -- every NEXT_PUBLIC_*
       # value web's runtime touches is already inlined into the built server bundle at this point,
-      # not read from the environment again at container start.
+      # not read from the environment again at container start. It also needs
+      # AVENLYO_DEPLOYMENT_ENV: NODE_ENV=production no longer identifies a deployment on its own,
+      # and this fixture is staging-shaped, so it declares staging exactly as the real host does.
       - name: Create placeholder env files
         run: |
-          cat > deploy/env/build.env <<'EOF'
-          NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
-          NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key
-          NEXT_PUBLIC_APP_URL=https://staging.avenlyo.com
-          NEXT_PUBLIC_AVENLYO_API_URL=https://api-staging.avenlyo.com
-          EOF
+          # Assembled exactly the way deploy/env/build.env.example documents: the source-controlled
+          # public profile, plus the two browser-facing Supabase values that cannot be committed.
+          # Not typed out here -- a fixture this job maintained separately is a fixture that can
+          # prove a profile no operator has.
+          {
+            cat deploy/env/staging.public.env.example
+            echo "NEXT_PUBLIC_SUPABASE_URL=https://ciplaceholderproject.supabase.co"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key"
+            echo "AVENLYO_RELEASE=${AVENLYO_RELEASE}"
+          } > deploy/env/build.env
           sudo mkdir -p /etc/avenlyo
           sudo touch /etc/avenlyo/web.env
+          # The server-only half of the same deployment. API_CORS_ORIGIN and WEB_CHAT_IFRAME_ORIGIN
+          # live here, with the secrets, and must name the profile's public web origin -- which is
+          # what the one-off preflight below actually checks across the two files.
           cat <<'EOF' | sudo tee /etc/avenlyo/api.env > /dev/null
           API_HOST=0.0.0.0
           API_PORT=4000
+          API_CORS_ORIGIN=https://staging.avenlyo.com
+          AVENLYO_DEPLOYMENT_ENV=staging
           NODE_ENV=production
           WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com
           EOF
@@ -318,6 +329,83 @@ jobs:
           docker image inspect "avenlyo-api:${AVENLYO_RELEASE}" > /dev/null
           echo "Confirmed avenlyo-web:${AVENLYO_RELEASE} and avenlyo-api:${AVENLYO_RELEASE} exist."
 
+      # THE OPERATOR PREFLIGHT PATH, exercised exactly as docs/production-runbook.md documents it.
+      #
+      # The runbook used to say `pnpm ops:preflight` on the host, which was not a real execution
+      # path: a host shell receives neither /etc/avenlyo/api.env nor the AVENLYO_PROFILE_* values
+      # Compose injects, and a deployment host is not guaranteed to hold a built dist/ at all. So
+      # preflight would either fail to start or validate a profile the deployment does not use --
+      # in both cases the gate that "must exit 0 before anything is applied" was fiction.
+      #
+      # The real path is a one-off container from the SAME compose file, the SAME --env-file and the
+      # SAME /etc/avenlyo/api.env the deployment runs with. `--no-deps` keeps web and caddy down;
+      # `--rm` leaves nothing behind; the command is read-only.
+      #
+      # `docker compose run` has no --no-build flag (checked against Compose v2's own --help), and
+      # it builds an image that is missing. The image-inspect above is therefore the guard: the tag
+      # provably exists before this runs, so nothing here can build. The digest comparison below
+      # proves that rather than assuming it.
+      - name: ops-preflight as a one-off container from the prebuilt SHA image
+        run: |
+          before="$(docker image inspect -f '{{.Id}}' "avenlyo-api:${AVENLYO_RELEASE}")"
+          set +e
+          output="$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            run --rm --no-deps -T api node dist/scripts/ops-preflight.js --json 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          after="$(docker image inspect -f '{{.Id}}' "avenlyo-api:${AVENLYO_RELEASE}")"
+          if [ "$before" != "$after" ]; then
+            echo "::error::The preflight run rebuilt avenlyo-api; it must use the prebuilt image."
+            exit 1
+          fi
+          # Exit 1, not 2: this placeholder deployment has no database, so the schema probe cannot
+          # answer and the fail-closed rule fails that one check. 2 would mean the configuration was
+          # uninterpretable, which is a different defect.
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected exit 1 from the placeholder preflight, got ${status}."
+            exit 1
+          fi
+          # And schema_compatible must be the ONLY failure. That is the positive half of this proof:
+          # every profile agreement -- identity match across the two files, CORS vs app origin, the
+          # Caddy host agreement, the internal boundary, published ports -- passed through the real
+          # container path, against the real profile, rather than in a unit test's fixture.
+          failed="$(echo "$output" | node -e "
+            let s=''; process.stdin.on('data', c => s += c).on('end', () => {
+              const start = s.indexOf('{');
+              process.stdout.write(JSON.parse(s.slice(start)).failed.join(','));
+            });
+          ")"
+          echo "Failed checks: ${failed}"
+          if [ "$failed" != "schema_compatible" ]; then
+            echo "::error::Expected only schema_compatible to fail, got: ${failed}"
+            exit 1
+          fi
+          echo "Confirmed: the documented operator preflight command runs the prebuilt SHA image,"
+          echo "sees the full deployment profile, and fails closed only on the unprovable schema."
+
+      # Negative proof for the two-file identity agreement. The profile says staging; make the
+      # container's own runtime identity say production and the same command must reject it -- the
+      # cross-wire neither file can detect alone.
+      - name: Profile and runtime deployment identity must agree
+        run: |
+          set +e
+          output="$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            run --rm --no-deps -T -e AVENLYO_DEPLOYMENT_ENV=production api \
+            node dist/scripts/ops-preflight.js --json 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::A container whose identity disagrees with its profile was accepted."
+            exit 1
+          fi
+          if ! echo "$output" | grep -q 'deployment_identity_agreement'; then
+            echo "::error::Expected a deployment_identity_agreement failure."
+            exit 1
+          fi
+          echo "Confirmed: a profile/runtime identity disagreement fails the preflight."
+
       # DEPLOY that exact already-built image -- --no-build is deliberate and load-bearing here: if
       # the previous step had failed to produce the tag, this fails loudly instead of silently
       # rebuilding something else. Caddy is deliberately not started: its Caddyfile names real public
@@ -331,7 +419,7 @@ jobs:
 
       - name: Assert the running api service's user is not root
         run: |
-          uid="$(docker compose -f deploy/compose.yaml exec -T api node -e 'process.stdout.write(String(process.getuid()))')"
+          uid="$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml exec -T api node -e 'process.stdout.write(String(process.getuid()))')"
           echo "api service UID: $uid"
           if [ "$uid" = "0" ]; then
             echo "::error::api service runs as UID 0 (root)."
@@ -353,15 +441,15 @@ jobs:
       # matching Docker's default capability set -- exactly what Playwright's own official documented
       # command runs, nothing added beyond it, no SYS_ADMIN.
       - name: Real sandboxed Chromium launch inside the running api service
-        run: docker compose -f deploy/compose.yaml exec -T api node dist/scripts/chromium-sandbox-smoke.js
+        run: docker compose --env-file deploy/env/build.env -f deploy/compose.yaml exec -T api node dist/scripts/chromium-sandbox-smoke.js
 
       - name: api service answers /health/live
         run: |
-          docker compose -f deploy/compose.yaml exec -T api node -e "fetch('http://127.0.0.1:4000/health/live').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
+          docker compose --env-file deploy/env/build.env -f deploy/compose.yaml exec -T api node -e "fetch('http://127.0.0.1:4000/health/live').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
 
       - name: web service answers /api/health
         run: |
-          docker compose -f deploy/compose.yaml exec -T web node -e "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
+          docker compose --env-file deploy/env/build.env -f deploy/compose.yaml exec -T web node -e "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
 
       # The API's trusted-proxy boundary is only as narrow as the set of containers that can open a
       # socket to it. deploy/compose.yaml puts web and api on separate bridge networks so that set is
@@ -372,7 +460,7 @@ jobs:
         run: |
           # A short timeout, because the expected outcome is a DNS failure or a refused connection --
           # not a slow response. Success here would mean the network separation is not real.
-          if docker compose -f deploy/compose.yaml exec -T web node -e "
+          if docker compose --env-file deploy/env/build.env -f deploy/compose.yaml exec -T web node -e "
             const t = setTimeout(() => { console.error('timed out'); process.exit(1); }, 5000);
             fetch('http://api:4000/health/live')
               .then(r => { clearTimeout(t); console.error('REACHED api:4000, status ' + r.status); process.exit(0); })
@@ -397,4 +485,191 @@ jobs:
 
       - name: Tear down
         if: always()
-        run: docker compose -f deploy/compose.yaml down -v
+        run: docker compose --env-file deploy/env/build.env -f deploy/compose.yaml down -v
+
+  deployment-contract:
+    name: Deployment contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Phase 20 proves that BOTH deployment targets render safely, using placeholder configuration
+    # only. No production DNS is resolved, no ACME request is made, no hosted database, Stripe,
+    # Twilio, OpenAI, Google or ezyVet endpoint is contacted, and no real secret exists in this job.
+    #
+    # It deliberately does not rebuild the images. The heavy container proof already runs once in
+    # "Hetzner staging container validation", and the two targets share one topology -- only public
+    # hostname data differs. Building the same Dockerfiles twice would double the slowest job in CI
+    # to re-prove something the render already shows, so this asserts the rendered configuration and
+    # leaves the real container proof where it is.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Profiles GENERATED FROM the source templates, never typed out here.
+      #
+      # This job used to carry its own hand-written profiles, and they had drifted: CI proved a
+      # richer profile (AVENLYO_DEPLOYMENT_ENV, AVENLYO_API_URL) than deploy/env/build.env.example
+      # -- the template an operator is told to copy -- actually contained. A green deployment
+      # contract therefore said nothing about the file a human would deploy from.
+      #
+      # The templates are now the profile. All CI adds is what genuinely cannot be committed: the
+      # two browser-facing Supabase values and the release SHA. Duplicate keys later in an env file
+      # win, which is how the empty AVENLYO_RELEASE= in the template is filled here.
+      #
+      # The real deploy/env/build.env is never read: it is untracked, exists only on a deployment
+      # host, and a CI job that read one would be a CI job that needs a secret.
+      - name: Assemble deployment profiles from the source templates
+        run: |
+          mkdir -p /tmp/profiles
+          for target in staging production; do
+            {
+              cat "deploy/env/${target}.public.env.example"
+              echo "NEXT_PUBLIC_SUPABASE_URL=https://ciplaceholderproject.supabase.co"
+              echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key"
+              echo "AVENLYO_RELEASE=${{ github.sha }}"
+              echo "AVENLYO_EXPECTED_SUPABASE_PROJECT_REF=ciplaceholderproject"
+            } > "/tmp/profiles/${target}.env"
+          done
+          sudo mkdir -p /etc/avenlyo
+          sudo touch /etc/avenlyo/web.env /etc/avenlyo/api.env
+          sudo chmod 0644 /etc/avenlyo/*.env
+
+      - name: Render and assert the staging profile
+        run: node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env
+
+      - name: Render and assert the production profile
+        run: node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/production.env
+
+      # Negative proof. The guard must catch an injected cross-wire rather than merely existing:
+      # a production profile carrying a staging hostname has to fail this job.
+      - name: Injected staging hostname must fail the production profile
+        run: |
+          sed 's#https://api.avenlyo.com#https://api-staging.avenlyo.com#' \
+            /tmp/profiles/production.env > /tmp/profiles/crosswired.env
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/crosswired.env; then
+            echo "::error::A production profile containing a staging hostname was accepted."
+            exit 1
+          fi
+          echo "Confirmed: the cross-wired production profile is rejected."
+
+      # The deployment identity must come from the profile, not from this workflow's argument.
+      # If the argument were the authority, a profile could claim to be staging -- or claim nothing
+      # -- and still be validated under production rules because the caller said so.
+      - name: Profile whose declared identity disagrees with the target must fail
+        run: |
+          sed 's#AVENLYO_DEPLOYMENT_ENV=production#AVENLYO_DEPLOYMENT_ENV=staging#' \
+            /tmp/profiles/production.env > /tmp/profiles/mislabelled.env
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/mislabelled.env; then
+            echo "::error::A profile declaring staging was accepted as production."
+            exit 1
+          fi
+          echo "Confirmed: a profile whose identity disagrees with the target is rejected."
+
+      - name: Deployed profile with no declared identity must fail
+        run: |
+          grep -v '^AVENLYO_DEPLOYMENT_ENV=' /tmp/profiles/production.env > /tmp/profiles/anonymous.env
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/anonymous.env; then
+            echo "::error::A deployed profile with no declared deployment identity was accepted."
+            exit 1
+          fi
+          echo "Confirmed: an undeclared deployment identity is rejected."
+
+      # Every required profile key, one at a time. A key that can go missing without failing is a
+      # key whose contract is not actually part of the deployment contract.
+      - name: Each required profile key must be individually required
+        run: |
+          for key in AVENLYO_API_HOST AVENLYO_API_URL AVENLYO_WEB_HOST \
+                     NEXT_PUBLIC_APP_URL NEXT_PUBLIC_AVENLYO_API_URL; do
+            grep -v "^${key}=" /tmp/profiles/staging.env > /tmp/profiles/incomplete.env
+            if ! diff -q /tmp/profiles/staging.env /tmp/profiles/incomplete.env > /dev/null; then
+              :
+            else
+              echo "::error::${key} was not present to remove; this proof is a no-op."
+              exit 1
+            fi
+            if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/incomplete.env; then
+              echo "::error::A deployment profile missing ${key} was accepted."
+              exit 1
+            fi
+            echo "Confirmed: a profile missing ${key} is rejected."
+          done
+
+      # The profile is the single authority for the web container's route to the API. Sever that
+      # wiring in the compose file and the contract must notice: otherwise preflight would certify
+      # http://caddy:8080 from the profile while the container ran something else.
+      - name: Web AVENLYO_API_URL must come from the profile, not a literal
+        run: |
+          sed -i 's#^      AVENLYO_API_URL: ${AVENLYO_API_URL.*#      AVENLYO_API_URL: http://api:4000#' \
+            deploy/compose.yaml
+          if git diff --quiet deploy/compose.yaml; then
+            echo "::error::The injection did not apply, so this negative test proves nothing."
+            exit 1
+          fi
+          if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env; then
+            echo "::error::A web service whose API URL ignores the deployment profile was accepted."
+            git checkout -- deploy/compose.yaml
+            exit 1
+          fi
+          git checkout -- deploy/compose.yaml
+          echo "Confirmed: the web service's AVENLYO_API_URL must come from the profile."
+
+      # The runtime identity lives in /etc/avenlyo/api.env; the profile's copy is mirrored under a
+      # separate name. If the profile were allowed to supply the runtime name, Compose's
+      # `environment:` precedence would let it overwrite the container's own identity silently.
+      - name: The profile must not override the api runtime deployment identity
+        run: |
+          sed -i 's#^      AVENLYO_PROFILE_DEPLOYMENT_ENV: #      AVENLYO_DEPLOYMENT_ENV: #' \
+            deploy/compose.yaml
+          if git diff --quiet deploy/compose.yaml; then
+            echo "::error::The injection did not apply, so this negative test proves nothing."
+            exit 1
+          fi
+          if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env; then
+            echo "::error::A profile able to overwrite the api runtime deployment identity was accepted."
+            git checkout -- deploy/compose.yaml
+            exit 1
+          fi
+          git checkout -- deploy/compose.yaml
+          echo "Confirmed: the profile cannot overwrite the api runtime deployment identity."
+
+      # Second negative proof, for the structural half. Phase 19's one-hop trust boundary is a
+      # property of the topology, not of any hostname, so put web back onto api_edge -- where it can
+      # reach the API directly and the trusted-proxy assumption stops holding -- and the assertion
+      # has to reject it. Edits the checkout, which is disposable, and restores it afterwards.
+      - name: Injected web/api network merge must fail the deployment contract
+        run: |
+          # Range-addressed rather than line-numbered, so an unrelated edit to compose.yaml cannot
+          # silently move the injection somewhere harmless and turn this proof into a no-op.
+          sed -i '/^  web:/,/^  api:/ s/^      - web_edge$/      - web_edge\n      - api_edge/' \
+            deploy/compose.yaml
+          if git diff --quiet deploy/compose.yaml; then
+            echo "::error::The injection did not apply, so this negative test proves nothing."
+            exit 1
+          fi
+          if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env; then
+            echo "::error::A topology placing web and api on one network was accepted."
+            git checkout -- deploy/compose.yaml
+            exit 1
+          fi
+          git checkout -- deploy/compose.yaml
+          echo "Confirmed: merging the web and api networks is rejected."
+
+      - name: Preflight ships in the production artifact and runs under plain node
+        run: |
+          pnpm --filter @avenlyo/api build
+          pnpm --filter @avenlyo/api smoke:ops-preflight

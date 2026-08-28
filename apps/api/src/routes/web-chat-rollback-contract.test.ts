@@ -22,7 +22,9 @@ import { describe, expect, it } from 'vitest';
 const MIGRATION = 'supabase/migrations/20260901000000_phase_19_web_chat_poll_bounds.sql';
 
 async function migration(): Promise<string> {
-  return readFile(MIGRATION, 'utf8');
+  // Normalised, because several assertions below span a line break. A Windows checkout gets CRLF,
+  // which would fail them for a reason that has nothing to do with the contract being guarded.
+  return (await readFile(MIGRATION, 'utf8')).replace(/\r\n/g, '\n');
 }
 
 describe('the Phase 18 poll call shape survives in the Phase 19 schema', () => {

@@ -43,7 +43,65 @@ async function waitForLive(deadline) {
   return false;
 }
 
+/**
+ * The deployment identity is fail-closed at startup, proven against the real artifact.
+ *
+ * A production-mode container that cannot say which deployment it is must refuse to serve rather
+ * than guess, because the wrong guess points production at a staging database or treats a test
+ * Stripe key as live. This is the regression that keeps the guard honest: the operator CLI gained a
+ * safe parse boundary so it can *report* this failure, and it would be easy to weaken the runtime
+ * the same way by accident. The server must still die.
+ */
+async function assertRefusesToStartWithoutDeploymentIdentity() {
+  const env = { ...process.env };
+  delete env.AVENLYO_DEPLOYMENT_ENV;
+
+  const child = spawn(process.execPath, ['dist/server.js'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...env,
+      API_HOST: '127.0.0.1',
+      API_PORT: String(PORT + 1),
+      NODE_ENV: 'production',
+      WEB_CHAT_IFRAME_ORIGIN: 'https://staging.avenlyo.com',
+    },
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+
+  let stderr = '';
+  child.stderr.on('data', (chunk) => (stderr += chunk.toString()));
+
+  const exit = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve({ code: null, timedOut: true });
+    }, BOOT_TIMEOUT_MS);
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      resolve({ code, timedOut: false });
+    });
+  });
+
+  if (exit.timedOut) {
+    fail('a production-mode process with no AVENLYO_DEPLOYMENT_ENV kept running; it must refuse.');
+    return;
+  }
+  if (exit.code === 0) {
+    fail('a production-mode process with no AVENLYO_DEPLOYMENT_ENV exited 0; it must fail closed.');
+    return;
+  }
+  if (!/AVENLYO_DEPLOYMENT_ENV/.test(stderr)) {
+    fail('the startup refusal did not name the setting an operator has to fix.');
+    return;
+  }
+  process.stdout.write(
+    'artifact-smoke: PASS -- production-mode startup refuses a missing deployment identity\n',
+  );
+}
+
 async function main() {
+  await assertRefusesToStartWithoutDeploymentIdentity();
+
   process.stdout.write(`artifact-smoke: starting dist/server.js on port ${PORT}\n`);
 
   const child = spawn(process.execPath, ['dist/server.js'], {
@@ -54,6 +112,11 @@ async function main() {
       // nothing configured, exactly what a first deploy to an environment with no secrets yet does.
       API_HOST: '127.0.0.1',
       API_PORT: String(PORT),
+      // Staging-shaped, not production-shaped: this smoke boots with no secret configured at all,
+      // which is what a first deploy to a fresh staging host looks like. NODE_ENV=production alone
+      // no longer identifies a deployment -- staging runs it too -- so the identity is explicit
+      // here for the same reason the runtime demands it.
+      AVENLYO_DEPLOYMENT_ENV: 'staging',
       NODE_ENV: 'production',
       // apps/api/src/env.ts enforces HTTPS here under NODE_ENV=production, same as the real
       // deployment will -- the value itself is unreachable in this smoke, only its scheme matters.
