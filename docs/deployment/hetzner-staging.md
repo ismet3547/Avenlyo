@@ -94,13 +94,50 @@ Never commit a real env file. Templates only:
 | `deploy/env/production.public.env.example` | assembled into `deploy/env/build.env` | The same contract, production values. Production is not deployed |
 | `deploy/env/build.env.example` | `deploy/env/build.env` (on whichever machine runs `docker build`) | The two `NEXT_PUBLIC_SUPABASE_*` build args that cannot be committed |
 
-`deploy/env/build.env` is the **one** `--env-file` every command in a deploy reads -- build, profile
-assertion, preflight and `up`. Assemble it as `build.env.example` documents:
+`deploy/env/build.env` is the **one** `--env-file` every command in a deploy reads -- build,
+validation, preflight and `up`. Assemble it as `build.env.example` documents:
 
 ```bash
 cat deploy/env/staging.public.env.example deploy/env/build.env.example > deploy/env/build.env
 # then fill in the two NEXT_PUBLIC_SUPABASE_* values and AVENLYO_RELEASE
 ```
+
+Never print it. To confirm a key is present, count the key and never echo the value:
+
+```bash
+grep -c '^AVENLYO_DEPLOYMENT_ENV=' deploy/env/build.env
+```
+
+## Known host facts that affect the procedure
+
+Two properties of this host are load-bearing for every deploy, and neither is obvious from the
+repository:
+
+**There is no Node runtime.** The host builds everything inside Docker. So
+`.github/scripts/assert-deployment-profile.mjs` is **not** a host step -- it is a CI and local source
+gate, discharged by a green CI run on the exact release SHA. The host-side validation is the Compose
+one, which needs only what the host already has:
+
+```bash
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config --quiet
+```
+
+It must exit 0 and print nothing. Never drop `--quiet`: plain `config` renders `env_file:` contents,
+which on this host means every secret in `/etc/avenlyo/api.env`.
+
+**`remote.origin.fetch` is narrowed** to `+refs/heads/infra/hetzner-staging:refs/remotes/origin/infra/hetzner-staging`.
+`origin/main` therefore does not exist locally and is never updated, so `git pull` cannot bring in a
+release from `main`. Fetch it explicitly:
+
+```bash
+git fetch origin main
+git checkout --detach <exact-40-char-sha>
+git rev-parse HEAD
+```
+
+This is recorded as operational debt rather than fixed in passing: widening the refspec is a
+persistent change to a live host's git configuration, and it belongs in a deliberate maintenance
+step, not in a deployment.
 
 Permissions on the host: `0640`, owned by a dedicated `avenlyo` user/group -- never world-readable,
 never readable by any container that doesn't need them.
@@ -448,6 +485,28 @@ Outstanding for **Phase 20** specifically, none of which has been done:
 - Any `AVENLYO_API_URL` line left in `/etc/avenlyo/web.env` should be deleted: Compose's
   `environment:` now supplies it from the profile, so the stale line is inert rather than dangerous,
   but leaving it preserves the two-authority ambiguity Phase 20 removed.
+
+Both env-file edits are one-time, non-secret, and key-level. The exact secret-safe procedure --
+how to test for the key without printing its value, and how to edit with a backup while preserving
+owner/group/mode -- is in `docs/production-runbook.md`, "Migrating a host off the pre-Phase-20 env
+layout". Confirm afterwards with counts, never with `cat`:
+
+```bash
+sudo grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env   # must be 1
+sudo grep -c '^AVENLYO_API_URL='        /etc/avenlyo/web.env   # must be 0
+```
+
+### Phase 21A attempt, 2026-08-28
+
+A first promotion attempt reached the pre-build gate and stopped there. It found a real defect in the
+merged Phase 20 release: the deployment assertion asked `docker compose config` where a value came
+from, but Compose resolves `env_file:` into the rendered environment, so a host whose `api.env`
+correctly declared `AVENLYO_DEPLOYMENT_ENV=staging` failed the gate. CI had not caught it because its
+fixture wrote an empty `api.env`.
+
+Nothing was deployed. The host was returned to its exact pre-attempt state, verified by checksum, and
+the running containers were never recreated. The three findings above -- no Node runtime, narrowed
+refspec, and the two env-file migrations -- were all first observed during that attempt.
 
 ## API edge security (Phase 19)
 

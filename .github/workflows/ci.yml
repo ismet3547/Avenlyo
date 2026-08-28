@@ -197,12 +197,21 @@ jobs:
           test -f apps/api/dist/server.js
           test -f apps/api/dist/scripts/chromium-sandbox-smoke.js
           test -f apps/api/dist/scripts/ops-status.js
+          test -f apps/api/dist/scripts/ops-preflight.js
+          # Every operator command the runbook names must be IN the artifact. smoke-production was
+          # not: its package script ran the TypeScript source through tsx, which the production image
+          # does not ship -- so the documented post-deploy check could not run where it was
+          # documented to run. This list is the guard against that recurring.
+          test -f apps/api/dist/scripts/smoke-production.js
 
       - name: Artifact boot smoke -- plain Node, /health/live, graceful SIGTERM
         run: pnpm --filter @avenlyo/api smoke:artifact
 
       - name: Operator status artifact smoke -- plain Node, bounded output, no secrets
         run: pnpm --filter @avenlyo/api smoke:ops-status
+
+      - name: Post-deploy smoke artifact smoke -- plain Node, release assertion, no secrets
+        run: pnpm --filter @avenlyo/api smoke:smoke-production
 
   hetzner-staging-containers:
     name: Hetzner staging container validation
@@ -218,13 +227,79 @@ jobs:
     # from Compose's own working directory. This version execs the sandbox smoke inside the actual
     # `docker compose up` service instead, so it does.
     env:
-      # The exact commit SHA under test -- matches how a real deploy tags images (see
+      # The exact CANDIDATE commit SHA under test -- matches how a real deploy tags images (see
       # docs/deployment/hetzner-staging.md's "Release identifier"), and is what "SHA-tagged images
-      # are produced" below actually checks for, not an assumed/synthetic tag.
-      AVENLYO_RELEASE: ${{ github.sha }}
+      # are produced" below actually checks for.
+      #
+      # Not `github.sha`. On a pull_request event that is GitHub's SYNTHETIC merge commit
+      # (refs/pull/N/merge), which exists only inside the run and names no commit on the branch. The
+      # release contract is that a tag names the candidate commit, so tagging images with a merge SHA
+      # nobody can check out makes the tag meaningless. `github.event.pull_request.head.sha` is the
+      # reviewed head; the fallback covers push events, where `github.sha` is already correct.
+      #
+      # actions/checkout still checks out the merge result, deliberately -- testing the merge is the
+      # useful thing. Only the release IDENTITY is corrected here, and the step below reports whether
+      # the merge tree and the head tree actually agree rather than assuming they do.
+      AVENLYO_RELEASE: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # Runs before anything is built or tagged: every image tag in this job is AVENLYO_RELEASE, so
+      # if the identity is wrong, everything downstream is labelled wrong.
+      - name: Release identity is the candidate commit, not a synthetic merge SHA
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          echo "event            : ${EVENT_NAME}"
+          echo "AVENLYO_RELEASE  : ${AVENLYO_RELEASE}"
+          echo "github.sha       : ${WORKFLOW_SHA}"
+          echo "pr head sha      : ${PR_HEAD_SHA:-<not a pull_request>}"
+
+          # 1. Shape. The deployment contract requires a full 40-character lowercase SHA; anything
+          #    else would make the SHA-tagged image model meaningless.
+          if ! printf '%s' "${AVENLYO_RELEASE}" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::AVENLYO_RELEASE is not a 40-character lowercase hex SHA."
+            exit 1
+          fi
+
+          # 2. On a pull_request it must be the reviewed head, never the synthetic merge commit.
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            if [ "${AVENLYO_RELEASE}" != "${PR_HEAD_SHA}" ]; then
+              echo "::error::AVENLYO_RELEASE is not the pull request head SHA."
+              exit 1
+            fi
+            if [ "${AVENLYO_RELEASE}" = "${WORKFLOW_SHA}" ]; then
+              echo "::notice::github.sha equals the head SHA for this event; no merge commit was created."
+            else
+              echo "Confirmed: release identity is the PR head, not github.sha (${WORKFLOW_SHA})."
+            fi
+          fi
+
+          # 3. Tree compatibility, REPORTED rather than assumed. actions/checkout deliberately checks
+          #    out the merge result, which is the useful thing to test. When the branch is up to date
+          #    with its base the merge tree is byte-identical to the head tree, and the images this
+          #    job builds are exactly the candidate commit's bytes. When the base has moved ahead they
+          #    legitimately differ: the images are then the merge preview, tagged with the candidate
+          #    SHA. That is not a deployment integrity risk here -- these images are ephemeral, never
+          #    pushed to a registry and torn down with the job -- but it is worth saying out loud
+          #    rather than leaving to be assumed, so it is printed either way.
+          git fetch --no-tags --depth=1 origin "${AVENLYO_RELEASE}" 2>/dev/null || true
+          checked_out_tree=$(git rev-parse 'HEAD^{tree}')
+          if candidate_tree=$(git rev-parse "${AVENLYO_RELEASE}^{tree}" 2>/dev/null); then
+            echo "checked-out tree : ${checked_out_tree}"
+            echo "candidate tree   : ${candidate_tree}"
+            if [ "${checked_out_tree}" = "${candidate_tree}" ]; then
+              echo "Tree comparison  : IDENTICAL -- the built images are the candidate commit's bytes."
+            else
+              echo "::notice::Merge tree differs from the candidate head tree; the base has moved ahead."
+              echo "Tree comparison  : DIFFERENT -- images are the merge preview, tagged with the head SHA."
+            fi
+          else
+            echo "::notice::Candidate commit object unavailable; tree comparison skipped."
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -451,6 +526,142 @@ jobs:
         run: |
           docker compose --env-file deploy/env/build.env -f deploy/compose.yaml exec -T web node -e "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
 
+      # ---------------------------------------------------------------------------------------
+      # The documented post-deploy operator commands, run the way the runbook says to run them.
+      # ---------------------------------------------------------------------------------------
+      # Neither needs Node or pnpm on the host, which is the point: the real Hetzner staging host has
+      # neither, and a documented step an operator cannot run is not a procedure. Both scripts ship
+      # inside the exact SHA-tagged image.
+
+      # `exec`, not `run`: ops-status describes the deployment that is actually running, so it has to
+      # execute inside it. Supabase is unconfigured in this job, so it exits 1 having reported that
+      # honestly -- what is proven here is the invocation shape and that the command exists in the
+      # image and runs under plain node, not a healthy platform.
+      - name: ops-status runs inside the running api container (no host Node)
+        run: |
+          set +e
+          out=$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            exec -T api node dist/scripts/ops-status.js 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected exit 1 from an unconfigured ops-status, got ${status}."
+            exit 1
+          fi
+          if echo "$out" | grep -qE '\n\s+at .+:[0-9]+:[0-9]+'; then
+            echo "::error::ops-status printed a stack trace."
+            exit 1
+          fi
+          echo "Confirmed: dist/scripts/ops-status.js runs in the deployed container under plain node."
+
+      # `run`, not `exec`: the one-off container is created from the image the profile INTENDED, so
+      # its AVENLYO_RELEASE is the expectation while the probes hit whatever is actually serving. If
+      # `up` had silently kept a previous image, api_release would fail. Under `exec` both values
+      # would come from the same process and the check could never fail.
+      #
+      # TWO checks are expected to FAIL here, and both are properties of this CI fixture rather than
+      # of the smoke. Asserting the exact expected set -- rather than only that some checks passed --
+      # is what keeps this honest: an unexpected failure is a real regression, and an unexpected pass
+      # would mean the fixture stopped reproducing the conditions it claims to.
+      #
+      #   api_ready  FAIL http_503
+      #     This placeholder deployment has NO DATABASE. /health/ready reports 503 precisely because
+      #     it is doing its job. The ops-preflight step earlier in this same job asserts the mirror
+      #     image of this fact -- that schema_compatible is its ONE failure, for the same missing
+      #     database. Expecting api_ready to pass here contradicted that, and it is what made this
+      #     job fail deterministically.
+      #
+      #   web_live   FAIL http_404
+      #     Caddy is deliberately not started in this job: its Caddyfile names real public hostnames
+      #     and bringing it up would attempt a real ACME request from a GitHub-owned IP that DNS does
+      #     not point at. So the public hostnames are unreachable and the probe target is overridden
+      #     to the internal API address, which does not serve /api/health.
+      #
+      # In a real staging or production deployment api_ready is REQUIRED, and smoke-production is not
+      # relaxed in any way to accommodate this fixture.
+      - name: smoke-production runs from the exact release image (no host Node)
+        run: |
+          set +e
+          out=$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            run --rm --no-deps -T \
+            -e AVENLYO_API_BASE_URL=http://api:4000 \
+            -e AVENLYO_PROFILE_APP_URL=http://api:4000 \
+            api node dist/scripts/smoke-production.js 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Expected a non-zero exit for this fixture's two known limitations."
+            exit 1
+          fi
+
+          # What must pass: the artifact ran from the built image, reached the deployment over the
+          # network, and confirmed the deployed release is the one the profile intended.
+          for expected in "pass  api_live" "pass  api_release"; do
+            if ! echo "$out" | grep -q "$expected"; then
+              echo "::error::Expected '${expected}' in the smoke report."
+              exit 1
+            fi
+          done
+
+          # What must fail, for exactly the documented fixture reasons -- including the HTTP detail,
+          # so a different cause cannot quietly satisfy the same assertion.
+          for expected in "FAIL  api_ready  http_503" "FAIL  web_live  http_404"; do
+            if ! echo "$out" | grep -q "$expected"; then
+              echo "::error::Expected '${expected}' -- this fixture has no database and no Caddy."
+              exit 1
+            fi
+          done
+
+          # And nothing else may fail. Two known limitations, no more.
+          failed=$(echo "$out" | grep -c '^FAIL  ' || true)
+          if [ "$failed" -ne 2 ]; then
+            echo "::error::Expected exactly 2 failing checks (api_ready, web_live), saw ${failed}."
+            exit 1
+          fi
+          echo "Confirmed: the post-deploy smoke runs from the release image, probes over the network,"
+          echo "asserts the deployed release, and fails only on this fixture's missing DB and Caddy."
+
+      # And the release assertion must be able to fail, or it is decoration.
+      #
+      # Identical to the step above except for the expected release, so the difference in outcome is
+      # attributable to that one variable: the same two fixture limitations fail, and api_release
+      # becomes a THIRD failure. This is the case that catches `up` having silently kept a previous
+      # image -- the failure nobody notices because everything else is green.
+      - name: smoke-production rejects a deployment serving a different release
+        run: |
+          set +e
+          out=$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            run --rm --no-deps -T \
+            -e AVENLYO_API_BASE_URL=http://api:4000 \
+            -e AVENLYO_PROFILE_APP_URL=http://api:4000 \
+            -e AVENLYO_EXPECTED_RELEASE=1111111111111111111111111111111111111111 \
+            api node dist/scripts/smoke-production.js 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::The smoke accepted a deployment serving a different release."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "FAIL  api_release  release_mismatch"; then
+            echo "::error::Expected api_release to be reported FAIL with release_mismatch."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "pass  api_live"; then
+            echo "::error::api_live should still pass; only the release expectation changed."
+            exit 1
+          fi
+          # Exactly one more failure than the baseline: the two fixture limitations plus this one.
+          failed=$(echo "$out" | grep -c '^FAIL  ' || true)
+          if [ "$failed" -ne 3 ]; then
+            echo "::error::Expected exactly 3 failing checks (api_ready, web_live, api_release), saw ${failed}."
+            exit 1
+          fi
+          echo "Confirmed: a wrong expected release adds api_release to the failures, and nothing else changes."
+
       # The API's trusted-proxy boundary is only as narrow as the set of containers that can open a
       # socket to it. deploy/compose.yaml puts web and api on separate bridge networks so that set is
       # exactly {caddy}; these two steps prove that separation on a real Docker daemon rather than by
@@ -541,13 +752,56 @@ jobs:
               cat "deploy/env/${target}.public.env.example"
               echo "NEXT_PUBLIC_SUPABASE_URL=https://ciplaceholderproject.supabase.co"
               echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key"
-              echo "AVENLYO_RELEASE=${{ github.sha }}"
+              # The candidate commit, not the synthetic pull_request merge SHA -- see the
+              # AVENLYO_RELEASE comment on the container job. The assertion script requires an exact
+              # 40-character SHA, so this profile has to carry a real one.
+              echo "AVENLYO_RELEASE=${{ github.event.pull_request.head.sha || github.sha }}"
               echo "AVENLYO_EXPECTED_SUPABASE_PROJECT_REF=ciplaceholderproject"
             } > "/tmp/profiles/${target}.env"
           done
+          # A REALISTIC server-only env file, not an empty one.
+          #
+          # This job used to `touch` an empty /etc/avenlyo/api.env, and that emptiness hid a real
+          # defect for a whole release: `docker compose config` resolves `env_file:` into the
+          # rendered service environment, so on a real host every assignment here appears in the
+          # render. An assertion that asked the RENDER where a value came from therefore failed on a
+          # correctly configured host -- and passed in CI, because there was nothing to merge.
+          #
+          # Phase 21A hit exactly that on the live staging host. The fixture now carries the
+          # non-secret runtime values a real api.env carries, so the assertion is exercised against
+          # the shape that actually broke. Placeholders only; no secret exists in this job.
           sudo mkdir -p /etc/avenlyo
-          sudo touch /etc/avenlyo/web.env /etc/avenlyo/api.env
+          sudo touch /etc/avenlyo/web.env
+          cat <<'EOF' | sudo tee /etc/avenlyo/api.env > /dev/null
+          API_HOST=0.0.0.0
+          API_PORT=4000
+          AVENLYO_DEPLOYMENT_ENV=staging
+          NODE_ENV=production
+          API_CORS_ORIGIN=https://staging.avenlyo.com
+          WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com
+          EOF
           sudo chmod 0644 /etc/avenlyo/*.env
+
+      # Pins the blind spot closed. The fixture is only useful if it actually reproduces the merge,
+      # so this proves the merge happens -- and therefore that the previous implementation, which
+      # read the rendered environment to decide provenance, would have failed here.
+      - name: Prove the fixture reproduces env_file merging (the old check would fail)
+        run: |
+          docker compose --env-file /tmp/profiles/staging.env -f deploy/compose.yaml config \
+            > /tmp/rendered.yaml
+          api_block=$(awk '/^  api:/,/^  caddy:/' /tmp/rendered.yaml)
+          if ! echo "$api_block" | grep -qE '^      AVENLYO_DEPLOYMENT_ENV:'; then
+            echo "::error::env_file did not merge into the render; this fixture no longer reproduces"
+            echo "::error::the real host shape, so the regression it guards is not being tested."
+            exit 1
+          fi
+          echo "Confirmed: /etc/avenlyo/api.env is merged into the rendered api environment."
+          echo "The pre-fix assertion read that merged view and would have failed here."
+          # Only key names are printed -- never the rendered document, which on a real host
+          # contains every value from /etc/avenlyo/api.env.
+          echo "Merged api environment keys:"
+          echo "$api_block" | grep -oE '^      [A-Z0-9_]+:' | tr -d ' :' | sort | sed 's/^/  /'
+          rm -f /tmp/rendered.yaml
 
       - name: Render and assert the staging profile
         run: node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env
@@ -631,6 +885,10 @@ jobs:
       # The runtime identity lives in /etc/avenlyo/api.env; the profile's copy is mirrored under a
       # separate name. If the profile were allowed to supply the runtime name, Compose's
       # `environment:` precedence would let it overwrite the container's own identity silently.
+      #
+      # Asserted against the compose SOURCE, so it stays true regardless of what api.env merges into
+      # the render -- and these injections now run with a realistic non-empty api.env, which is what
+      # makes them meaningful rather than vacuous.
       - name: The profile must not override the api runtime deployment identity
         run: |
           sed -i 's#^      AVENLYO_PROFILE_DEPLOYMENT_ENV: #      AVENLYO_DEPLOYMENT_ENV: #' \
@@ -646,6 +904,74 @@ jobs:
           fi
           git checkout -- deploy/compose.yaml
           echo "Confirmed: the profile cannot overwrite the api runtime deployment identity."
+
+      - name: The profile identity mirror must exist and come from the profile
+        run: |
+          for injection in \
+            '/^      AVENLYO_PROFILE_DEPLOYMENT_ENV:/d' \
+            's#^      AVENLYO_PROFILE_DEPLOYMENT_ENV: .*#      AVENLYO_PROFILE_DEPLOYMENT_ENV: staging#'; do
+            sed -i "$injection" deploy/compose.yaml
+            if git diff --quiet deploy/compose.yaml; then
+              echo "::error::Injection '$injection' did not apply; this proves nothing."
+              exit 1
+            fi
+            if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env; then
+              echo "::error::Accepted a compose file with injection: $injection"
+              git checkout -- deploy/compose.yaml
+              exit 1
+            fi
+            git checkout -- deploy/compose.yaml
+            echo "Confirmed rejected: $injection"
+          done
+
+      # The production profile must actually override the Caddyfile's staging substitution defaults.
+      # Checked on the rendered keys the profile feeds -- not by scanning the whole document, which
+      # would also be reading api.env's merged values.
+      - name: A hardcoded Caddy hostname must fail the production profile
+        run: |
+          sed -i 's#^      AVENLYO_WEB_HOST: ${AVENLYO_WEB_HOST.*#      AVENLYO_WEB_HOST: staging.avenlyo.com#' \
+            deploy/compose.yaml
+          if git diff --quiet deploy/compose.yaml; then
+            echo "::error::The injection did not apply, so this negative test proves nothing."
+            exit 1
+          fi
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/production.env; then
+            echo "::error::A production profile whose Caddy hostname ignores it was accepted."
+            git checkout -- deploy/compose.yaml
+            exit 1
+          fi
+          git checkout -- deploy/compose.yaml
+          echo "Confirmed: Caddy's public hostnames must come from the deployment profile."
+
+      # The command docs/production-runbook.md tells an operator to run on the deployment host,
+      # exercised exactly as documented. It is the host-side gate precisely because it needs only
+      # Docker and Compose -- the staging host has no Node runtime, so the assertion script above is
+      # a CI/local source gate and never a host step.
+      #
+      # `--quiet` is load-bearing: plain `config` prints every value merged from
+      # /etc/avenlyo/api.env, which on a real host means the service-role key and every provider
+      # secret. The documented operator path must never put that on a terminal or in a ticket.
+      - name: Documented host-side validation command (no Node runtime required)
+        run: |
+          for target in staging production; do
+            docker compose --env-file "/tmp/profiles/${target}.env" -f deploy/compose.yaml config --quiet
+            echo "config --quiet exit=$? for ${target}"
+          done
+          out=$(docker compose --env-file /tmp/profiles/staging.env -f deploy/compose.yaml config --quiet 2>&1)
+          if [ -n "$out" ]; then
+            echo "::error::config --quiet printed output; the documented operator path must stay silent."
+            exit 1
+          fi
+          echo "Confirmed: the documented host validation is silent and therefore secret-safe."
+
+      - name: The documented host command must reject a broken profile
+        run: |
+          grep -v '^AVENLYO_API_URL=' /tmp/profiles/staging.env > /tmp/profiles/nourl.env
+          if docker compose --env-file /tmp/profiles/nourl.env -f deploy/compose.yaml config --quiet 2>/dev/null; then
+            echo "::error::config --quiet accepted a profile missing a required substitution."
+            exit 1
+          fi
+          echo "Confirmed: the required-substitution contract fails closed on the host path too."
 
       # Second negative proof, for the structural half. Phase 19's one-hop trust boundary is a
       # property of the topology, not of any hostname, so put web back onto api_edge -- where it can

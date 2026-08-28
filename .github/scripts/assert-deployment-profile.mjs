@@ -143,6 +143,62 @@ const withoutComments = (text) =>
 const STAGING_HOSTS = ['staging.avenlyo.com', 'api-staging.avenlyo.com'];
 
 // ---------------------------------------------------------------------------------------------
+// SOURCE reading -- for the properties that are about PROVENANCE, not final values.
+// ---------------------------------------------------------------------------------------------
+/**
+ * `docker compose config` is not a source document.
+ *
+ * Compose resolves `env_file:` into the rendered service `environment:` map, so on a real host every
+ * assignment in /etc/avenlyo/api.env appears there and `env_file:` disappears from the output. A
+ * rendered environment therefore cannot answer "where did this value come from" -- it only answers
+ * "what is the final value".
+ *
+ * That distinction was the Phase 21A staging failure. A check asking whether the profile overrides
+ * the API's runtime deployment identity was written against the render, so a correctly configured
+ * host -- one whose api.env declares AVENLYO_DEPLOYMENT_ENV=staging, exactly as Phase 20 requires --
+ * failed the gate. CI never caught it because its fixture wrote an EMPTY api.env, and with nothing to
+ * merge the check passed vacuously.
+ *
+ * So provenance is asserted against deploy/compose.yaml itself, and the render is used only for
+ * properties that genuinely concern final rendered values (ports, networks, image tags, hardening).
+ *
+ * Newlines are normalised because a CRLF checkout would otherwise leave a trailing \r on every key
+ * and silently match nothing.
+ */
+const composeSource = readFileSync('deploy/compose.yaml', 'utf8').replace(/\r\n/g, '\n');
+
+/** The lines belonging to one service in the SOURCE file, up to the next two-space key. */
+const sourceServiceLines = (name) => {
+  const lines = composeSource.split('\n');
+  const start = lines.indexOf(`  ${name}:`);
+  if (start === -1) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^ {2}\S/.test(line));
+  return end === -1 ? rest : rest.slice(0, end);
+};
+
+/**
+ * The service's own `environment:` entries in the SOURCE file, as `{key: rawValue}`.
+ *
+ * Blank lines and comment lines inside the block are skipped rather than treated as its end -- the
+ * block in deploy/compose.yaml carries a long explanatory comment between entries, and a parser that
+ * stopped at the first comment would report the block as nearly empty and pass everything.
+ */
+const sourceEnvironment = (name) => {
+  const lines = sourceServiceLines(name);
+  const header = lines.indexOf('    environment:');
+  if (header === -1) return {};
+  const entries = {};
+  for (const line of lines.slice(header + 1)) {
+    if (line.trim() === '' || /^ {6,}#/.test(line)) continue;
+    if (!line.startsWith('      ')) break;
+    const match = line.match(/^ {6}([A-Za-z_][A-Za-z0-9_]*):\s?(.*)$/);
+    if (match) entries[match[1]] = match[2].trim();
+  }
+  return entries;
+};
+
+// ---------------------------------------------------------------------------------------------
 // Phase 20: environment isolation
 // ---------------------------------------------------------------------------------------------
 if (target === 'production') {
@@ -157,16 +213,6 @@ if (target === 'production') {
       `production ${key} must use https`,
     );
   }
-  // The rendered compose must not carry a staging host either -- the Caddy defaults are staging, so
-  // this is what proves the profile actually overrode them.
-  for (const host of STAGING_HOSTS) {
-    check(!rendered.includes(host), `rendered production compose still contains ${host}`);
-  }
-}
-
-if (target === 'staging') {
-  check(rendered.includes('staging.avenlyo.com'), 'staging profile lost its web hostname');
-  check(rendered.includes('api-staging.avenlyo.com'), 'staging profile lost its API hostname');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -210,23 +256,98 @@ const envOf = (service, key) => {
   return match ? match[1].trim().replace(/^["']|["']$/g, '') : null;
 };
 
-// The profile is the single authority for the values it declares. These two assertions are what
-// make that literally true of the running containers rather than only of the preflight's opinion:
-// the web container's own AVENLYO_API_URL must be the profile's, and the API must receive the
-// profile's declared identity to compare against its own.
+// ---------------------------------------------------------------------------------------------
+// The profile actually reached the deployment -- asserted on the specific rendered keys the
+// profile feeds, never by scanning the whole document.
+// ---------------------------------------------------------------------------------------------
+// A whole-document scan cannot be used for this: `env_file:` is merged into the render, so a host
+// whose api.env legitimately carries API_CORS_ORIGIN=https://staging.avenlyo.com would make a
+// production profile look cross-wired. These are the keys Compose fills FROM the profile, so they
+// are the keys that answer the question.
+const PROFILE_FED_RENDERED_KEYS = [
+  ['caddy', 'AVENLYO_WEB_HOST'],
+  ['caddy', 'AVENLYO_API_HOST'],
+  ['api', 'AVENLYO_PROFILE_APP_URL'],
+  ['api', 'AVENLYO_PROFILE_PUBLIC_API_URL'],
+  ['api', 'AVENLYO_PROFILE_WEB_HOST'],
+  ['api', 'AVENLYO_PROFILE_API_HOST'],
+];
+
+if (target === 'production') {
+  // The Caddyfile's substitution defaults are the staging names, so this is what proves the
+  // production profile actually overrode them rather than falling through to the default.
+  for (const [service, key] of PROFILE_FED_RENDERED_KEYS) {
+    const value = envOf(service, key) ?? '';
+    for (const host of STAGING_HOSTS) {
+      check(!value.includes(host), `rendered ${service}.${key} still carries the staging host ${host}`);
+    }
+  }
+}
+
+if (target === 'staging') {
+  check(
+    envOf('caddy', 'AVENLYO_WEB_HOST') === profile.AVENLYO_WEB_HOST,
+    "Caddy's rendered web hostname must come from the deployment profile",
+  );
+  check(
+    envOf('caddy', 'AVENLYO_API_HOST') === profile.AVENLYO_API_HOST,
+    "Caddy's rendered API hostname must come from the deployment profile",
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Provenance: asserted against the SOURCE compose file, never the render.
+// ---------------------------------------------------------------------------------------------
+const apiSourceEnv = sourceEnvironment('api');
+const webSourceEnv = sourceEnvironment('web');
+
+// Guards the parser itself. If the block were mis-parsed as empty, every absence check below would
+// pass while proving nothing -- which is the failure mode this whole section exists to avoid.
+check(
+  Object.keys(apiSourceEnv).length >= 6,
+  `the api source environment block parsed as ${Object.keys(apiSourceEnv).length} entries; the parser is wrong`,
+);
+check(
+  Object.keys(webSourceEnv).length >= 2,
+  `the web source environment block parsed as ${Object.keys(webSourceEnv).length} entries; the parser is wrong`,
+);
+
+// The runtime deployment identity must keep coming from /etc/avenlyo/api.env. Compose's
+// `environment:` overrides `env_file:`, so declaring this key here would let the deployment profile
+// silently replace the container's own identity -- with an empty string whenever the profile omitted
+// it, which does not merely mis-identify the deployment, it stops the container booting.
+check(
+  !('AVENLYO_DEPLOYMENT_ENV' in apiSourceEnv),
+  "deploy/compose.yaml's api environment: must not declare AVENLYO_DEPLOYMENT_ENV; the runtime " +
+    'identity belongs to /etc/avenlyo/api.env',
+);
+
+// The profile's own identity is mirrored under a distinct name instead, with required substitution,
+// so preflight can compare the two files rather than let one overwrite the other.
+check(
+  /^\$\{AVENLYO_DEPLOYMENT_ENV:\?/.test(apiSourceEnv.AVENLYO_PROFILE_DEPLOYMENT_ENV ?? ''),
+  'the api service must mirror the profile identity as ' +
+    'AVENLYO_PROFILE_DEPLOYMENT_ENV: ${AVENLYO_DEPLOYMENT_ENV:?...}',
+);
+
+// Same provenance question for the internal boundary. The rendered equality check below cannot
+// answer it: `environment:` wins over `env_file:`, so a host still carrying a stale
+// AVENLYO_API_URL in /etc/avenlyo/web.env would render the profile's value either way.
+check(
+  /^\$\{AVENLYO_API_URL:\?/.test(webSourceEnv.AVENLYO_API_URL ?? ''),
+  "the web service's AVENLYO_API_URL must be sourced from the deployment profile as " +
+    '${AVENLYO_API_URL:?...}',
+);
+
+// And the final rendered value must be the profile's, which is a statement about the value rather
+// than about where the declaration lives -- so this one legitimately reads the render.
 check(
   envOf('web', 'AVENLYO_API_URL') === profile.AVENLYO_API_URL,
-  "the web service's runtime AVENLYO_API_URL must come from the deployment profile",
+  "the web service's rendered AVENLYO_API_URL must equal the deployment profile's value",
 );
 check(
   envOf('api', 'AVENLYO_PROFILE_DEPLOYMENT_ENV') === declared,
   "the api service must receive the profile's declared deployment identity",
-);
-// And it must NOT receive the runtime identity from the profile: `environment:` overrides
-// `env_file:`, so that would let a profile silently replace the identity api.env supplies.
-check(
-  envOf('api', 'AVENLYO_DEPLOYMENT_ENV') === null,
-  'the profile must not override the api runtime AVENLYO_DEPLOYMENT_ENV from api.env',
 );
 
 const published = [...rendered.matchAll(/published: "(\d+)"/g)].map((match) => match[1]);
@@ -241,7 +362,18 @@ for (const port of ['80', '443']) {
 check(/init: true/.test(serviceBlock('api')), 'api lost init: true');
 check(/no-new-privileges:true/.test(rendered), 'api lost no-new-privileges');
 check(/chromium-seccomp\.json/.test(rendered), 'api lost the Chromium seccomp profile');
-check(!/SYS_ADMIN/i.test(withoutComments(rendered)), 'SYS_ADMIN must never be added');
+// Asserted on the source, plus on the rendered capability lists specifically. A whole-render scan
+// would be reading merged env_file values too -- the same source/render confusion fixed above, and
+// a capability grant is a source decision in any case.
+check(!/SYS_ADMIN/i.test(withoutComments(composeSource)), 'SYS_ADMIN must never be added');
+const grantedCapabilities = [...rendered.matchAll(/^\s+cap_add:\n((?:\s+- .*\n)+)/gm)]
+  .flatMap((match) => match[1].split('\n'))
+  .map((line) => line.replace(/^\s*-\s*/, '').trim())
+  .filter(Boolean);
+check(
+  !grantedCapabilities.some((capability) => /^SYS_ADMIN$/i.test(capability)),
+  `SYS_ADMIN must never be granted, saw ${grantedCapabilities.join(', ') || 'none'}`,
+);
 
 const release = profile.AVENLYO_RELEASE ?? '';
 check(

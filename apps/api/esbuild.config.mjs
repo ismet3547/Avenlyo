@@ -1,3 +1,5 @@
+import { rm } from 'node:fs/promises';
+
 import { build } from 'esbuild';
 
 /**
@@ -64,6 +66,19 @@ const sharedOptions = {
   target: 'node22',
 };
 
+/**
+ * Clean first, so `dist/` only ever contains what this build produced.
+ *
+ * esbuild writes its outputs but does not remove outputs from a previous run, so an entry point
+ * deleted from the list below would leave its stale artifact on disk -- and every "is the operator
+ * command in the bundle?" check would keep passing against a file nothing builds any more. That is
+ * not hypothetical: removing `scripts/smoke-production` to prove the guard was load-bearing left the
+ * artifact smoke green, because it was testing yesterday's file.
+ *
+ * CI builds from a fresh checkout and so was never exposed to this; a local incremental build was.
+ */
+await rm('dist', { force: true, recursive: true });
+
 await build({
   ...sharedOptions,
   entryPoints: {
@@ -76,5 +91,10 @@ await build({
     // Phase 20's deployment safety gate. Shipped for the same reason ops-status is: the runbook
     // tells an operator to run it, and the production image copies dist/ and carries no tsx.
     'scripts/ops-preflight': 'src/scripts/ops-preflight.ts',
+    // The post-deploy smoke. Same reason again, found the same way: the runbook told the operator
+    // to run `pnpm smoke:production` on the deployment host, and the real Hetzner host has neither
+    // pnpm nor a Node runtime -- it builds everything inside Docker. Bundling it means the
+    // documented post-deploy check runs from the exact release image, with no host toolchain.
+    'scripts/smoke-production': 'src/scripts/smoke-production.ts',
   },
 });
