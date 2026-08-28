@@ -330,6 +330,27 @@ check(
     'AVENLYO_PROFILE_DEPLOYMENT_ENV: ${AVENLYO_DEPLOYMENT_ENV:?...}',
 );
 
+// The EXPECTED Supabase project ref must reach the API from the deployment profile, under a
+// distinct name. This was a real defect: the profile declared the key, nothing forwarded it, and the
+// value was inert -- so the documented production path failed with an undeclared project identity
+// unless the operator duplicated it into api.env, which is precisely where it must NOT live. The
+// ACTUAL identity (SUPABASE_URL) stays in api.env; an expectation stored beside the value it checks
+// cannot detect a cross-wire.
+check(
+  /^\$\{AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:-\}?$/.test(
+    apiSourceEnv.AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF ?? '',
+  ),
+  'the api service must mirror the profile expectation as ' +
+    'AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: ${AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:-}',
+);
+// And the runtime name must never be supplied from the profile: that would put the expectation back
+// into the same precedence chain as api.env and re-create the single-authority problem.
+check(
+  !('AVENLYO_EXPECTED_SUPABASE_PROJECT_REF' in apiSourceEnv),
+  "deploy/compose.yaml's api environment: must not declare AVENLYO_EXPECTED_SUPABASE_PROJECT_REF; " +
+    'the profile value is mirrored under the AVENLYO_PROFILE_ name',
+);
+
 // Same provenance question for the internal boundary. The rendered equality check below cannot
 // answer it: `environment:` wins over `env_file:`, so a host still carrying a stale
 // AVENLYO_API_URL in /etc/avenlyo/web.env would render the profile's value either way.
@@ -348,6 +369,11 @@ check(
 check(
   envOf('api', 'AVENLYO_PROFILE_DEPLOYMENT_ENV') === declared,
   "the api service must receive the profile's declared deployment identity",
+);
+check(
+  envOf('api', 'AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF') ===
+    (profile.AVENLYO_EXPECTED_SUPABASE_PROJECT_REF ?? ''),
+  "the api service must receive the profile's expected Supabase project ref",
 );
 
 const published = [...rendered.matchAll(/published: "(\d+)"/g)].map((match) => match[1]);

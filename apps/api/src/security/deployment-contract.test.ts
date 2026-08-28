@@ -391,6 +391,9 @@ describe('the running containers read the profile that preflight validates', () 
       'AVENLYO_PROFILE_API_HOST',
       'AVENLYO_PROFILE_APP_URL',
       'AVENLYO_PROFILE_DEPLOYMENT_ENV',
+      // Non-secret: a project ref, not a key. It is the EXPECTED half of the Supabase identity
+      // comparison; the ACTUAL half stays in api.env as SUPABASE_URL.
+      'AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF',
       'AVENLYO_PROFILE_PUBLIC_API_URL',
       'AVENLYO_PROFILE_WEB_API_URL',
       'AVENLYO_PROFILE_WEB_HOST',
@@ -865,5 +868,112 @@ describe('env-file migration is verified without printing any value', () => {
       .filter((line) => !line.includes('>'));
 
     expect(displays).toEqual([]);
+  });
+});
+
+describe('the expected Supabase project ref is a profile declaration, mirrored in', () => {
+  /**
+   * Provenance, not just presence. The profile declares which project this deployment is FOR;
+   * /etc/avenlyo/api.env declares which project it is POINTED AT. Preflight compares them, which is
+   * only meaningful while they come from different files.
+   */
+  it('compose mirrors the profile value under a distinct name', async () => {
+    const api = serviceBlock(withoutComments(await compose()), 'api');
+
+    expect(api).toMatch(
+      /AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: \$\{AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:-\}/,
+    );
+  });
+
+  it('compose never supplies the runtime name from the profile', async () => {
+    // That would put the expectation back into the same precedence chain as api.env and recreate
+    // the single-authority problem this change exists to remove.
+    const api = serviceBlock(withoutComments(await compose()), 'api');
+
+    expect(api).not.toMatch(/^ {6}AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:/m);
+  });
+
+  it('the API reads the profile name, and no longer the runtime name', async () => {
+    const env = await readFile('apps/api/src/env.ts', 'utf8');
+    const preflight = await readFile('apps/api/src/scripts/ops-preflight.ts', 'utf8');
+
+    expect(env).toContain('AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: emptyAsAbsent(');
+    expect(env).not.toMatch(/^ {4}AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:/m);
+    expect(preflight).toContain(
+      'expectedSupabaseProjectRef: env.AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF',
+    );
+    expect(preflight).not.toContain('env.AVENLYO_EXPECTED_SUPABASE_PROJECT_REF');
+  });
+
+  it('the ACTUAL identity still comes only from api.env', async () => {
+    // SUPABASE_URL must not migrate into the public profile: it is the value being checked, and it
+    // belongs with the credentials that reach the same project.
+    const preflight = await readFile('apps/api/src/scripts/ops-preflight.ts', 'utf8');
+    expect(preflight).toContain('supabaseUrl: env.SUPABASE_URL');
+
+    for (const target of ['staging', 'production'] as const) {
+      const template = await readFile(`deploy/env/${target}.public.env.example`, 'utf8');
+      const assignments = template
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#') && line.includes('='))
+        .map((line) => line.slice(0, line.indexOf('=')).trim());
+
+      expect(assignments).not.toContain('SUPABASE_URL');
+      expect(assignments).not.toContain('SUPABASE_SERVICE_ROLE_KEY');
+      expect(assignments).not.toContain('SUPABASE_ANON_KEY');
+      expect(assignments).toContain('AVENLYO_EXPECTED_SUPABASE_PROJECT_REF');
+    }
+  });
+
+  it('api.env.example no longer offers the key as an operator authority', async () => {
+    const template = await readFile('deploy/env/api.env.example', 'utf8');
+    const assignments = template
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith('#') && line.includes('='))
+      .map((line) => line.slice(0, line.indexOf('=')).trim());
+
+    expect(assignments).not.toContain('AVENLYO_EXPECTED_SUPABASE_PROJECT_REF');
+    // Still documented, as an explicit "do not set this here" with the reason.
+    expect(template).toContain('IS NOT SET HERE');
+    expect(template).toContain('SUPABASE_URL');
+  });
+
+  it('both public templates state the provenance split explicitly', async () => {
+    for (const target of ['staging', 'production'] as const) {
+      const template = await readFile(`deploy/env/${target}.public.env.example`, 'utf8');
+
+      expect(template).toContain('SOLE AUTHORITY FOR THE **EXPECTED** PROJECT REF');
+      expect(template).toContain('ACTUAL   identity -> SUPABASE_URL in /etc/avenlyo/api.env');
+      expect(template).toContain('AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF');
+    }
+  });
+
+  it('the CI assertion proves the mirror at source and in the render', async () => {
+    const script = await readFile('.github/scripts/assert-deployment-profile.mjs', 'utf8');
+
+    expect(script).toContain('apiSourceEnv.AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF');
+    expect(script).toContain("!('AVENLYO_EXPECTED_SUPABASE_PROJECT_REF' in apiSourceEnv)");
+    expect(script).toContain("envOf('api', 'AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF')");
+  });
+
+  it('the profile key set is unchanged in shape: both templates still agree', async () => {
+    const keysOf = async (target: string) =>
+      [
+        ...new Set(
+          (await readFile(`deploy/env/${target}.public.env.example`, 'utf8'))
+            .split('\n')
+            .filter((line) => !line.trimStart().startsWith('#') && line.includes('='))
+            .map((line) => line.slice(0, line.indexOf('=')).trim()),
+        ),
+      ].sort();
+
+    expect(await keysOf('staging')).toEqual(await keysOf('production'));
+  });
+
+  it('adds no migration', async () => {
+    // This hotfix is configuration wiring only; the schema contract stays where Phase 19 left it.
+    const readiness = await readFile('apps/api/src/observability/readiness.ts', 'utf8');
+
+    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*19/);
   });
 });

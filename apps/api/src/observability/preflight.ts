@@ -211,7 +211,7 @@ export function evaluatePreflight(input: PreflightInput): PreflightReport {
           ? 'pass'
           : 'skip',
       identityUnverifiedInProduction
-        ? 'AVENLYO_EXPECTED_SUPABASE_PROJECT_REF must be declared for a production deployment'
+        ? 'AVENLYO_EXPECTED_SUPABASE_PROJECT_REF must be declared in the deployment profile for a production deployment'
         : assurance.detail,
     ),
   );

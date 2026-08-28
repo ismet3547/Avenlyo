@@ -87,7 +87,9 @@ async function loadDeploymentSnapshot() {
     },
     createServiceSupabaseClient,
     deploymentEnvironment,
-    expectedSupabaseProjectRef: env.AVENLYO_EXPECTED_SUPABASE_PROJECT_REF,
+    // EXPECTED from the deployment profile; ACTUAL (supabaseUrl, below) from api.env. Two files,
+    // so the comparison can catch a cross-wire instead of agreeing with itself.
+    expectedSupabaseProjectRef: env.AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF,
     release,
     requiredSchemaVersion: REQUIRED_SCHEMA_VERSION,
     supabaseUrl: env.SUPABASE_URL,

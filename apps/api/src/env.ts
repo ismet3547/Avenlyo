@@ -34,8 +34,19 @@ export const env = parseEnvironment(
      * Validated below rather than here so a missing value can be judged against NODE_ENV.
      */
     AVENLYO_DEPLOYMENT_ENV: z.string().trim().min(1).max(20).optional(),
-    /** Optional, non-secret. Declaring it lets preflight prove the intended Supabase project. */
-    AVENLYO_EXPECTED_SUPABASE_PROJECT_REF: z.string().trim().min(1).max(60).optional(),
+    /**
+     * The EXPECTED Supabase project ref, from the deployment profile.
+     *
+     * Deliberately NOT read from /etc/avenlyo/api.env, where it used to be documented. The ACTUAL
+     * project is SUPABASE_URL in that same file, and an expectation stored beside the value it
+     * checks cannot detect a cross-wire: a production host pointed at the staging database would
+     * have carried the staging URL and a staging expectation together, and agreed with itself.
+     *
+     * Declaring it in the source-controlled deployment profile makes the two independent, which is
+     * the only arrangement in which the comparison means anything. Mirrored in by
+     * deploy/compose.yaml; see the note on the `api` service there.
+     */
+    AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: emptyAsAbsent(z.string().trim().min(1).max(60)),
     /**
      * The non-secret public deployment profile, supplied by deploy/compose.yaml from the same
      * --env-file the build reads. See the comment on the `api` service there for why.

@@ -512,6 +512,29 @@ invisible unless an operator states which project they meant, and "nobody said" 
 state that must not pass. Staging keeps the softer policy because it is the environment where the
 project may legitimately be rebuilt; there an undeclared expectation is reported as unverified.
 
+### Where each half of the Supabase identity lives
+
+| Half | Declared in | Reaches the API as |
+| --- | --- | --- |
+| **EXPECTED** — which project this deployment is *for* | `deploy/env/<env>.public.env.example` → `deploy/env/build.env`, as `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` | `AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF`, mirrored by `deploy/compose.yaml` |
+| **ACTUAL** — which project it is *pointed at* | `/etc/avenlyo/api.env`, as `SUPABASE_URL` | `SUPABASE_URL` |
+
+Preflight compares them, and the comparison is only meaningful because they come from **different
+files**. `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` used to be documented in `api.env` — beside the very
+URL it checks — which made the check unable to detect the defect it exists for: a production host
+cross-wired to the staging database would have carried the staging URL and a staging expectation
+together and agreed with itself.
+
+So: **do not set `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` in `/etc/avenlyo/api.env`.** The API no
+longer reads it there, so a stale copy left over from an earlier deploy is inert and cannot satisfy
+the check — but delete it on the next deploy so nobody reads it as authoritative. Check for it the
+same secret-safe way as any other key:
+
+```bash
+sudo grep -c '^AVENLYO_EXPECTED_SUPABASE_PROJECT_REF=' /etc/avenlyo/api.env   # want 0
+grep   -c '^AVENLYO_EXPECTED_SUPABASE_PROJECT_REF=' deploy/env/build.env      # want 1
+```
+
 Exit codes: `0` all checks passed, `1` a check failed, `2` the configuration could not be parsed at
 all. `2` means the environment is malformed rather than merely wrong — a missing or invalid
 `AVENLYO_DEPLOYMENT_ENV`, for instance. It prints bounded fixed text, never a stack trace.
