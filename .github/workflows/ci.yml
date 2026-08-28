@@ -227,13 +227,79 @@ jobs:
     # from Compose's own working directory. This version execs the sandbox smoke inside the actual
     # `docker compose up` service instead, so it does.
     env:
-      # The exact commit SHA under test -- matches how a real deploy tags images (see
+      # The exact CANDIDATE commit SHA under test -- matches how a real deploy tags images (see
       # docs/deployment/hetzner-staging.md's "Release identifier"), and is what "SHA-tagged images
-      # are produced" below actually checks for, not an assumed/synthetic tag.
-      AVENLYO_RELEASE: ${{ github.sha }}
+      # are produced" below actually checks for.
+      #
+      # Not `github.sha`. On a pull_request event that is GitHub's SYNTHETIC merge commit
+      # (refs/pull/N/merge), which exists only inside the run and names no commit on the branch. The
+      # release contract is that a tag names the candidate commit, so tagging images with a merge SHA
+      # nobody can check out makes the tag meaningless. `github.event.pull_request.head.sha` is the
+      # reviewed head; the fallback covers push events, where `github.sha` is already correct.
+      #
+      # actions/checkout still checks out the merge result, deliberately -- testing the merge is the
+      # useful thing. Only the release IDENTITY is corrected here, and the step below reports whether
+      # the merge tree and the head tree actually agree rather than assuming they do.
+      AVENLYO_RELEASE: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      # Runs before anything is built or tagged: every image tag in this job is AVENLYO_RELEASE, so
+      # if the identity is wrong, everything downstream is labelled wrong.
+      - name: Release identity is the candidate commit, not a synthetic merge SHA
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          echo "event            : ${EVENT_NAME}"
+          echo "AVENLYO_RELEASE  : ${AVENLYO_RELEASE}"
+          echo "github.sha       : ${WORKFLOW_SHA}"
+          echo "pr head sha      : ${PR_HEAD_SHA:-<not a pull_request>}"
+
+          # 1. Shape. The deployment contract requires a full 40-character lowercase SHA; anything
+          #    else would make the SHA-tagged image model meaningless.
+          if ! printf '%s' "${AVENLYO_RELEASE}" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::AVENLYO_RELEASE is not a 40-character lowercase hex SHA."
+            exit 1
+          fi
+
+          # 2. On a pull_request it must be the reviewed head, never the synthetic merge commit.
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            if [ "${AVENLYO_RELEASE}" != "${PR_HEAD_SHA}" ]; then
+              echo "::error::AVENLYO_RELEASE is not the pull request head SHA."
+              exit 1
+            fi
+            if [ "${AVENLYO_RELEASE}" = "${WORKFLOW_SHA}" ]; then
+              echo "::notice::github.sha equals the head SHA for this event; no merge commit was created."
+            else
+              echo "Confirmed: release identity is the PR head, not github.sha (${WORKFLOW_SHA})."
+            fi
+          fi
+
+          # 3. Tree compatibility, REPORTED rather than assumed. actions/checkout deliberately checks
+          #    out the merge result, which is the useful thing to test. When the branch is up to date
+          #    with its base the merge tree is byte-identical to the head tree, and the images this
+          #    job builds are exactly the candidate commit's bytes. When the base has moved ahead they
+          #    legitimately differ: the images are then the merge preview, tagged with the candidate
+          #    SHA. That is not a deployment integrity risk here -- these images are ephemeral, never
+          #    pushed to a registry and torn down with the job -- but it is worth saying out loud
+          #    rather than leaving to be assumed, so it is printed either way.
+          git fetch --no-tags --depth=1 origin "${AVENLYO_RELEASE}" 2>/dev/null || true
+          checked_out_tree=$(git rev-parse 'HEAD^{tree}')
+          if candidate_tree=$(git rev-parse "${AVENLYO_RELEASE}^{tree}" 2>/dev/null); then
+            echo "checked-out tree : ${checked_out_tree}"
+            echo "candidate tree   : ${candidate_tree}"
+            if [ "${checked_out_tree}" = "${candidate_tree}" ]; then
+              echo "Tree comparison  : IDENTICAL -- the built images are the candidate commit's bytes."
+            else
+              echo "::notice::Merge tree differs from the candidate head tree; the base has moved ahead."
+              echo "Tree comparison  : DIFFERENT -- images are the merge preview, tagged with the head SHA."
+            fi
+          else
+            echo "::notice::Candidate commit object unavailable; tree comparison skipped."
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -494,11 +560,26 @@ jobs:
       # `up` had silently kept a previous image, api_release would fail. Under `exec` both values
       # would come from the same process and the check could never fail.
       #
-      # Caddy is not started in this job (its Caddyfile names real hostnames and would attempt ACME
-      # from a runner IP), so the public hostnames are not reachable here and the probe targets are
-      # overridden to the internal API address. web_live is therefore expected to fail -- the API
-      # does not serve /api/health -- and asserting exactly that proves the probe really ran rather
-      # than being skipped.
+      # TWO checks are expected to FAIL here, and both are properties of this CI fixture rather than
+      # of the smoke. Asserting the exact expected set -- rather than only that some checks passed --
+      # is what keeps this honest: an unexpected failure is a real regression, and an unexpected pass
+      # would mean the fixture stopped reproducing the conditions it claims to.
+      #
+      #   api_ready  FAIL http_503
+      #     This placeholder deployment has NO DATABASE. /health/ready reports 503 precisely because
+      #     it is doing its job. The ops-preflight step earlier in this same job asserts the mirror
+      #     image of this fact -- that schema_compatible is its ONE failure, for the same missing
+      #     database. Expecting api_ready to pass here contradicted that, and it is what made this
+      #     job fail deterministically.
+      #
+      #   web_live   FAIL http_404
+      #     Caddy is deliberately not started in this job: its Caddyfile names real public hostnames
+      #     and bringing it up would attempt a real ACME request from a GitHub-owned IP that DNS does
+      #     not point at. So the public hostnames are unreachable and the probe target is overridden
+      #     to the internal API address, which does not serve /api/health.
+      #
+      # In a real staging or production deployment api_ready is REQUIRED, and smoke-production is not
+      # relaxed in any way to accommodate this fixture.
       - name: smoke-production runs from the exact release image (no host Node)
         run: |
           set +e
@@ -510,20 +591,45 @@ jobs:
           status=$?
           set -e
           echo "$out"
-          if [ "$status" -ne 1 ]; then
-            echo "::error::Expected exit 1 (web_live cannot pass against the API), got ${status}."
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Expected a non-zero exit for this fixture's two known limitations."
             exit 1
           fi
-          for check in "pass  api_live" "pass  api_ready" "pass  api_release" "FAIL  web_live"; do
-            if ! echo "$out" | grep -q "$check"; then
-              echo "::error::Expected '${check}' in the smoke report."
+
+          # What must pass: the artifact ran from the built image, reached the deployment over the
+          # network, and confirmed the deployed release is the one the profile intended.
+          for expected in "pass  api_live" "pass  api_release"; do
+            if ! echo "$out" | grep -q "$expected"; then
+              echo "::error::Expected '${expected}' in the smoke report."
               exit 1
             fi
           done
+
+          # What must fail, for exactly the documented fixture reasons -- including the HTTP detail,
+          # so a different cause cannot quietly satisfy the same assertion.
+          for expected in "FAIL  api_ready  http_503" "FAIL  web_live  http_404"; do
+            if ! echo "$out" | grep -q "$expected"; then
+              echo "::error::Expected '${expected}' -- this fixture has no database and no Caddy."
+              exit 1
+            fi
+          done
+
+          # And nothing else may fail. Two known limitations, no more.
+          failed=$(echo "$out" | grep -c '^FAIL  ' || true)
+          if [ "$failed" -ne 2 ]; then
+            echo "::error::Expected exactly 2 failing checks (api_ready, web_live), saw ${failed}."
+            exit 1
+          fi
           echo "Confirmed: the post-deploy smoke runs from the release image, probes over the network,"
-          echo "and asserts the deployed release from the deployment profile."
+          echo "asserts the deployed release, and fails only on this fixture's missing DB and Caddy."
 
       # And the release assertion must be able to fail, or it is decoration.
+      #
+      # Identical to the step above except for the expected release, so the difference in outcome is
+      # attributable to that one variable: the same two fixture limitations fail, and api_release
+      # becomes a THIRD failure. This is the case that catches `up` having silently kept a previous
+      # image -- the failure nobody notices because everything else is green.
       - name: smoke-production rejects a deployment serving a different release
         run: |
           set +e
@@ -540,11 +646,21 @@ jobs:
             echo "::error::The smoke accepted a deployment serving a different release."
             exit 1
           fi
-          if ! echo "$out" | grep -q "FAIL  api_release"; then
-            echo "::error::Expected api_release to be reported FAIL."
+          if ! echo "$out" | grep -q "FAIL  api_release  release_mismatch"; then
+            echo "::error::Expected api_release to be reported FAIL with release_mismatch."
             exit 1
           fi
-          echo "Confirmed: the release assertion is load-bearing against a real deployment."
+          if ! echo "$out" | grep -q "pass  api_live"; then
+            echo "::error::api_live should still pass; only the release expectation changed."
+            exit 1
+          fi
+          # Exactly one more failure than the baseline: the two fixture limitations plus this one.
+          failed=$(echo "$out" | grep -c '^FAIL  ' || true)
+          if [ "$failed" -ne 3 ]; then
+            echo "::error::Expected exactly 3 failing checks (api_ready, web_live, api_release), saw ${failed}."
+            exit 1
+          fi
+          echo "Confirmed: a wrong expected release adds api_release to the failures, and nothing else changes."
 
       # The API's trusted-proxy boundary is only as narrow as the set of containers that can open a
       # socket to it. deploy/compose.yaml puts web and api on separate bridge networks so that set is
@@ -636,7 +752,10 @@ jobs:
               cat "deploy/env/${target}.public.env.example"
               echo "NEXT_PUBLIC_SUPABASE_URL=https://ciplaceholderproject.supabase.co"
               echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key"
-              echo "AVENLYO_RELEASE=${{ github.sha }}"
+              # The candidate commit, not the synthetic pull_request merge SHA -- see the
+              # AVENLYO_RELEASE comment on the container job. The assertion script requires an exact
+              # 40-character SHA, so this profile has to carry a real one.
+              echo "AVENLYO_RELEASE=${{ github.event.pull_request.head.sha || github.sha }}"
               echo "AVENLYO_EXPECTED_SUPABASE_PROJECT_REF=ciplaceholderproject"
             } > "/tmp/profiles/${target}.env"
           done
