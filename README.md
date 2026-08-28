@@ -268,11 +268,16 @@ reported separately from work that is due, so tomorrow's reminder is never count
 is no tenant identifier, contact, phone number, message body, transcript, or provider identifier in
 it, and reading it never advances a state machine.
 
-**Operator tooling.** `pnpm ops:status` (optionally `--json`) prints the capability doctor, runtime
+**Operator tooling.** `ops:status` (optionally `--json`) prints the capability doctor, runtime
 heartbeats, and durable aggregates. It is a CLI rather than an HTTP route because Avenlyo has tenant
 authorization and no platform-staff role system, and a hidden super-admin page would be pretending to
-have security that does not exist. `pnpm smoke:production` checks a deployment's public health
+have security that does not exist. `smoke:production` checks a deployment's public health
 endpoints only — no credential, no tenant mutation, no provider write.
+
+Both ship in the API production bundle (`dist/scripts/`) and run under plain `node`, so a deployment
+host needs no Node or pnpm toolchain of its own; `pnpm ops:status` / `pnpm smoke:production` are the
+local-development form of the same commands. See docs/production-runbook.md for the container
+invocations an operator actually runs.
 
 **Graceful shutdown.** `SIGTERM` and `SIGINT` mark the replica not-ready first so the load balancer
 drains it while it can still finish accepted work, then stop worker claims, await in-flight ticks,

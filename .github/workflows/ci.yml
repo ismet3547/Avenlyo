@@ -197,12 +197,21 @@ jobs:
           test -f apps/api/dist/server.js
           test -f apps/api/dist/scripts/chromium-sandbox-smoke.js
           test -f apps/api/dist/scripts/ops-status.js
+          test -f apps/api/dist/scripts/ops-preflight.js
+          # Every operator command the runbook names must be IN the artifact. smoke-production was
+          # not: its package script ran the TypeScript source through tsx, which the production image
+          # does not ship -- so the documented post-deploy check could not run where it was
+          # documented to run. This list is the guard against that recurring.
+          test -f apps/api/dist/scripts/smoke-production.js
 
       - name: Artifact boot smoke -- plain Node, /health/live, graceful SIGTERM
         run: pnpm --filter @avenlyo/api smoke:artifact
 
       - name: Operator status artifact smoke -- plain Node, bounded output, no secrets
         run: pnpm --filter @avenlyo/api smoke:ops-status
+
+      - name: Post-deploy smoke artifact smoke -- plain Node, release assertion, no secrets
+        run: pnpm --filter @avenlyo/api smoke:smoke-production
 
   hetzner-staging-containers:
     name: Hetzner staging container validation
@@ -450,6 +459,92 @@ jobs:
       - name: web service answers /api/health
         run: |
           docker compose --env-file deploy/env/build.env -f deploy/compose.yaml exec -T web node -e "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
+
+      # ---------------------------------------------------------------------------------------
+      # The documented post-deploy operator commands, run the way the runbook says to run them.
+      # ---------------------------------------------------------------------------------------
+      # Neither needs Node or pnpm on the host, which is the point: the real Hetzner staging host has
+      # neither, and a documented step an operator cannot run is not a procedure. Both scripts ship
+      # inside the exact SHA-tagged image.
+
+      # `exec`, not `run`: ops-status describes the deployment that is actually running, so it has to
+      # execute inside it. Supabase is unconfigured in this job, so it exits 1 having reported that
+      # honestly -- what is proven here is the invocation shape and that the command exists in the
+      # image and runs under plain node, not a healthy platform.
+      - name: ops-status runs inside the running api container (no host Node)
+        run: |
+          set +e
+          out=$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            exec -T api node dist/scripts/ops-status.js 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected exit 1 from an unconfigured ops-status, got ${status}."
+            exit 1
+          fi
+          if echo "$out" | grep -qE '\n\s+at .+:[0-9]+:[0-9]+'; then
+            echo "::error::ops-status printed a stack trace."
+            exit 1
+          fi
+          echo "Confirmed: dist/scripts/ops-status.js runs in the deployed container under plain node."
+
+      # `run`, not `exec`: the one-off container is created from the image the profile INTENDED, so
+      # its AVENLYO_RELEASE is the expectation while the probes hit whatever is actually serving. If
+      # `up` had silently kept a previous image, api_release would fail. Under `exec` both values
+      # would come from the same process and the check could never fail.
+      #
+      # Caddy is not started in this job (its Caddyfile names real hostnames and would attempt ACME
+      # from a runner IP), so the public hostnames are not reachable here and the probe targets are
+      # overridden to the internal API address. web_live is therefore expected to fail -- the API
+      # does not serve /api/health -- and asserting exactly that proves the probe really ran rather
+      # than being skipped.
+      - name: smoke-production runs from the exact release image (no host Node)
+        run: |
+          set +e
+          out=$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            run --rm --no-deps -T \
+            -e AVENLYO_API_BASE_URL=http://api:4000 \
+            -e AVENLYO_PROFILE_APP_URL=http://api:4000 \
+            api node dist/scripts/smoke-production.js 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -ne 1 ]; then
+            echo "::error::Expected exit 1 (web_live cannot pass against the API), got ${status}."
+            exit 1
+          fi
+          for check in "pass  api_live" "pass  api_ready" "pass  api_release" "FAIL  web_live"; do
+            if ! echo "$out" | grep -q "$check"; then
+              echo "::error::Expected '${check}' in the smoke report."
+              exit 1
+            fi
+          done
+          echo "Confirmed: the post-deploy smoke runs from the release image, probes over the network,"
+          echo "and asserts the deployed release from the deployment profile."
+
+      # And the release assertion must be able to fail, or it is decoration.
+      - name: smoke-production rejects a deployment serving a different release
+        run: |
+          set +e
+          out=$(docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+            run --rm --no-deps -T \
+            -e AVENLYO_API_BASE_URL=http://api:4000 \
+            -e AVENLYO_PROFILE_APP_URL=http://api:4000 \
+            -e AVENLYO_EXPECTED_RELEASE=1111111111111111111111111111111111111111 \
+            api node dist/scripts/smoke-production.js 2>&1)
+          status=$?
+          set -e
+          echo "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::The smoke accepted a deployment serving a different release."
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "FAIL  api_release"; then
+            echo "::error::Expected api_release to be reported FAIL."
+            exit 1
+          fi
+          echo "Confirmed: the release assertion is load-bearing against a real deployment."
 
       # The API's trusted-proxy boundary is only as narrow as the set of containers that can open a
       # socket to it. deploy/compose.yaml puts web and api on separate bridge networks so that set is

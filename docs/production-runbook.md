@@ -115,13 +115,47 @@ is built, preflighted and deployed.
      up -d --no-build --wait web api caddy
    ```
 
-10. **Run non-destructive smoke checks.** `pnpm smoke:production`, with `AVENLYO_EXPECTED_RELEASE`
-    set to the SHA just deployed. Without that variable the smoke asks only "is it up", which passes
-    just as happily when `up` silently kept the previous image — the exact failure the SHA-tagged
-    model exists to prevent, and the one nobody notices because everything is green.
+10. **Run non-destructive smoke checks**, as a one-off container from the exact release image.
+    Reads only public endpoints; needs no credential.
 
-11. **Confirm operational state.** `pnpm ops:status` exits 0, no capability is `partial`, and
-    expected worker components are reporting recent successes.
+    ```bash
+    docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+      run --rm --no-deps -T api node dist/scripts/smoke-production.js
+    ```
+
+    It must exit 0, and `api_release` must be among the checks it reports.
+
+    `run`, not `exec`, and that is load-bearing. The one-off container is created from
+    `avenlyo-api:${AVENLYO_RELEASE}` — the image the profile *intended* — while the probes hit
+    whatever is actually serving the public hostnames. If `up` silently kept the previous image, the
+    deployment reports the old SHA, this container expects the new one, and `api_release` fails.
+    Under `exec` the expectation and the reported value would come from the same process and the
+    check could never fail, which is the failure nobody notices because everything is green.
+
+    Targets and expected release come from the deployment profile Compose already passes in, so the
+    command is identical for staging and production. To point it somewhere else, set
+    `AVENLYO_API_BASE_URL`, `AVENLYO_WEB_BASE_URL` or `AVENLYO_EXPECTED_RELEASE` explicitly —
+    all three are non-secret and override the profile.
+
+11. **Confirm operational state**, inside the running API container.
+
+    ```bash
+    docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+      exec -T api node dist/scripts/ops-status.js
+    ```
+
+    It must exit 0, no capability may be `partial`, and expected worker components should be
+    reporting recent successes.
+
+    `exec`, not `run`, and that is load-bearing too — for the opposite reason. This command describes
+    the deployment that is actually running, so it has to execute inside it. A one-off container
+    would describe a process nobody is using.
+
+> **The whole sequence above needs only `git`, Docker and Docker Compose on the host.** No `node`,
+> no `pnpm`, no source checkout beyond the release itself. That is deliberate: the Hetzner staging
+> host has no Node runtime, and a documented step an operator cannot run is not a procedure. Any
+> `pnpm …` command elsewhere in this document is a **local development** convenience, never a host
+> requirement.
 
 ## Rollback
 
@@ -301,21 +335,83 @@ sudo grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env      # 0 means it m
 sudo grep -c '^AVENLYO_API_URL=' /etc/avenlyo/web.env             # 1 means it must be removed
 ```
 
-Back up before editing, preserve owner/group/mode, and change only the named assignment:
+Back up before editing, preserve the target's owner/group/mode, and change only the named
+assignment. Runnable from a fresh shell:
 
 ```bash
-install -m 600 /dev/null ~/env-backup/web.env.bak
-sudo cp -p /etc/avenlyo/web.env ~/env-backup/web.env.bak
+# Protected backup location. 0700 directory, 0600 files -- the backup of a secret-bearing file must
+# not inherit the target's more permissive 0640.
+BK=~/env-backup
+mkdir -p "$BK" && chmod 700 "$BK"
+install -m 600 /dev/null "$BK/web.env.bak"
+sudo cat /etc/avenlyo/web.env > "$BK/web.env.bak"     # 0600 already set by install
+
+# Edit through a private temp file, then install with the TARGET's owner/group/mode.
 T=$(mktemp); chmod 600 "$T"
 sudo sed '/^AVENLYO_API_URL=/d' /etc/avenlyo/web.env > "$T"
 sudo install -o avenlyo -g avenlyo -m 640 "$T" /etc/avenlyo/web.env
 rm -f "$T"
-sudo diff ~/env-backup/web.env.bak /etc/avenlyo/web.env   # must show exactly one removed line
 ```
+
+**Verify silently.** Never `diff` two secret-bearing env files: if an unintended second change
+slipped in, `diff` prints the changed secret to your terminal — and to your scrollback, and to
+whatever you paste it into. Compare filtered copies instead, and let the exit code speak:
+
+```bash
+# 1. The key count moved exactly 1 -> 0.
+before=$(grep -c '^AVENLYO_API_URL=' "$BK/web.env.bak")
+after=$(sudo grep -c '^AVENLYO_API_URL=' /etc/avenlyo/web.env || true)
+test "$before" = "1" && test "$after" = "0" || { echo "unexpected AVENLYO_API_URL key count"; false; }
+
+# 2. Every other byte is unchanged -- compared with the same line removed from both sides, so the
+#    only difference the comparison can see is the one that was intended. cmp -s prints nothing.
+A=$(mktemp); B=$(mktemp); chmod 600 "$A" "$B"
+grep -v '^AVENLYO_API_URL=' "$BK/web.env.bak" > "$A"
+sudo grep -v '^AVENLYO_API_URL=' /etc/avenlyo/web.env > "$B"
+cmp -s "$A" "$B" && echo "verified: only the AVENLYO_API_URL assignment changed" \
+                || echo "REFUSED: something else changed -- restore from the backup"
+rm -f "$A" "$B"
+```
+
+Both steps print a fixed sentence or a count and never a value. The second exits non-zero on any
+unintended change without revealing what changed; if it refuses, restore from `$BK/web.env.bak` and
+investigate before deploying.
 
 The stale line is inert once `deploy/compose.yaml` supplies `AVENLYO_API_URL` — Compose's
 `environment:` overrides `env_file:` — but it is a second authority for a security-relevant value,
 and the next person to read the file has no way to know which one won. Remove it.
+
+### Adding the deployment identity to api.env
+
+Same rules: back up first, append only, verify by count and silent comparison.
+
+```bash
+BK=~/env-backup
+mkdir -p "$BK" && chmod 700 "$BK"
+install -m 600 /dev/null "$BK/api.env.bak"
+sudo cat /etc/avenlyo/api.env > "$BK/api.env.bak"
+
+T=$(mktemp); chmod 600 "$T"
+sudo cat /etc/avenlyo/api.env > "$T"
+echo 'AVENLYO_DEPLOYMENT_ENV=staging' >> "$T"          # or production
+sudo install -o avenlyo -g avenlyo -m 640 "$T" /etc/avenlyo/api.env
+rm -f "$T"
+
+# Verify: the key appeared exactly once, and nothing else moved.
+test "$(sudo grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env)" = "1" \
+  || { echo "unexpected AVENLYO_DEPLOYMENT_ENV key count"; false; }
+A=$(mktemp); B=$(mktemp); chmod 600 "$A" "$B"
+grep -v '^AVENLYO_DEPLOYMENT_ENV=' "$BK/api.env.bak" > "$A"
+sudo grep -v '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env > "$B"
+cmp -s "$A" "$B" && echo "verified: only the deployment identity was added" \
+                || echo "REFUSED: something else changed -- restore from the backup"
+rm -f "$A" "$B"
+```
+
+It must match the profile's `AVENLYO_DEPLOYMENT_ENV`; `ops:preflight` fails the deployment if the
+two disagree. Keep both backups until the deployment is verified — they are the rollback for a
+configuration mistake, and they contain secrets, so keep them at 0600 inside a 0700 directory and
+delete them deliberately when the host is stable.
 
 ### Why a one-off container and not `pnpm ops:preflight`
 
@@ -458,10 +554,19 @@ above into whichever provider is used is a deployment step, not a code change.
 
 ## ops:status
 
+On a deployment host, inside the running API container — no Node or pnpm needed:
+
 ```bash
-pnpm ops:status          # human readable
-pnpm ops:status --json   # machine readable
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+  exec -T api node dist/scripts/ops-status.js            # human readable
+
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+  exec -T api node dist/scripts/ops-status.js --json     # machine readable
 ```
+
+Locally, against a development environment, `pnpm ops:status` and `pnpm ops:status --json` are the
+same command through the workspace script. That form is **local only**: the production image ships
+`dist/` and no `tsx`, and deployment hosts have no Node runtime.
 
 Requires the trusted server Supabase environment (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`). It is
 a CLI and not an HTTP route on purpose: Avenlyo has tenant authorization and no platform-staff role
@@ -655,7 +760,7 @@ product depends on it — Voice, SMS, Web Chat, reminders, follow-ups, readiness
 surface are unaffected. Rotate it by setting the new value on both servers; in-flight proofs expire
 within two minutes, so a brief overlap is all a rolling deploy needs.
 
-**Operational reading.** `pnpm ops:status` reports a `billing_suppression` metric group — message
+**Operational reading.** `ops:status` reports a `billing_suppression` metric group — message
 jobs, SMS deliveries, reminders, follow-ups, and voice rejections. These are global aggregates with
 no tenant, location, customer, or message identity, and they are business-state diagnostics: a
 non-zero value is a correctly declined operation, not a process, database, or provider failure. A
@@ -706,8 +811,8 @@ After:
 - [ ] `GET /health/live` returns 200 on every replica
 - [ ] `GET /health/ready` returns 200 on every replica
 - [ ] Web `GET /api/health` returns 200
-- [ ] `pnpm smoke:production` passes with `AVENLYO_EXPECTED_RELEASE` set, including `api_release`
-- [ ] `pnpm ops:status` exits 0
+- [ ] The one-off `smoke-production.js` container exits 0, including `api_release`
+- [ ] `ops-status.js` in the running api container exits 0
 - [ ] No capability reports `partial`
 - [ ] Expected worker components are visible and reporting recent successes
 - [ ] No unexpected growth in the oldest due item of any queue

@@ -629,7 +629,12 @@ describe('the host migration off the pre-Phase-20 env layout is documented', () 
     expect(text).toContain('Migrating a host off the pre-Phase-20 env layout');
     expect(text).toContain("grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env");
     expect(text).toContain("sed '/^AVENLYO_API_URL=/d' /etc/avenlyo/web.env");
-    expect(text).toContain('must show exactly one removed line');
+    // Verification is by silent comparison, not by diffing two secret-bearing files. The previous
+    // wording asked for a diff that "must show exactly one removed line" -- which is exactly the
+    // disclosure this now forbids: an unintended second change would have printed a secret.
+    expect(text).toContain('cmp -s');
+    expect(text).toContain('verified: only the AVENLYO_API_URL assignment changed');
+    expect(text).not.toContain('must show exactly one removed line');
   });
 
   it('keeps the source contract that made the host key obsolete', async () => {
@@ -658,5 +663,192 @@ describe('fetching the authoritative release is executable on the real host', ()
 
     expect(hetzner).toContain('`remote.origin.fetch` is narrowed');
     expect(hetzner).toContain('operational debt');
+  });
+});
+
+describe('the documented deployment order needs only git, Docker and Compose', () => {
+  /**
+   * The Hetzner staging host has no Node runtime and no pnpm; it builds everything inside Docker.
+   * A documented step an operator cannot run is not a procedure, so the whole deployment order has
+   * to be executable with what the host actually has. Step 3 was fixed first; steps 10 and 11 still
+   * said `pnpm smoke:production` and `pnpm ops:status`, which left the sequence non-executable.
+   */
+  const runbook = () => readFile('docs/production-runbook.md', 'utf8');
+
+  /** The numbered deployment order only -- prose elsewhere may legitimately mention local tooling. */
+  const deploymentOrder = async () => {
+    const text = (await runbook()).replace(/\r\n/g, '\n');
+    return text.slice(text.indexOf('## Deployment order'), text.indexOf('## Rollback'));
+  };
+
+  it('contains no pnpm or bare node command', async () => {
+    const order = await deploymentOrder();
+
+    expect(order).not.toMatch(/^\s*pnpm\s/m);
+    expect(order).not.toMatch(/^\s*node\s/m);
+  });
+
+  it('runs the post-deploy smoke from the release image, not from the host', async () => {
+    const order = await deploymentOrder();
+
+    expect(order).toContain('run --rm --no-deps -T api node dist/scripts/smoke-production.js');
+  });
+
+  it('runs ops-status inside the running container, not from the host', async () => {
+    const order = await deploymentOrder();
+
+    expect(order).toContain('exec -T api node dist/scripts/ops-status.js');
+  });
+
+  it('explains why the smoke uses run and ops-status uses exec', async () => {
+    // The distinction is load-bearing, not stylistic: under `exec` the post-deploy release check
+    // would compare a process against itself and could never fail.
+    const order = (await deploymentOrder()).replace(/\s+/g, ' ');
+
+    expect(order).toContain('`run`, not `exec`, and that is load-bearing');
+    expect(order).toContain('`exec`, not `run`');
+    expect(order).toContain('could never fail');
+  });
+
+  it('states the host toolchain requirement explicitly', async () => {
+    const order = (await deploymentOrder()).replace(/\s+/g, ' ');
+
+    expect(order).toContain('needs only `git`, Docker and Docker Compose on the host');
+    expect(order).toContain('local development');
+  });
+
+  it('every command in the order is git or docker', async () => {
+    const order = await deploymentOrder();
+    const commands = [...order.matchAll(/^ {3,}([a-z][a-z-]*)\s/gm)]
+      .map((match) => match[1] ?? '')
+      .filter((word) => ['pnpm', 'node', 'npm', 'npx', 'yarn', 'tsx'].includes(word));
+
+    expect(commands).toEqual([]);
+  });
+
+  it('the checklist no longer asks for a host pnpm command', async () => {
+    const text = (await runbook()).replace(/\r\n/g, '\n');
+    const checklist = text.slice(text.indexOf('## Deployment checklist'));
+
+    expect(checklist).not.toContain('pnpm smoke:production');
+    expect(checklist).not.toContain('pnpm ops:status');
+  });
+});
+
+describe('every documented operator command ships in the production artifact', () => {
+  it('bundles all four operator entry points', async () => {
+    // smoke-production was the one that was not: its package script ran the source through tsx,
+    // which the production image does not ship, so the documented post-deploy check could not run
+    // where it was documented to run.
+    const config = await readFile('apps/api/esbuild.config.mjs', 'utf8');
+
+    for (const entry of ['ops-status', 'ops-preflight', 'smoke-production', 'chromium-sandbox-smoke']) {
+      expect(config).toContain(`'scripts/${entry}'`);
+    }
+  });
+
+  it('points the package script at the bundle, keeping tsx for local development only', async () => {
+    const pkg = JSON.parse(await readFile('apps/api/package.json', 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+
+    expect(pkg.scripts['smoke:production']).toBe('node dist/scripts/smoke-production.js');
+    expect(pkg.scripts['smoke:production:dev']).toContain('tsx');
+    expect(pkg.scripts['smoke:smoke-production']).toContain('smoke-production-artifact-smoke.mjs');
+  });
+
+  it('CI requires each entry point to exist in the built artifact', async () => {
+    const workflow = await readFile('.github/workflows/ci.yml', 'utf8');
+
+    expect(workflow).toContain('test -f apps/api/dist/scripts/smoke-production.js');
+    expect(workflow).toContain('test -f apps/api/dist/scripts/ops-preflight.js');
+    expect(workflow).toContain('pnpm --filter @avenlyo/api smoke:smoke-production');
+  });
+
+  it('CI proves both container invocations against the real running deployment', async () => {
+    const workflow = await readFile('.github/workflows/ci.yml', 'utf8');
+
+    expect(workflow).toContain('ops-status runs inside the running api container (no host Node)');
+    expect(workflow).toContain('smoke-production runs from the exact release image (no host Node)');
+    // And that the release assertion can actually fail, or it is decoration.
+    expect(workflow).toContain('smoke-production rejects a deployment serving a different release');
+    expect(workflow).toContain('FAIL  api_release');
+  });
+});
+
+describe('env-file migration is verified without printing any value', () => {
+  /**
+   * A full `diff` of two secret-bearing env files is not a verification, it is a disclosure: if an
+   * unintended second change slipped in, diff prints the changed secret to the terminal, the
+   * scrollback, and whatever it gets pasted into.
+   */
+  const runbook = async () => (await readFile('docs/production-runbook.md', 'utf8')).replace(/\r\n/g, '\n');
+
+  it('never diffs a secret-bearing env file', async () => {
+    const text = await runbook();
+    const diffs = [...text.matchAll(/^\s*(sudo )?diff .*$/gm)].map((match) => match[0]);
+
+    for (const line of diffs) {
+      expect(line, `documented diff over an env file: ${line.trim()}`).not.toMatch(
+        /\/etc\/avenlyo\/|\.env/,
+      );
+    }
+  });
+
+  it('compares filtered copies silently instead', async () => {
+    const text = await runbook();
+
+    expect(text).toContain('cmp -s');
+    expect(text).toContain("grep -v '^AVENLYO_API_URL='");
+    expect(text).toContain("grep -v '^AVENLYO_DEPLOYMENT_ENV='");
+  });
+
+  it('proves the key count moved exactly 1 -> 0', async () => {
+    const text = await runbook();
+
+    expect(text).toContain("before=$(grep -c '^AVENLYO_API_URL=' \"$BK/web.env.bak\")");
+    expect(text).toMatch(/test "\$before" = "1" && test "\$after" = "0"/);
+  });
+
+  it('creates the backup directory first, 0700, with 0600 backup files', async () => {
+    // Runnable from a fresh shell, and the backup of a 0640 secret-bearing file must not inherit
+    // that looser mode.
+    const text = await runbook();
+
+    expect(text).toContain('mkdir -p "$BK" && chmod 700 "$BK"');
+    expect(text).toContain('install -m 600 /dev/null "$BK/web.env.bak"');
+    expect(text).toContain('install -m 600 /dev/null "$BK/api.env.bak"');
+  });
+
+  it('installs back with the target owner, group and mode', async () => {
+    const text = await runbook();
+
+    expect(
+      (text.match(/sudo install -o avenlyo -g avenlyo -m 640 "\$T" \/etc\/avenlyo\//g) ?? []).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('says to retain the backups for rollback', async () => {
+    const text = (await runbook()).replace(/\s+/g, ' ');
+
+    expect(text).toContain('Keep both backups until the deployment is verified');
+    expect(text).toContain('they are the rollback for a configuration mistake');
+  });
+
+  it('the api.env identity migration is documented to the same standard', async () => {
+    const text = await runbook();
+
+    expect(text).toContain('### Adding the deployment identity to api.env');
+    expect(text).toMatch(/test "\$\(sudo grep -c '\^AVENLYO_DEPLOYMENT_ENV=' \/etc\/avenlyo\/api\.env\)" = "1"/);
+  });
+
+  it('never cats an env file anywhere in the runbook', async () => {
+    const text = await runbook();
+    // `sudo cat FILE > backup` is a redirect into a 0600 file, not a display; a bare cat is not.
+    const displays = [...text.matchAll(/^\s*(sudo )?cat [^\n]*\/etc\/avenlyo\/[^\n]*$/gm)]
+      .map((match) => match[0])
+      .filter((line) => !line.includes('>'));
+
+    expect(displays).toEqual([]);
   });
 });
