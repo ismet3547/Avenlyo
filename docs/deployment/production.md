@@ -33,8 +33,13 @@ production is assumed to have.
 So the only thing that differs between the two environments is **public hostname data**, plus the
 credentials that necessarily point at different accounts. `.github/scripts/assert-deployment-profile.mjs`
 renders both profiles through the real `docker compose config` in CI and asserts that this is true —
-and CI then injects a cross-wired hostname and a merged network to prove the assertion actually
-catches the defect rather than merely existing.
+and CI then injects a cross-wired hostname, a merged network, a hardcoded Caddy hostname, a literal
+web API URL and a profile that overwrites the runtime deployment identity, to prove the assertion
+catches each defect rather than merely existing.
+
+It runs in **CI and locally, never on a deployment host**: it reasons about `deploy/compose.yaml`
+itself and needs a Node runtime the hosts deliberately do not have. The host-side gate is
+`docker compose ... config --quiet`, which needs only Docker. See the runbook's deployment order.
 
 | | Staging | Production |
 | --- | --- | --- |

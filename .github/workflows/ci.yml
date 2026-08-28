@@ -545,9 +545,49 @@ jobs:
               echo "AVENLYO_EXPECTED_SUPABASE_PROJECT_REF=ciplaceholderproject"
             } > "/tmp/profiles/${target}.env"
           done
+          # A REALISTIC server-only env file, not an empty one.
+          #
+          # This job used to `touch` an empty /etc/avenlyo/api.env, and that emptiness hid a real
+          # defect for a whole release: `docker compose config` resolves `env_file:` into the
+          # rendered service environment, so on a real host every assignment here appears in the
+          # render. An assertion that asked the RENDER where a value came from therefore failed on a
+          # correctly configured host -- and passed in CI, because there was nothing to merge.
+          #
+          # Phase 21A hit exactly that on the live staging host. The fixture now carries the
+          # non-secret runtime values a real api.env carries, so the assertion is exercised against
+          # the shape that actually broke. Placeholders only; no secret exists in this job.
           sudo mkdir -p /etc/avenlyo
-          sudo touch /etc/avenlyo/web.env /etc/avenlyo/api.env
+          sudo touch /etc/avenlyo/web.env
+          cat <<'EOF' | sudo tee /etc/avenlyo/api.env > /dev/null
+          API_HOST=0.0.0.0
+          API_PORT=4000
+          AVENLYO_DEPLOYMENT_ENV=staging
+          NODE_ENV=production
+          API_CORS_ORIGIN=https://staging.avenlyo.com
+          WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com
+          EOF
           sudo chmod 0644 /etc/avenlyo/*.env
+
+      # Pins the blind spot closed. The fixture is only useful if it actually reproduces the merge,
+      # so this proves the merge happens -- and therefore that the previous implementation, which
+      # read the rendered environment to decide provenance, would have failed here.
+      - name: Prove the fixture reproduces env_file merging (the old check would fail)
+        run: |
+          docker compose --env-file /tmp/profiles/staging.env -f deploy/compose.yaml config \
+            > /tmp/rendered.yaml
+          api_block=$(awk '/^  api:/,/^  caddy:/' /tmp/rendered.yaml)
+          if ! echo "$api_block" | grep -qE '^      AVENLYO_DEPLOYMENT_ENV:'; then
+            echo "::error::env_file did not merge into the render; this fixture no longer reproduces"
+            echo "::error::the real host shape, so the regression it guards is not being tested."
+            exit 1
+          fi
+          echo "Confirmed: /etc/avenlyo/api.env is merged into the rendered api environment."
+          echo "The pre-fix assertion read that merged view and would have failed here."
+          # Only key names are printed -- never the rendered document, which on a real host
+          # contains every value from /etc/avenlyo/api.env.
+          echo "Merged api environment keys:"
+          echo "$api_block" | grep -oE '^      [A-Z0-9_]+:' | tr -d ' :' | sort | sed 's/^/  /'
+          rm -f /tmp/rendered.yaml
 
       - name: Render and assert the staging profile
         run: node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env
@@ -631,6 +671,10 @@ jobs:
       # The runtime identity lives in /etc/avenlyo/api.env; the profile's copy is mirrored under a
       # separate name. If the profile were allowed to supply the runtime name, Compose's
       # `environment:` precedence would let it overwrite the container's own identity silently.
+      #
+      # Asserted against the compose SOURCE, so it stays true regardless of what api.env merges into
+      # the render -- and these injections now run with a realistic non-empty api.env, which is what
+      # makes them meaningful rather than vacuous.
       - name: The profile must not override the api runtime deployment identity
         run: |
           sed -i 's#^      AVENLYO_PROFILE_DEPLOYMENT_ENV: #      AVENLYO_DEPLOYMENT_ENV: #' \
@@ -646,6 +690,74 @@ jobs:
           fi
           git checkout -- deploy/compose.yaml
           echo "Confirmed: the profile cannot overwrite the api runtime deployment identity."
+
+      - name: The profile identity mirror must exist and come from the profile
+        run: |
+          for injection in \
+            '/^      AVENLYO_PROFILE_DEPLOYMENT_ENV:/d' \
+            's#^      AVENLYO_PROFILE_DEPLOYMENT_ENV: .*#      AVENLYO_PROFILE_DEPLOYMENT_ENV: staging#'; do
+            sed -i "$injection" deploy/compose.yaml
+            if git diff --quiet deploy/compose.yaml; then
+              echo "::error::Injection '$injection' did not apply; this proves nothing."
+              exit 1
+            fi
+            if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env; then
+              echo "::error::Accepted a compose file with injection: $injection"
+              git checkout -- deploy/compose.yaml
+              exit 1
+            fi
+            git checkout -- deploy/compose.yaml
+            echo "Confirmed rejected: $injection"
+          done
+
+      # The production profile must actually override the Caddyfile's staging substitution defaults.
+      # Checked on the rendered keys the profile feeds -- not by scanning the whole document, which
+      # would also be reading api.env's merged values.
+      - name: A hardcoded Caddy hostname must fail the production profile
+        run: |
+          sed -i 's#^      AVENLYO_WEB_HOST: ${AVENLYO_WEB_HOST.*#      AVENLYO_WEB_HOST: staging.avenlyo.com#' \
+            deploy/compose.yaml
+          if git diff --quiet deploy/compose.yaml; then
+            echo "::error::The injection did not apply, so this negative test proves nothing."
+            exit 1
+          fi
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/production.env; then
+            echo "::error::A production profile whose Caddy hostname ignores it was accepted."
+            git checkout -- deploy/compose.yaml
+            exit 1
+          fi
+          git checkout -- deploy/compose.yaml
+          echo "Confirmed: Caddy's public hostnames must come from the deployment profile."
+
+      # The command docs/production-runbook.md tells an operator to run on the deployment host,
+      # exercised exactly as documented. It is the host-side gate precisely because it needs only
+      # Docker and Compose -- the staging host has no Node runtime, so the assertion script above is
+      # a CI/local source gate and never a host step.
+      #
+      # `--quiet` is load-bearing: plain `config` prints every value merged from
+      # /etc/avenlyo/api.env, which on a real host means the service-role key and every provider
+      # secret. The documented operator path must never put that on a terminal or in a ticket.
+      - name: Documented host-side validation command (no Node runtime required)
+        run: |
+          for target in staging production; do
+            docker compose --env-file "/tmp/profiles/${target}.env" -f deploy/compose.yaml config --quiet
+            echo "config --quiet exit=$? for ${target}"
+          done
+          out=$(docker compose --env-file /tmp/profiles/staging.env -f deploy/compose.yaml config --quiet 2>&1)
+          if [ -n "$out" ]; then
+            echo "::error::config --quiet printed output; the documented operator path must stay silent."
+            exit 1
+          fi
+          echo "Confirmed: the documented host validation is silent and therefore secret-safe."
+
+      - name: The documented host command must reject a broken profile
+        run: |
+          grep -v '^AVENLYO_API_URL=' /tmp/profiles/staging.env > /tmp/profiles/nourl.env
+          if docker compose --env-file /tmp/profiles/nourl.env -f deploy/compose.yaml config --quiet 2>/dev/null; then
+            echo "::error::config --quiet accepted a profile missing a required substitution."
+            exit 1
+          fi
+          echo "Confirmed: the required-substitution contract fails closed on the host path too."
 
       # Second negative proof, for the structural half. Phase 19's one-hop trust boundary is a
       # property of the topology, not of any hostname, so put web back onto api_edge -- where it can

@@ -38,13 +38,39 @@ is built, preflighted and deployed.
    long-lived service credentials on a host we do not control. Do not claim backups exist unless the
    provider console shows they do.
 
-2. **Choose the exact release SHA** and put it in the profile as `AVENLYO_RELEASE`.
+2. **Check out the exact release SHA** and put it in the profile as `AVENLYO_RELEASE`.
 
-3. **Render and assert the deployment profile.** Offline; contacts nothing.
+   A deployment host's clone may have a narrowed `remote.origin.fetch` refspec, in which case
+   `origin/main` is never updated and `git pull` silently deploys nothing new. Fetch the release
+   explicitly rather than relying on a tracking branch:
 
    ```bash
-   node .github/scripts/assert-deployment-profile.mjs production deploy/env/build.env
+   git fetch origin main
+   git checkout --detach <exact-40-char-sha>
+   git rev-parse HEAD          # must print the SHA you intended
    ```
+
+   Untracked files, including `deploy/env/build.env`, survive a checkout. Confirm the **tracked**
+   tree is clean with `git status --porcelain --untracked-files=no`.
+
+3. **Validate the deployment profile on the host.** Offline; contacts nothing; needs only Docker.
+
+   ```bash
+   docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config --quiet
+   ```
+
+   It must exit 0 and print **nothing**. `--quiet` is not cosmetic — see
+   [Never render the full compose config](#never-render-the-full-compose-config).
+
+   This catches a profile missing any required substitution (`AVENLYO_DEPLOYMENT_ENV`,
+   `AVENLYO_API_URL`), a malformed compose file, and an unresolvable path.
+
+   The deeper source and topology contract — network separation, published ports, Caddy's literal
+   upstreams, image tagging, provenance of the deployment identity — is asserted by
+   `.github/scripts/assert-deployment-profile.mjs`, which runs in **CI and locally, not on the
+   deployment host**. It is a source gate: it reasons about `deploy/compose.yaml` itself, needs a
+   Node runtime the host deliberately does not have, and answers questions about the release rather
+   than about this host. A green CI run on the exact SHA is what discharges it.
 
 4. **Build the images once**, tagged with that SHA. Building is not deploying and mutates no
    provider:
@@ -143,8 +169,21 @@ Consequences to preserve when changing anything here:
 - `trustProxy` is a predicate over the peer address. It is never `true` and never a hop count; both
   would trust whatever the last hop claimed.
 
-`.github/scripts/assert-deployment-profile.mjs` asserts all of this against the rendered Compose
-configuration for both targets in CI, and CI proves the guard by injecting the defect.
+`.github/scripts/assert-deployment-profile.mjs` asserts all of this for both targets in CI, and CI
+proves each guard by injecting the defect.
+
+It distinguishes two kinds of question, because conflating them cost a release:
+
+- **Final rendered values** — published ports, network attachment, image tags, container hardening —
+  are read from `docker compose config`.
+- **Provenance** — "does `deploy/compose.yaml` declare this key, or does it come from the host's env
+  file?" — is read from the **compose source**. It cannot be read from the render, because Compose
+  resolves `env_file:` into the rendered `environment:` map, so a correctly configured host's
+  `/etc/avenlyo/api.env` appears there indistinguishably from a compose-declared value.
+
+CI's fixture writes a realistic non-empty `/etc/avenlyo/api.env` so that merge actually happens, and
+a dedicated step fails if it stops happening — otherwise the provenance guards would be tested
+against a shape no real host has.
 
 ## Rate limiting
 
@@ -212,6 +251,71 @@ safe to deploy**, asked before anything is applied. `ops:status` describes a run
 It is read-only. It writes nothing, contacts no provider, and sends no message. The only database
 call it makes is the same `platform_readiness_probe` readiness already uses, which returns a schema
 version and nothing else.
+
+### Never render the full compose config
+
+```bash
+# SAFE -- validates and prints nothing
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config --quiet
+
+# UNSAFE on a real host -- prints every secret
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml config
+```
+
+Compose resolves `env_file:` into the rendered service `environment:` map. On a real host that means
+plain `docker compose config` prints the contents of `/etc/avenlyo/api.env` — the Supabase
+service-role key, the internal billing secret, the OpenAI key, every provider credential — as
+ordinary YAML.
+
+So, without exception:
+
+- **Never** run plain `config` where its output is captured: no pipe into a log, no paste into a
+  ticket or chat, no CI step that echoes it, no `tee`.
+- Use `--quiet` for validation. It is the documented operator form precisely because it answers
+  "is this valid?" without answering "what is in it?".
+- If you must inspect the render while debugging, redirect it to a file with restrictive permissions,
+  read the specific keys you need, and delete it.
+- **Never** `cat` `/etc/avenlyo/api.env`, `/etc/avenlyo/web.env`, or `deploy/env/build.env`. To check
+  whether a setting is present, test for the **key** and never print the value:
+
+  ```bash
+  sudo grep -c '^AVENLYO_API_URL=' /etc/avenlyo/web.env   # prints a count, never a value
+  ```
+
+`.github/scripts/assert-deployment-profile.mjs` captures the render internally and never prints it —
+its findings are fixed, source-controlled strings naming a setting or a service. That is deliberate,
+and any new check added to it must keep that property.
+
+### Migrating a host off the pre-Phase-20 env layout
+
+Phase 20 moved `AVENLYO_API_URL` out of `/etc/avenlyo/web.env` and into the deployment profile, and
+made `/etc/avenlyo/api.env` responsible for declaring `AVENLYO_DEPLOYMENT_ENV`. A host provisioned
+before that needs two one-time, non-secret edits. Both are key-level operations; neither prints a
+value.
+
+```bash
+# 1. The API must declare its deployment identity, or it refuses to start under NODE_ENV=production.
+sudo grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env      # 0 means it must be added
+
+# 2. The obsolete second authority for the internal boundary.
+sudo grep -c '^AVENLYO_API_URL=' /etc/avenlyo/web.env             # 1 means it must be removed
+```
+
+Back up before editing, preserve owner/group/mode, and change only the named assignment:
+
+```bash
+install -m 600 /dev/null ~/env-backup/web.env.bak
+sudo cp -p /etc/avenlyo/web.env ~/env-backup/web.env.bak
+T=$(mktemp); chmod 600 "$T"
+sudo sed '/^AVENLYO_API_URL=/d' /etc/avenlyo/web.env > "$T"
+sudo install -o avenlyo -g avenlyo -m 640 "$T" /etc/avenlyo/web.env
+rm -f "$T"
+sudo diff ~/env-backup/web.env.bak /etc/avenlyo/web.env   # must show exactly one removed line
+```
+
+The stale line is inert once `deploy/compose.yaml` supplies `AVENLYO_API_URL` — Compose's
+`environment:` overrides `env_file:` — but it is a second authority for a security-relevant value,
+and the next person to read the file has no way to know which one won. Remove it.
 
 ### Why a one-off container and not `pnpm ops:preflight`
 
@@ -583,7 +687,9 @@ Before:
 - [ ] Provider console shows backup/PITR enabled and current
 - [ ] `AVENLYO_DEPLOYMENT_ENV` is set to this environment, in **both** `deploy/env/build.env` and
       `/etc/avenlyo/api.env`, to the same value
-- [ ] `deploy/env/build.env` carries every required profile setting (assert-deployment-profile passes)
+- [ ] `docker compose ... config --quiet` exits 0 and prints nothing on the host
+- [ ] CI is green on the exact release SHA (that is what discharges the source/topology assertion)
+- [ ] `sudo grep -c '^AVENLYO_API_URL=' /etc/avenlyo/web.env` is `0` (obsolete authority removed)
 - [ ] `AVENLYO_RELEASE` is the exact 40-character commit SHA being deployed
 - [ ] Images are tagged with that SHA and already built, and `docker image inspect` confirms it
 - [ ] The one-off preflight container exits 0 (schema check aside, until migrations run)
