@@ -52,6 +52,15 @@ export const env = parseEnvironment(
      */
     AVENLYO_PROFILE_API_HOST: emptyAsAbsent(z.string().trim().min(1).max(253)),
     AVENLYO_PROFILE_APP_URL: emptyAsAbsent(z.string().url()),
+    /**
+     * The deployment profile's OWN declared identity, mirrored under a distinct name.
+     *
+     * Deliberately NOT `AVENLYO_DEPLOYMENT_ENV`: Compose's `environment:` overrides `env_file:`, so
+     * passing the profile's value under the runtime name would replace the identity api.env supplies
+     * -- with an empty string whenever the profile omitted it -- and a working deployment would stop
+     * booting. Mirroring it lets preflight compare the two rather than let one silently win.
+     */
+    AVENLYO_PROFILE_DEPLOYMENT_ENV: emptyAsAbsent(z.string().trim().min(1).max(20)),
     AVENLYO_PROFILE_PUBLIC_API_URL: emptyAsAbsent(z.string().url()),
     AVENLYO_PROFILE_WEB_API_URL: emptyAsAbsent(z.string().url()),
     AVENLYO_PROFILE_WEB_HOST: emptyAsAbsent(z.string().trim().min(1).max(253)),

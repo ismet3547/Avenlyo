@@ -152,6 +152,15 @@ export function portOf(value: string): string | null {
   }
 }
 
+/** `null` rather than a throw, so a malformed setting becomes a finding instead of a crash. */
+function parseUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
 /** True for a hostname this repository knows is staging, including the `*-staging.avenlyo.com` shape. */
 export function isStagingHostname(host: string | null): boolean {
   if (!host) return false;
@@ -196,6 +205,8 @@ export interface DeploymentConfigInput {
   /** Server-side URL the web container uses to reach the API inside the compose network. */
   readonly internalApiUrl?: string | undefined;
   readonly googleOauthRedirectUri?: string | undefined;
+  /** The deployment profile's OWN declared identity, as it reached this process. See below. */
+  readonly profileDeploymentEnv?: string | undefined;
   readonly publicApiUrl?: string | undefined;
   readonly publicWebUrl?: string | undefined;
   readonly release?: string | undefined;
@@ -209,6 +220,50 @@ export interface DeploymentConfigInput {
 
 /** The internal boundary Phase 19 established. Source-controlled: a deployment does not get to pick. */
 export const INTERNAL_API_URL = 'http://caddy:8080';
+
+/**
+ * The non-secret deployment profile a deployed environment must actually supply.
+ *
+ * These are variable names as an operator writes them in the `--env-file`
+ * (`deploy/env/staging.public.env.example`, `deploy/env/production.public.env.example`), which is
+ * also the shape `deploy/compose.yaml` renders and `.github/scripts/assert-deployment-profile.mjs`
+ * asserts. One list, one contract, three consumers.
+ *
+ * They are REQUIRED rather than optional because every agreement rule below is conditional on the
+ * values it compares. A profile that simply omitted them would skip the CORS/origin agreement, the
+ * Caddy host agreement, the published-port rule and the internal-boundary rule -- and still report
+ * `deployment_configuration: pass`, having proven none of them. "The check did not run" must not
+ * read as "the check passed", so absence is a failure in a deployed environment.
+ *
+ * Development stays permissive: there is no profile, no Caddy and no compose network there.
+ */
+export const REQUIRED_DEPLOYED_PROFILE_SETTINGS: readonly string[] = [
+  'AVENLYO_API_HOST',
+  'AVENLYO_API_URL',
+  'AVENLYO_DEPLOYMENT_ENV',
+  'AVENLYO_WEB_HOST',
+  'NEXT_PUBLIC_APP_URL',
+  'NEXT_PUBLIC_AVENLYO_API_URL',
+];
+
+/**
+ * The source-controlled OAuth callback route, from `apps/api/src/routes/google-calendar-scheduling.ts`.
+ *
+ * Google will only redirect to a URI registered in the provider console, so a redirect URI that is
+ * merely "some HTTPS URL" is not a working configuration -- it is a login that dead-ends after the
+ * user has already consented. The path is not deployment configuration: the API serves exactly this
+ * one.
+ */
+export const GOOGLE_OAUTH_CALLBACK_PATH = '/v1/scheduling/google-calendar/callback';
+
+/**
+ * The only pathname a Twilio webhook base URL may carry.
+ *
+ * `packages/messaging`'s `twilioWebhookUrl` appends absolute routes (`/v1/webhooks/twilio/...`) to
+ * the base URL's own pathname, so a base carrying any path prefix produces `/prefix/v1/webhooks/...`
+ * -- a URL this API does not route. The base's pathname must therefore be root.
+ */
+export const TWILIO_WEBHOOK_BASE_PATH = '/';
 
 function requireHttps(
   findings: DeploymentFinding[],
@@ -297,6 +352,55 @@ export function evaluateDeploymentConfig(input: DeploymentConfigInput): readonly
 
   if (!deployed) return findings;
 
+  // -- The profile must be present before anything can be said about it ----------------------
+  // Every rule below compares one declared value against another, and a comparison with an absent
+  // operand is not a weaker check -- it is no check. Requiring the profile first is what makes
+  // `deployment_configuration: pass` mean the contract was evaluated rather than skipped.
+  for (const [setting, value] of [
+    ['AVENLYO_API_HOST', input.caddyApiHost],
+    ['AVENLYO_API_URL', input.internalApiUrl],
+    ['AVENLYO_WEB_HOST', input.caddyWebHost],
+    ['NEXT_PUBLIC_APP_URL', input.publicWebUrl],
+    ['NEXT_PUBLIC_AVENLYO_API_URL', input.publicApiUrl],
+  ] as const) {
+    if (value === undefined || value === '') {
+      findings.push({
+        check: 'deployment_profile_complete',
+        detail:
+          'is not part of the deployment profile this process was given, so the agreements that ' +
+          'depend on it cannot be evaluated',
+        setting,
+        severity: 'error',
+      });
+    }
+  }
+
+  // -- The profile's own identity, and whether it agrees with this process's ------------------
+  // The runtime identity comes from the server-only env file; the profile identity comes from the
+  // `--env-file` Compose renders. They are two files an operator edits separately, so they can
+  // disagree -- a container declaring production while the profile it was rendered from declares
+  // staging is exactly the cross-wire this phase exists to catch, and neither side can detect it
+  // alone.
+  if (input.profileDeploymentEnv === undefined || input.profileDeploymentEnv === '') {
+    findings.push({
+      check: 'deployment_profile_complete',
+      detail:
+        'is not declared in the deployment profile this process was given, so the profile and the ' +
+        'runtime cannot be shown to describe the same deployment',
+      setting: 'AVENLYO_DEPLOYMENT_ENV',
+      severity: 'error',
+    });
+  } else if (input.profileDeploymentEnv !== input.deploymentEnv) {
+    findings.push({
+      check: 'deployment_identity_agreement',
+      detail:
+        'declares a different deployment than this process resolved from its own environment; the ' +
+        'profile and the runtime disagree about which deployment this is',
+      setting: 'AVENLYO_DEPLOYMENT_ENV',
+      severity: 'error',
+    });
+  }
+
   // -- Public schemes ------------------------------------------------------------------------
   for (const [setting, value] of [
     ['NEXT_PUBLIC_APP_URL', input.publicWebUrl],
@@ -317,6 +421,8 @@ export function evaluateDeploymentConfig(input: DeploymentConfigInput): readonly
     ['NEXT_PUBLIC_AVENLYO_API_URL', input.publicApiUrl],
     ['API_CORS_ORIGIN', input.apiCorsOrigin],
     ['WEB_CHAT_IFRAME_ORIGIN', input.webChatIframeOrigin],
+    ['GOOGLE_OAUTH_REDIRECT_URI', input.googleOauthRedirectUri],
+    ['TWILIO_MESSAGING_WEBHOOK_BASE_URL', input.twilioWebhookBaseUrl],
   ] as const) {
     if (value === undefined) continue;
     const port = portOf(value);
@@ -373,6 +479,94 @@ export function evaluateDeploymentConfig(input: DeploymentConfigInput): readonly
       setting: 'NEXT_PUBLIC_APP_URL',
       severity: 'error',
     });
+  }
+
+  // -- Provider callbacks must point at THIS deployment's API ---------------------------------
+  // HTTPS and "not a staging hostname" were never enough. Both of these are addresses a third party
+  // calls back on, registered in a provider console that this repository cannot read, so a value
+  // that is merely a well-formed HTTPS URL somewhere else is silently broken in the one direction
+  // nobody tests before launch: Google refuses a redirect_uri it does not recognise only after the
+  // user has already consented, and Twilio posts inbound messages to whatever it was told, which
+  // then simply never arrive.
+  //
+  // Checked only when configured. Both integrations are legitimately absent from a deployment, and
+  // an unconfigured provider must stay a clean `disabled`, not a failure.
+  const publicApiOrigin = originOf(input.publicApiUrl ?? '');
+
+  if (input.googleOauthRedirectUri) {
+    const redirect = parseUrl(input.googleOauthRedirectUri);
+    if (!redirect) {
+      findings.push({
+        check: 'provider_callback_alignment',
+        detail: 'is not a parseable URL',
+        setting: 'GOOGLE_OAUTH_REDIRECT_URI',
+        severity: 'error',
+      });
+    } else {
+      if (publicApiOrigin && redirect.origin.toLowerCase() !== publicApiOrigin) {
+        findings.push({
+          check: 'provider_callback_alignment',
+          detail: 'does not name the same browser origin as this deployment’s public API URL',
+          setting: 'GOOGLE_OAUTH_REDIRECT_URI',
+          severity: 'error',
+        });
+      }
+      if (redirect.pathname !== GOOGLE_OAUTH_CALLBACK_PATH) {
+        findings.push({
+          check: 'provider_callback_alignment',
+          detail: `must use the callback route this API serves, ${GOOGLE_OAUTH_CALLBACK_PATH}`,
+          setting: 'GOOGLE_OAUTH_REDIRECT_URI',
+          severity: 'error',
+        });
+      }
+      if (redirect.search !== '' || redirect.hash !== '') {
+        findings.push({
+          check: 'provider_callback_alignment',
+          detail: 'must carry no query string or fragment; the provider appends its own',
+          setting: 'GOOGLE_OAUTH_REDIRECT_URI',
+          severity: 'error',
+        });
+      }
+    }
+  }
+
+  if (input.twilioWebhookBaseUrl) {
+    const base = parseUrl(input.twilioWebhookBaseUrl);
+    if (!base) {
+      findings.push({
+        check: 'provider_callback_alignment',
+        detail: 'is not a parseable URL',
+        setting: 'TWILIO_MESSAGING_WEBHOOK_BASE_URL',
+        severity: 'error',
+      });
+    } else {
+      if (publicApiOrigin && base.origin.toLowerCase() !== publicApiOrigin) {
+        findings.push({
+          check: 'provider_callback_alignment',
+          detail: 'does not name the same browser origin as this deployment’s public API URL',
+          setting: 'TWILIO_MESSAGING_WEBHOOK_BASE_URL',
+          severity: 'error',
+        });
+      }
+      if (base.pathname !== TWILIO_WEBHOOK_BASE_PATH) {
+        findings.push({
+          check: 'provider_callback_alignment',
+          detail:
+            'must have no path prefix; the webhook routes are absolute, so a prefix builds a URL ' +
+            'this API does not serve',
+          setting: 'TWILIO_MESSAGING_WEBHOOK_BASE_URL',
+          severity: 'error',
+        });
+      }
+      if (base.search !== '' || base.hash !== '') {
+        findings.push({
+          check: 'provider_callback_alignment',
+          detail: 'must carry no query string or fragment; the webhook route is appended to it',
+          setting: 'TWILIO_MESSAGING_WEBHOOK_BASE_URL',
+          severity: 'error',
+        });
+      }
+    }
   }
 
   // -- Cross-environment wiring --------------------------------------------------------------
@@ -444,12 +638,52 @@ export function supabaseIdentityAssurance(input: {
       status: 'unverified',
     };
   }
-  const host = hostnameOf(input.supabaseUrl ?? '');
-  if (!host) {
-    return { detail: 'SUPABASE_URL is missing or not a URL', status: 'mismatch' };
+  const actualRef = supabaseProjectRefOf(input.supabaseUrl);
+  if (actualRef === null) {
+    return {
+      detail:
+        'SUPABASE_URL is not a canonical hosted Supabase project URL, so no project ref can be read from it',
+      status: 'mismatch',
+    };
   }
-  const actualRef = host.split('.')[0] ?? '';
   return actualRef === expected
     ? { detail: 'configured project ref matches the declared expectation', status: 'match' }
     : { detail: 'configured project ref does not match the declared expectation', status: 'mismatch' };
+}
+
+/** The host every hosted Supabase project lives under. */
+export const SUPABASE_PROJECT_HOST_SUFFIX = '.supabase.co';
+
+/**
+ * The hosted Supabase project ref a URL actually names, or `null` when it names none.
+ *
+ * The previous implementation took the URL's first DNS label, which made
+ * `https://<expected-ref>.example.com` "match" the expectation -- a check that reported the intended
+ * project had been proven while proving only that somebody had chosen a subdomain name. The
+ * expectation exists precisely because a project URL is opaque, so an assurance that any domain can
+ * satisfy is worse than none: it converts "unverified" into a green tick.
+ *
+ * This project uses hosted Supabase, so the canonical origin shape is the thing to require:
+ * `https://<project-ref>.supabase.co`, with no port, no path, no query and no fragment. Anything
+ * else is not a hosted project URL, and this function refuses to guess a ref out of it.
+ *
+ * A custom Supabase domain would need its own explicit identity mechanism -- a different declared
+ * fact, not a looser reading of this one. Silently accepting arbitrary first labels is exactly the
+ * looseness being removed.
+ */
+export function supabaseProjectRefOf(value: string | undefined): string | null {
+  const url = parseUrl(value ?? '');
+  if (!url) return null;
+  if (url.protocol !== 'https:') return null;
+  if (url.port !== '') return null;
+  if (url.pathname !== '/' && url.pathname !== '') return null;
+  if (url.search !== '' || url.hash !== '') return null;
+
+  const host = url.hostname.toLowerCase();
+  if (!host.endsWith(SUPABASE_PROJECT_HOST_SUFFIX)) return null;
+
+  const ref = host.slice(0, -SUPABASE_PROJECT_HOST_SUFFIX.length);
+  // One label, and the alphabet a Supabase ref actually uses. A dotted value would mean a deeper
+  // subdomain of supabase.co, which is not a project origin.
+  return /^[a-z0-9]+$/.test(ref) ? ref : null;
 }

@@ -72,6 +72,19 @@ services:
       - /etc/avenlyo/web.env
     environment:
       AVENLYO_RELEASE: ${AVENLYO_RELEASE:-unknown}
+      # The web container's server-side path to the API, taken from the deployment profile rather
+      # than from /etc/avenlyo/web.env.
+      #
+      # It used to live in web.env, while `ops:preflight` validated the profile's copy of the same
+      # name. Two authorities for one value means preflight could certify `http://caddy:8080` while
+      # the running container used something else entirely -- including `http://api:4000`, which is
+      # the exact bypass of Phase 19's one-hop trust boundary this value exists to prevent. The
+      # value is non-secret, so the fix is to give it one home: the profile.
+      #
+      # Required substitution, not `${...:-}`: an omitted value must stop the render rather than
+      # blank the setting. `environment:` overrides `env_file:`, so a default of "" here would
+      # silently unset a value a host's web.env still carried.
+      AVENLYO_API_URL: ${AVENLYO_API_URL:?the deployment profile must declare AVENLYO_API_URL}
     expose:
       - "3000"
     networks:
@@ -124,13 +137,21 @@ services:
       # Every value here is non-secret and safe in a process listing. No key, token, or anon key
       # belongs in this block.
       #
-      # AVENLYO_DEPLOYMENT_ENV is deliberately NOT here. Compose's `environment:` overrides
-      # `env_file:`, so listing it would replace the identity api.env supplies with an empty string
-      # whenever the profile omits it -- turning a working deployment into one that refuses to boot.
-      # The identity stays in api.env, next to NODE_ENV, where both are read together.
+      # AVENLYO_DEPLOYMENT_ENV itself is deliberately NOT here. Compose's `environment:` overrides
+      # `env_file:`, so listing it would replace the identity api.env supplies -- turning a working
+      # deployment into one that refuses to boot. The runtime identity stays in api.env, next to
+      # NODE_ENV, where both are read together.
       #
-      # Unset profile values arrive as empty strings for the same override reason; env.ts treats
-      # empty as absent so an unset value is unchecked rather than checked against "".
+      # Instead the profile's own declared identity is mirrored under a distinct name, so preflight
+      # can compare the two files rather than let one silently overwrite the other. Required
+      # substitution: a deployed profile that declares no identity must stop the render.
+      AVENLYO_PROFILE_DEPLOYMENT_ENV: ${AVENLYO_DEPLOYMENT_ENV:?the deployment profile must declare AVENLYO_DEPLOYMENT_ENV}
+      #
+      # The remaining profile values are required by the preflight contract
+      # (REQUIRED_DEPLOYED_PROFILE_SETTINGS in packages/shared), but are passed with `:-` rather than
+      # `:?` on purpose: an operator who omits one should get a bounded preflight finding naming the
+      # setting, not an opaque Compose interpolation error. env.ts treats "" as absent so the
+      # omission reaches the policy as an omission.
       AVENLYO_PROFILE_API_HOST: ${AVENLYO_API_HOST:-}
       AVENLYO_PROFILE_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
       AVENLYO_PROFILE_PUBLIC_API_URL: ${NEXT_PUBLIC_AVENLYO_API_URL:-}

@@ -76,6 +76,7 @@ async function loadDeploymentSnapshot() {
       deploymentEnv: deploymentEnvironment,
       googleOauthRedirectUri: env.GOOGLE_OAUTH_REDIRECT_URI,
       internalApiUrl: env.AVENLYO_PROFILE_WEB_API_URL,
+      profileDeploymentEnv: env.AVENLYO_PROFILE_DEPLOYMENT_ENV,
       publicApiUrl: env.AVENLYO_PROFILE_PUBLIC_API_URL,
       publicWebUrl: env.AVENLYO_PROFILE_APP_URL,
       release,

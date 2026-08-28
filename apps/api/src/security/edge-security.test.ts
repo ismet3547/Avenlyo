@@ -199,11 +199,20 @@ describe('only Caddy can peer with the API', () => {
 
   it('routes the web container to the API through Caddy, never directly', async () => {
     const { readFile } = await import('node:fs/promises');
-    const webEnv = await readFile('deploy/env/web.env.example', 'utf8');
     const caddyfile = await readFile('deploy/Caddyfile', 'utf8');
+    const compose = await readFile('deploy/compose.yaml', 'utf8');
 
-    expect(withoutComments(webEnv)).toContain('AVENLYO_API_URL=http://caddy:8080');
-    expect(withoutComments(webEnv)).not.toContain('AVENLYO_API_URL=http://api:4000');
+    // The value moved out of web.env.example and into the deployment profile, because two
+    // authorities for it meant `ops:preflight` could certify the Caddy boundary while the running
+    // web container reached api:4000 directly. Both source profiles must declare it, and the web
+    // service's runtime value must come from that profile rather than from a host file.
+    for (const target of ['staging', 'production']) {
+      const profile = await readFile(`deploy/env/${target}.public.env.example`, 'utf8');
+
+      expect(withoutComments(profile)).toContain('AVENLYO_API_URL=http://caddy:8080');
+      expect(withoutComments(profile)).not.toContain('AVENLYO_API_URL=http://api:4000');
+    }
+    expect(withoutComments(compose)).toMatch(/AVENLYO_API_URL: \$\{AVENLYO_API_URL:\?/);
     expect(caddyfile).toMatch(/^:8080 \{/m);
   });
 

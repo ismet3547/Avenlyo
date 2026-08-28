@@ -64,6 +64,7 @@ const CLEARED = [
   'EZYVET_PARTNER_ID',
   'AVENLYO_EXPECTED_SUPABASE_PROJECT_REF',
   'AVENLYO_DEPLOYMENT_ENV',
+  'AVENLYO_PROFILE_DEPLOYMENT_ENV',
   'AVENLYO_PROFILE_APP_URL',
   'AVENLYO_PROFILE_PUBLIC_API_URL',
   'AVENLYO_PROFILE_WEB_HOST',
@@ -99,6 +100,7 @@ function healthyProductionProfile(overrides = {}) {
     API_CORS_ORIGIN: 'https://avenlyo.com',
     AVENLYO_PROFILE_API_HOST: 'api.avenlyo.com',
     AVENLYO_PROFILE_APP_URL: 'https://avenlyo.com',
+    AVENLYO_PROFILE_DEPLOYMENT_ENV: 'production',
     AVENLYO_PROFILE_PUBLIC_API_URL: 'https://api.avenlyo.com',
     AVENLYO_PROFILE_WEB_API_URL: 'http://caddy:8080',
     AVENLYO_PROFILE_WEB_HOST: 'avenlyo.com',
@@ -155,8 +157,17 @@ async function expectChecksFailed(scenario, env, expectedCheck, forbidden = []) 
   if (!/RESULT: fail/.test(result.stdout)) {
     fail(scenario, 'expected a bounded "RESULT: fail" summary line');
   }
-  if (!result.stdout.includes(expectedCheck)) {
-    fail(scenario, `expected the report to name ${expectedCheck}`);
+  // The report prints EVERY check with its outcome, so merely finding the name proves nothing --
+  // a check that passed is named too. This asserts the FAIL line specifically, which is what the
+  // scenario is about. (Found by injection: reverting the Supabase rule to a first-DNS-label
+  // comparison left that scenario green, because the check name was still on the page.)
+  // `config:` because a deployment-policy finding is reported under that prefix.
+  const failLine = new RegExp(
+    `^\\s*FAIL\\s+(config:)?${expectedCheck.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`,
+    'm',
+  );
+  if (!failLine.test(result.stdout)) {
+    fail(scenario, `expected the report to record ${expectedCheck} as FAIL`);
   }
   assertBoundedAndClean(scenario, result, forbidden);
 }
@@ -241,10 +252,94 @@ await expectChecksFailed(
   'supabase_project_identity',
 );
 
+// -- The profile itself must reach the container -----------------------------------------------
+// One scenario per required profile setting. The point is not that the policy has a rule; it is
+// that a deployment which simply omits the setting reaches this command as an omission and is
+// refused, instead of quietly skipping the agreement that setting was there to prove.
+for (const [scenario, variable] of [
+  ['profile omits the public web URL', 'AVENLYO_PROFILE_APP_URL'],
+  ['profile omits the public API URL', 'AVENLYO_PROFILE_PUBLIC_API_URL'],
+  ['profile omits the Caddy web host', 'AVENLYO_PROFILE_WEB_HOST'],
+  ['profile omits the Caddy API host', 'AVENLYO_PROFILE_API_HOST'],
+  ['profile omits the internal API URL', 'AVENLYO_PROFILE_WEB_API_URL'],
+  ['profile omits its own deployment identity', 'AVENLYO_PROFILE_DEPLOYMENT_ENV'],
+]) {
+  await expectChecksFailed(
+    scenario,
+    healthyProductionProfile({ [variable]: undefined }),
+    'deployment_profile_complete',
+  );
+  // And the empty string Compose renders for an unset `${VAR:-}` must behave identically: an
+  // omitted profile value arrives as "" rather than as absent, and "" must not read as satisfied.
+  await expectChecksFailed(
+    `${scenario} (rendered as an empty string)`,
+    healthyProductionProfile({ [variable]: '' }),
+    'deployment_profile_complete',
+  );
+}
+
+await expectChecksFailed(
+  'profile identity disagrees with the runtime identity',
+  healthyProductionProfile({ AVENLYO_PROFILE_DEPLOYMENT_ENV: 'staging' }),
+  'deployment_identity_agreement',
+);
+
+// -- Provider callbacks that are HTTPS and still wrong ------------------------------------------
+await expectChecksFailed(
+  'Google redirect URI points at an unrelated HTTPS host',
+  healthyProductionProfile({
+    GOOGLE_OAUTH_REDIRECT_URI: 'https://unrelated.example.com/v1/scheduling/google-calendar/callback',
+  }),
+  'provider_callback_alignment',
+  ['unrelated.example.com'],
+);
+
+await expectChecksFailed(
+  'Google redirect URI uses a route this API does not serve',
+  healthyProductionProfile({
+    GOOGLE_OAUTH_REDIRECT_URI: 'https://api.avenlyo.com/oauth2/callback',
+  }),
+  'provider_callback_alignment',
+  ['/oauth2/callback'],
+);
+
+await expectChecksFailed(
+  'Twilio webhook base URL carries a path prefix',
+  healthyProductionProfile({
+    TWILIO_MESSAGING_WEBHOOK_BASE_URL: 'https://api.avenlyo.com/twilio',
+  }),
+  'provider_callback_alignment',
+  ['/twilio'],
+);
+
+await expectChecksFailed(
+  'Twilio webhook base URL names a port Caddy does not publish',
+  healthyProductionProfile({
+    TWILIO_MESSAGING_WEBHOOK_BASE_URL: 'https://api.avenlyo.com:8443',
+  }),
+  'public_port_is_published',
+  ['8443'],
+);
+
+// -- Supabase identity must name a hosted Supabase project ------------------------------------
+// The discriminating case: the expectation and the URL's first DNS label agree, and the URL is
+// still not the declared project. A first-label comparison called this a match.
+await expectChecksFailed(
+  'expected ref matched only by an arbitrary domain’s first label',
+  healthyProductionProfile({
+    AVENLYO_EXPECTED_SUPABASE_PROJECT_REF: 'abc123',
+    SUPABASE_URL: 'https://abc123.example.com',
+  }),
+  'supabase_project_identity',
+  ['abc123'],
+);
+
 if (failures === 0) {
   process.stdout.write(
     'ops-preflight-artifact-smoke: PASS -- artifact runs under plain node; exit 2 is bounded and ' +
       'stack-trace-free for an uninterpretable configuration; the real CLI path catches release, ' +
-      'origin, host-agreement, Caddy-boundary and Supabase-identity defects; no secret leaked\n',
+      'origin, host-agreement, Caddy-boundary, every missing profile setting (absent and empty), a ' +
+      'profile/runtime identity disagreement, misaligned Google and Twilio callbacks and a ' +
+      'Supabase URL that only looks like the declared project; no secret leaked\n',
   );
 }

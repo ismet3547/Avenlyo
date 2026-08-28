@@ -87,18 +87,31 @@ Beyond the hostnames above:
 
 ## Validation before deploying
 
+Preflight runs as a **one-off container from the exact SHA-tagged image**, through the same compose
+file, the same `--env-file` and the same `/etc/avenlyo/api.env` the deployment itself uses:
+
 ```bash
-pnpm ops:preflight
+docker image inspect "avenlyo-api:${AVENLYO_RELEASE}" > /dev/null
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+  run --rm --no-deps -T api node dist/scripts/ops-preflight.js
 ```
+
+Not `pnpm ops:preflight` on the host: a host shell receives neither `/etc/avenlyo/api.env` nor the
+`AVENLYO_PROFILE_*` values Compose injects, and a deployment host is not guaranteed to hold a built
+`dist/` at all. The full reasoning, and why the `docker image inspect` line is part of the command
+rather than a nicety, is in the runbook.
 
 Read-only, contacts no provider, writes nothing. It must exit 0. It is the check that catches a
 production configuration still carrying a staging hostname, a `test` Stripe key in production, a
-release that is not an exact SHA, a mismatched or undeclared Supabase project, a CORS origin that
-has drifted from the app origin, a public URL on a port Caddy does not publish, and a web container
-configured to reach the API without crossing Caddy.
+release that is not an exact SHA, a mismatched or undeclared Supabase project, a Supabase URL that is
+not a hosted Supabase project at all, a CORS origin that has drifted from the app origin, a public URL
+on a port Caddy does not publish, a Google or Twilio callback pointing somewhere other than this
+deployment's API, a web container configured to reach the API without crossing Caddy — and a
+deployment profile that simply omits any of the settings those checks compare.
 
 It is fail-closed in a deployed environment: it will not exit 0 while schema compatibility is
-unproven, and in production it will not exit 0 while the Supabase project identity is unverified.
+unproven, while a required profile setting is absent, while the profile's declared environment
+disagrees with the API's own, or — in production — while the Supabase project identity is unverified.
 The full matrix is in the runbook.
 
 Findings name the setting, never its value, so the output is safe to paste into a ticket.
@@ -107,12 +120,16 @@ Findings name the setting, never its value, so the output is safe to paste into 
 
 Preflight runs inside the API container. The browser-facing half of the profile —
 `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_AVENLYO_API_URL`, `AVENLYO_WEB_HOST`, `AVENLYO_API_HOST`,
-`AVENLYO_API_URL` — is passed in by `deploy/compose.yaml` as `AVENLYO_PROFILE_*`, sourced from the
-same `--env-file` the build and the rest of the deployment read.
+`AVENLYO_API_URL`, and the profile's own `AVENLYO_DEPLOYMENT_ENV` — is passed in by
+`deploy/compose.yaml` as `AVENLYO_PROFILE_*`, sourced from the same `--env-file` the build and the
+rest of the deployment read.
 
 The same file, deliberately: a separate input for preflight would be a second source of truth, and
-preflight would certify a profile the deployment did not use. All five values are non-secret. No
-key, token, or anon key is passed in for this, and none may be added to make a check possible.
+preflight would certify a profile the deployment did not use. Every value is non-secret. No key,
+token, or anon key is passed in for this, and none may be added to make a check possible.
+
+`AVENLYO_API_URL` goes further: the web container's own runtime value is wired from that same
+profile, so the value preflight validates is literally the value the container runs with.
 
 ## Go-live work not done by Phase 20
 
@@ -125,9 +142,9 @@ Every item is an infrastructure or account action, outside this repository:
 5. Switch Stripe, Twilio, Google, and OpenAI to production accounts and credentials.
 6. Populate `/etc/avenlyo/api.env` and `/etc/avenlyo/web.env` on the production host.
 7. Configure the external monitoring checks listed in the runbook.
-8. Apply migrations to the production database.
-9. Run `pnpm ops:preflight` and require exit 0.
-10. Build the release images once, tagged with the exact SHA.
+8. Build the release images once, tagged with the exact SHA, and confirm the tags exist.
+9. Run the one-off preflight container and require exit 0.
+10. Apply migrations to the production database, then re-run the preflight container.
 11. Deploy with `up -d --no-build`, then run `smoke:production` with `AVENLYO_EXPECTED_RELEASE` set.
 
 Steps 1–7 need credentials and provider access that deliberately do not exist in this repository or

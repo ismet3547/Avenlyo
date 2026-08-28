@@ -36,6 +36,22 @@ const root = repositoryRoot();
 const webEnvExample = readFileSync(join(root, 'deploy/env/web.env.example'), 'utf8');
 const buildEnvExample = readFileSync(join(root, 'deploy/env/build.env.example'), 'utf8');
 
+/**
+ * The second place a web server variable may legitimately be declared.
+ *
+ * Most of them belong in `/etc/avenlyo/web.env`, because they are secrets. `AVENLYO_API_URL` is
+ * not: it is the internal boundary, non-secret, and it now has exactly one home in the
+ * source-controlled deployment profile, from which `deploy/compose.yaml` wires the web container's
+ * runtime value. Two authorities for it meant `ops:preflight` could certify `http://caddy:8080`
+ * while the container reached `api:4000` directly.
+ *
+ * So the invariant is unchanged in substance -- every server variable the web app reads must be
+ * documented somewhere an operator sets it -- and only the set of acceptable places has grown.
+ */
+const deploymentProfiles = ['staging', 'production'].map((target) =>
+  readFileSync(join(root, `deploy/env/${target}.public.env.example`), 'utf8'),
+);
+
 function sourceFiles(directory: string): readonly string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const full = join(directory, entry.name);
@@ -83,7 +99,35 @@ describe('deploy/env/web.env.example describes the web runtime', () => {
   });
 
   it.each(reads.filter(isServerRuntimeVariable))('documents %s', (name) => {
-    expect(documentedIn(webEnvExample, name)).toBe(true);
+    const documented =
+      documentedIn(webEnvExample, name) ||
+      deploymentProfiles.some((profile) => documentedIn(profile, name));
+
+    expect(documented).toBe(true);
+  });
+
+  it('declares AVENLYO_API_URL in the deployment profile, and nowhere else', () => {
+    // The specific case the rule above was widened for, pinned so the widening cannot become a
+    // loophole: this value must have exactly one authority, and it is the profile.
+    for (const profile of deploymentProfiles) {
+      expect(profile).toMatch(/^AVENLYO_API_URL=http:\/\/caddy:8080$/m);
+    }
+    expect(documentedIn(webEnvExample, 'AVENLYO_API_URL')).toBe(false);
+  });
+
+  it('keeps every other server variable in web.env.example, not in the profile', () => {
+    // The profile is committed. Only these two non-secret deployment facts may live there -- the
+    // internal boundary and the release tag, both of which deploy/compose.yaml wires into the web
+    // container from the profile. A secret that drifted into it would be published to the
+    // repository, so the allowance is an explicit list rather than a rule of thumb.
+    const profileOwned = new Set(['AVENLYO_API_URL', 'AVENLYO_RELEASE']);
+
+    for (const name of reads.filter(isServerRuntimeVariable)) {
+      if (profileOwned.has(name)) continue;
+      for (const profile of deploymentProfiles) {
+        expect(documentedIn(profile, name)).toBe(false);
+      }
+    }
   });
 
   it('documents OPENAI_API_KEY as a value an operator must actually set', () => {

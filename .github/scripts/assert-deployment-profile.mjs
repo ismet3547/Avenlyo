@@ -28,6 +28,23 @@ import { readFileSync } from 'node:fs';
  */
 const DEPLOYED_ENVIRONMENTS = ['staging', 'production'];
 
+/**
+ * The required deployment-profile keys, mirrored from `REQUIRED_DEPLOYED_PROFILE_SETTINGS` in
+ * packages/shared, and guarded by the same drift test as the list above.
+ *
+ * This is what makes CI and the operator read one contract. The fixtures this script is handed in
+ * CI are generated from deploy/env/*.public.env.example rather than typed out in the workflow, so a
+ * key CI proves is a key the template an operator is told to copy actually contains.
+ */
+const REQUIRED_PROFILE_KEYS = [
+  'AVENLYO_API_HOST',
+  'AVENLYO_API_URL',
+  'AVENLYO_DEPLOYMENT_ENV',
+  'AVENLYO_WEB_HOST',
+  'NEXT_PUBLIC_APP_URL',
+  'NEXT_PUBLIC_AVENLYO_API_URL',
+];
+
 const [, , expectedTarget, envFile] = process.argv;
 
 if (expectedTarget !== 'staging' && expectedTarget !== 'production') {
@@ -87,6 +104,19 @@ if (declared !== expectedTarget) {
 }
 
 const target = declared;
+
+// Every required key, before the render: an absent key is not a weaker deployment, it is one whose
+// contract was never evaluated.
+const missing = REQUIRED_PROFILE_KEYS.filter((key) => !(profile[key] ?? '').trim());
+if (missing.length > 0) {
+  process.stderr.write(
+    `deployment profile "${envFile}" FAILED:\n` +
+      missing
+        .map((key) => `  - ${key} is missing from the deployment profile\n`)
+        .join(''),
+  );
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------------------------
 // Render the compose file exactly the way a deploy does.
@@ -173,6 +203,31 @@ const networksOf = (name) => {
 check(networksOf('web').join() === 'web_edge', 'web must be attached to web_edge only');
 check(networksOf('api').join() === 'api_edge', 'api must be attached to api_edge only');
 check(networksOf('caddy').join() === 'api_edge,web_edge', 'caddy must bridge both networks');
+
+/** One `environment:` entry of a rendered service, or null. */
+const envOf = (service, key) => {
+  const match = serviceBlock(service).match(new RegExp(`^      ${key}: (.*)$`, 'm'));
+  return match ? match[1].trim().replace(/^["']|["']$/g, '') : null;
+};
+
+// The profile is the single authority for the values it declares. These two assertions are what
+// make that literally true of the running containers rather than only of the preflight's opinion:
+// the web container's own AVENLYO_API_URL must be the profile's, and the API must receive the
+// profile's declared identity to compare against its own.
+check(
+  envOf('web', 'AVENLYO_API_URL') === profile.AVENLYO_API_URL,
+  "the web service's runtime AVENLYO_API_URL must come from the deployment profile",
+);
+check(
+  envOf('api', 'AVENLYO_PROFILE_DEPLOYMENT_ENV') === declared,
+  "the api service must receive the profile's declared deployment identity",
+);
+// And it must NOT receive the runtime identity from the profile: `environment:` overrides
+// `env_file:`, so that would let a profile silently replace the identity api.env supplies.
+check(
+  envOf('api', 'AVENLYO_DEPLOYMENT_ENV') === null,
+  'the profile must not override the api runtime AVENLYO_DEPLOYMENT_ENV from api.env',
+);
 
 const published = [...rendered.matchAll(/published: "(\d+)"/g)].map((match) => match[1]);
 check(published.length === 3, `expected exactly 3 published ports, saw ${published.length}`);

@@ -22,7 +22,7 @@ const fullyConfigured = describeRuntimeCapabilities({
   OPENAI_API_KEY: 'placeholder',
   SUPABASE_ANON_KEY: 'placeholder',
   SUPABASE_SERVICE_ROLE_KEY: 'placeholder',
-  SUPABASE_URL: 'https://project-ref.supabase.co',
+  SUPABASE_URL: 'https://projectref.supabase.co',
 });
 
 /**
@@ -36,18 +36,22 @@ function base(overrides: Partial<PreflightInput> = {}): PreflightInput {
     capabilities: fullyConfigured,
     config: {
       apiCorsOrigin: 'https://avenlyo.com',
+      caddyApiHost: 'api.avenlyo.com',
+      caddyWebHost: 'avenlyo.com',
       deploymentEnv: 'production',
       internalApiUrl: INTERNAL_API_URL,
+      profileDeploymentEnv: 'production',
+      publicApiUrl: 'https://api.avenlyo.com',
       publicWebUrl: 'https://avenlyo.com',
       release: SHA,
       webChatIframeOrigin: 'https://avenlyo.com',
     },
     deploymentEnvironment: 'production',
-    expectedSupabaseProjectRef: 'project-ref',
+    expectedSupabaseProjectRef: 'projectref',
     release: SHA,
     requiredSchemaVersion: 19,
     schemaVersion: 19,
-    supabaseUrl: 'https://project-ref.supabase.co',
+    supabaseUrl: 'https://projectref.supabase.co',
     ...overrides,
   };
 }
@@ -57,8 +61,12 @@ function staging(overrides: Partial<PreflightInput> = {}): PreflightInput {
   return base({
     config: {
       apiCorsOrigin: 'https://staging.avenlyo.com',
+      caddyApiHost: 'api-staging.avenlyo.com',
+      caddyWebHost: 'staging.avenlyo.com',
       deploymentEnv: 'staging',
       internalApiUrl: INTERNAL_API_URL,
+      profileDeploymentEnv: 'staging',
+      publicApiUrl: 'https://api-staging.avenlyo.com',
       publicWebUrl: 'https://staging.avenlyo.com',
       release: SHA,
       webChatIframeOrigin: 'https://staging.avenlyo.com',
@@ -159,7 +167,7 @@ describe('capability policy', () => {
       OPENAI_API_KEY: 'placeholder',
       SUPABASE_ANON_KEY: 'placeholder',
       SUPABASE_SERVICE_ROLE_KEY: 'placeholder',
-      SUPABASE_URL: 'https://project-ref.supabase.co',
+      SUPABASE_URL: 'https://projectref.supabase.co',
       TWILIO_ACCOUNT_SID: 'placeholder',
     });
 
@@ -307,5 +315,79 @@ describe('the report is safe to print', () => {
     expect(text.length).toBeLessThan(4_000);
     expect(text).toContain('RESULT: pass');
     expect(text).not.toMatch(/\n\s+at\s+.+:\d+:\d+/);
+  });
+});
+
+describe('a deployed preflight will not pass on a profile it never saw', () => {
+  // The gap this closes: identity, release, schema, capabilities and Supabase ref could all be in
+  // order while every AVENLYO_PROFILE_* value was absent -- and `deployment_configuration` reported
+  // `pass`, having evaluated nothing. A check that did not run must not read as a check that passed.
+  const requiredFields = [
+    ['publicWebUrl', 'NEXT_PUBLIC_APP_URL'],
+    ['publicApiUrl', 'NEXT_PUBLIC_AVENLYO_API_URL'],
+    ['caddyWebHost', 'AVENLYO_WEB_HOST'],
+    ['caddyApiHost', 'AVENLYO_API_HOST'],
+    ['internalApiUrl', 'AVENLYO_API_URL'],
+    ['profileDeploymentEnv', 'AVENLYO_DEPLOYMENT_ENV'],
+  ] as const;
+
+  for (const [field, setting] of requiredFields) {
+    it(`fails a production preflight whose profile omits ${setting}`, () => {
+      const input = base();
+      const report = evaluatePreflight({
+        ...input,
+        config: { ...input.config, [field]: undefined },
+      });
+
+      expect(report.ok).toBe(false);
+      expect(report.failed).toContain('config:deployment_profile_complete');
+    });
+
+    it(`fails a staging preflight whose profile omits ${setting}`, () => {
+      const input = staging();
+      const report = evaluatePreflight({
+        ...input,
+        config: { ...input.config, [field]: undefined },
+      });
+
+      expect(report.ok).toBe(false);
+      expect(report.failed).toContain('config:deployment_profile_complete');
+    });
+  }
+
+  it('reports the missing setting by name, and no value', () => {
+    const input = base();
+    const report = evaluatePreflight({
+      ...input,
+      config: { ...input.config, caddyApiHost: undefined },
+    });
+    const entry = report.checks.find((check) => check.name === 'config:deployment_profile_complete');
+
+    expect(entry?.detail).toContain('AVENLYO_API_HOST');
+    expect(entry?.detail).not.toContain('avenlyo.com');
+  });
+
+  it('fails when the profile and the runtime disagree about the deployment', () => {
+    const input = base();
+    const report = evaluatePreflight({
+      ...input,
+      config: { ...input.config, profileDeploymentEnv: 'staging' },
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.failed).toContain('config:deployment_identity_agreement');
+  });
+
+  it('leaves a development preflight permissive', () => {
+    // There is no deployment profile, no Caddy and no compose network locally, so requiring one
+    // would make the command unusable in the environment an engineer actually runs it in.
+    const report = evaluatePreflight({
+      ...base(),
+      config: { deploymentEnv: 'development' },
+      deploymentEnvironment: 'development',
+      schemaVersion: null,
+    });
+
+    expect(report.failed).not.toContain('config:deployment_profile_complete');
   });
 });

@@ -28,30 +28,74 @@ The model is **build once, deploy that image**. Images are tagged with the exact
 SHA — never `latest`, never a branch, never an abbreviation — so a tag names one set of bytes
 forever, and the thing verified in staging is the same bytes that reach production.
 
+Every command below reads **the same `--env-file`**: `deploy/env/build.env`, assembled from the
+source-controlled public profile for the environment plus the two browser-facing Supabase values
+(see `deploy/env/build.env.example`). One file, so the profile that is validated is the profile that
+is built, preflighted and deployed.
+
 1. **Back up.** Confirm the managed Supabase backup/PITR capability for this project and plan is
    enabled and current. Avenlyo does not ship a home-grown dump scheduler, because that would need
    long-lived service credentials on a host we do not control. Do not claim backups exist unless the
    provider console shows they do.
-2. **Preflight.** `pnpm ops:preflight` on the target host, with that environment's configuration.
-   It is read-only and must exit 0 before anything is applied. See below.
-3. **Apply migrations, before the new application code.** Migrations are additive only; there are no
+
+2. **Choose the exact release SHA** and put it in the profile as `AVENLYO_RELEASE`.
+
+3. **Render and assert the deployment profile.** Offline; contacts nothing.
+
+   ```bash
+   node .github/scripts/assert-deployment-profile.mjs production deploy/env/build.env
+   ```
+
+4. **Build the images once**, tagged with that SHA. Building is not deploying and mutates no
+   provider:
+
+   ```bash
+   docker compose --env-file deploy/env/build.env -f deploy/compose.yaml build web api
+   ```
+
+5. **Prove the exact images exist** before anything runs them:
+
+   ```bash
+   docker image inspect "avenlyo-api:${AVENLYO_RELEASE}" > /dev/null
+   docker image inspect "avenlyo-web:${AVENLYO_RELEASE}" > /dev/null
+   ```
+
+6. **Preflight, as a one-off container from that exact image.** See
+   [ops:preflight](#opspreflight) for what it checks and why it is run this way and not as a host
+   command. Read-only; starts no dependency; deploys nothing.
+
+   ```bash
+   docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+     run --rm --no-deps -T api node dist/scripts/ops-preflight.js
+   ```
+
+   It must exit 0 — with one permitted exception on a release that carries a migration, where
+   `schema_compatible` will fail until step 7 has run. Nothing else may fail. If any other check
+   fails, stop: the deployment is misconfigured and no migration should be applied.
+
+7. **Apply migrations, before the new application code.** Migrations are additive only; there are no
    destructive down migrations. Additive-first is what makes the order safe in both directions: the
    currently running older code keeps working against the newer schema, so the migration is not a
    commitment to the deploy that follows it.
-4. **Verify schema readiness.** The database advertises a compatibility version through
-   `platform_schema_contract`. Confirm it is at least the version the release requires — **19** as of
-   Phase 19.
-5. **Build the images once**, tagged with the release SHA, and push or load them on the host.
-6. **Deploy API and workers** with `docker compose up -d --no-build`. `--no-build` is not an
-   optimisation: without it Compose may rebuild from the host's working tree, which silently deploys
-   bytes nobody verified.
-7. **Deploy web**, the same way.
-8. **Run non-destructive smoke checks.** `pnpm smoke:production`, with `AVENLYO_EXPECTED_RELEASE` set
-   to the SHA just deployed. Without that variable the smoke asks only "is it up", which passes just
-   as happily when `up` silently kept the previous image — the exact failure the SHA-tagged model
-   exists to prevent, and the one nobody notices because everything is green.
-9. **Confirm operational state.** `pnpm ops:status` exits 0, no capability is `partial`, and expected
-   worker components are reporting recent successes.
+
+8. **Re-run the same preflight command.** Now it must exit 0 with **no** exception. This is the gate:
+   the schema is in place, the profile is proven, and nothing has been deployed yet.
+
+9. **Deploy API and workers** with `up -d --no-build`. `--no-build` is not an optimisation: without
+   it Compose may rebuild from the host's working tree, which silently deploys bytes nobody verified.
+
+   ```bash
+   docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+     up -d --no-build --wait web api caddy
+   ```
+
+10. **Run non-destructive smoke checks.** `pnpm smoke:production`, with `AVENLYO_EXPECTED_RELEASE`
+    set to the SHA just deployed. Without that variable the smoke asks only "is it up", which passes
+    just as happily when `up` silently kept the previous image — the exact failure the SHA-tagged
+    model exists to prevent, and the one nobody notices because everything is green.
+
+11. **Confirm operational state.** `pnpm ops:status` exits 0, no capability is `partial`, and
+    expected worker components are reporting recent successes.
 
 ## Rollback
 
@@ -156,18 +200,48 @@ it is never generated per request.
 ## ops:preflight
 
 ```bash
-pnpm ops:preflight
+docker image inspect "avenlyo-api:${AVENLYO_RELEASE}" > /dev/null
+docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+  run --rm --no-deps -T api node dist/scripts/ops-preflight.js
 ```
 
 Answers a different question from `ops:status` and from the smoke checks: **is this configuration
 safe to deploy**, asked before anything is applied. `ops:status` describes a running deployment, and
 `smoke:production` verifies one after the fact. Neither substitutes for the others.
 
-It is read-only. It writes nothing, contacts no provider, and sends no message.
+It is read-only. It writes nothing, contacts no provider, and sends no message. The only database
+call it makes is the same `platform_readiness_probe` readiness already uses, which returns a schema
+version and nothing else.
 
-What it checks:
+### Why a one-off container and not `pnpm ops:preflight`
+
+This used to be documented as a host command, and that was not an executable contract:
+
+- A host shell does not receive `/etc/avenlyo/api.env`. Compose does, through `env_file:`.
+- A host shell does not receive the `AVENLYO_PROFILE_*` values. Compose injects those from the
+  `--env-file`.
+- A deployment host is not guaranteed to hold a source checkout or a built `dist/` at all.
+
+So a host invocation either failed to start or validated a different profile from the one being
+deployed. The one-off container is the same image, the same compose file, the same `--env-file` and
+the same server env file the deployment itself runs with — which is the only arrangement in which
+"preflight passed" is a statement about this deployment.
+
+`--no-deps` keeps web and Caddy down; `--rm` leaves nothing behind. `docker compose run` has **no**
+`--no-build` flag, and it will build an image that is missing — which is why the `docker image
+inspect` above is part of the command and not a nicety: with the exact tag provably present, the run
+cannot build anything. CI asserts this by comparing the image ID before and after.
+
+### What it checks
 
 - The deployment environment resolves, and a production-mode process actually declared one.
+- **The deployment profile is present at all**: `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_AVENLYO_API_URL`,
+  `AVENLYO_WEB_HOST`, `AVENLYO_API_HOST`, `AVENLYO_API_URL` and the profile's own
+  `AVENLYO_DEPLOYMENT_ENV`. A missing value fails; it does not quietly skip the agreement that value
+  was there to prove.
+- **The profile's declared environment matches the API's own.** `/etc/avenlyo/api.env` and the
+  `--env-file` are two files an operator edits separately; a container declaring production while
+  rendered from the staging profile is a cross-wire neither file can detect alone.
 - `AVENLYO_RELEASE` is an exact commit SHA.
 - The web container's API path is the internal `http://caddy:8080` boundary.
 - Public URLs use HTTPS and agree with each other: `NEXT_PUBLIC_APP_URL`, `API_CORS_ORIGIN`, and
@@ -177,6 +251,16 @@ What it checks:
 - `STRIPE_MODE` is not `test` in production.
 - Public URLs name a port Caddy actually publishes. Only `443` is served, so a URL on `:8443`
   describes an endpoint nothing listens on — and every hostname check would still pass it.
+- **Provider callbacks address this deployment.** When configured, `GOOGLE_OAUTH_REDIRECT_URI` must
+  use the public API origin plus the route the API actually serves,
+  `/v1/scheduling/google-calendar/callback`, with no query or fragment; and
+  `TWILIO_MESSAGING_WEBHOOK_BASE_URL` must use the public API origin with no path prefix, because the
+  webhook routes are absolute and a prefix builds a URL nothing routes. HTTPS alone was never enough:
+  an unrelated HTTPS host is a login that dead-ends after the user has consented, and inbound
+  messages that simply never arrive.
+- **The Supabase URL is a hosted Supabase project.** The declared expectation is compared against the
+  ref in `https://<project-ref>.supabase.co`. An arbitrary domain whose first DNS label happens to
+  equal the expectation is a mismatch, not a match.
 - Required capabilities are configured, and no capability is `partial`. A half-configured
   integration fails; one cleanly disabled passes.
 - The database is reachable and the schema is at least the required version.
@@ -185,16 +269,24 @@ What it checks:
 
 Preflight runs inside the API container, which by itself holds only the server-side half of the
 profile. The browser-facing half — `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_AVENLYO_API_URL`,
-`AVENLYO_WEB_HOST`, `AVENLYO_API_HOST`, `AVENLYO_API_URL` — is passed into the container by
-`deploy/compose.yaml` as `AVENLYO_PROFILE_*`, from **the same `--env-file` the build and the rest of
-the deployment already read**.
+`AVENLYO_WEB_HOST`, `AVENLYO_API_HOST`, `AVENLYO_API_URL`, and the profile's own
+`AVENLYO_DEPLOYMENT_ENV` — is passed into the container by `deploy/compose.yaml` as
+`AVENLYO_PROFILE_*`, from **the same `--env-file` the build and the rest of the deployment read**.
 
 That sameness is the point. A separate file for preflight to read would be a second source of truth,
 and preflight would end up certifying a profile the deployment did not use. Every one of these
 values is non-secret; no key, token, or anon key belongs in that block.
 
-Without them preflight can only check the values the API happens to hold for its own behaviour,
-which is not the profile it claims to validate.
+`AVENLYO_API_URL` is the case where this mattered most. It used to live in `/etc/avenlyo/web.env`
+while preflight validated the profile's copy, so preflight could certify `http://caddy:8080` while
+the running web container reached `api:4000` directly — the exact bypass of the one-hop trust
+boundary the value exists to prevent. `deploy/compose.yaml` now wires the web service's runtime
+`AVENLYO_API_URL` from the profile, and `web.env.example` no longer declares it.
+
+The runtime `AVENLYO_DEPLOYMENT_ENV` is deliberately **not** passed from the profile. Compose's
+`environment:` overrides `env_file:`, so that would let the profile silently replace the identity
+`api.env` supplies. The profile's copy is mirrored under `AVENLYO_PROFILE_DEPLOYMENT_ENV` instead,
+and the two are compared.
 
 ### What is fail-closed
 
@@ -205,8 +297,15 @@ A deployed preflight must not exit `0` while something it is supposed to prove i
 | Schema probe did not answer | skip | **fail** | **fail** |
 | Schema older than required | fail | **fail** | **fail** |
 | Schema >= required | pass | pass | pass |
+| Required profile setting absent | skip | **fail** | **fail** |
+| Profile identity ≠ runtime identity | skip | **fail** | **fail** |
+| Provider callback misaligned (when configured) | skip | **fail** | **fail** |
 | Supabase project ref undeclared | skip | skip (unverified) | **fail** |
 | Supabase ref declared, mismatched | fail | **fail** | **fail** |
+| Supabase ref declared, URL not a hosted project | fail | **fail** | **fail** |
+
+Development is permissive throughout: there is no deployment profile, no Caddy and no compose network
+locally, so requiring one would make the command unusable where an engineer actually runs it.
 
 A run whose database did not answer has established nothing about schema compatibility, so exiting 0
 would wave through precisely the case the check exists for. The `>=` rule is unchanged — a newer
@@ -482,15 +581,18 @@ days.
 Before:
 
 - [ ] Provider console shows backup/PITR enabled and current
-- [ ] `AVENLYO_DEPLOYMENT_ENV` is set to this environment
-- [ ] `pnpm ops:preflight` exits 0
+- [ ] `AVENLYO_DEPLOYMENT_ENV` is set to this environment, in **both** `deploy/env/build.env` and
+      `/etc/avenlyo/api.env`, to the same value
+- [ ] `deploy/env/build.env` carries every required profile setting (assert-deployment-profile passes)
 - [ ] `AVENLYO_RELEASE` is the exact 40-character commit SHA being deployed
-- [ ] Images are tagged with that SHA and already built
+- [ ] Images are tagged with that SHA and already built, and `docker image inspect` confirms it
+- [ ] The one-off preflight container exits 0 (schema check aside, until migrations run)
 
 During:
 
 - [ ] Migrations applied **before** the new application code
 - [ ] `platform_schema_contract` is at least 19
+- [ ] The one-off preflight container re-run exits 0 with no exception
 - [ ] Deployed with `up -d --no-build`
 
 After:
