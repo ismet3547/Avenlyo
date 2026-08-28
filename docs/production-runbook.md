@@ -353,29 +353,30 @@ sudo install -o avenlyo -g avenlyo -m 640 "$T" /etc/avenlyo/web.env
 rm -f "$T"
 ```
 
-**Verify silently.** Never `diff` two secret-bearing env files: if an unintended second change
-slipped in, `diff` prints the changed secret to your terminal — and to your scrollback, and to
-whatever you paste it into. Compare filtered copies instead, and let the exit code speak:
+**Verify silently**, with the shipped verifier:
 
 ```bash
-# 1. The key count moved exactly 1 -> 0.
-before=$(grep -c '^AVENLYO_API_URL=' "$BK/web.env.bak")
-after=$(sudo grep -c '^AVENLYO_API_URL=' /etc/avenlyo/web.env || true)
-test "$before" = "1" && test "$after" = "0" || { echo "unexpected AVENLYO_API_URL key count"; false; }
-
-# 2. Every other byte is unchanged -- compared with the same line removed from both sides, so the
-#    only difference the comparison can see is the one that was intended. cmp -s prints nothing.
-A=$(mktemp); B=$(mktemp); chmod 600 "$A" "$B"
-grep -v '^AVENLYO_API_URL=' "$BK/web.env.bak" > "$A"
-sudo grep -v '^AVENLYO_API_URL=' /etc/avenlyo/web.env > "$B"
-cmp -s "$A" "$B" && echo "verified: only the AVENLYO_API_URL assignment changed" \
-                || echo "REFUSED: something else changed -- restore from the backup"
-rm -f "$A" "$B"
+sudo deploy/scripts/verify-env-migration.sh \
+  "$BK/web.env.bak" /etc/avenlyo/web.env AVENLYO_API_URL 1 0
 ```
 
-Both steps print a fixed sentence or a count and never a value. The second exits non-zero on any
-unintended change without revealing what changed; if it refuses, restore from `$BK/web.env.bak` and
-investigate before deploying.
+It answers two questions and prints nothing else: did `AVENLYO_API_URL` move from 1 assignment to 0,
+and is every other byte unchanged? The second is decided by comparing both files with that key
+filtered out of **both** sides, so the only difference the comparison can see is the intended one.
+
+- Success → `verified: only the AVENLYO_API_URL assignment changed (1 -> 0)`, exit **0**.
+- Any other change → a fixed `REFUSED:` line naming only the key, exit **non-zero**. Restore from
+  `$BK/web.env.bak` and investigate before deploying.
+
+Never `diff` two secret-bearing env files. `diff` is not a verification, it is a disclosure: an
+unintended second change — a rotated key pasted into the wrong line, an editor mangling a value —
+gets printed to your terminal, your scrollback, and whatever you paste next. The verifier prints
+fixed text, a key **name**, and two counts. No value from either file ever reaches stdout or stderr.
+
+The exit code is the part automation depends on, so it is executed in the test suite rather than
+merely described here: `apps/api/src/security/env-migration-verification.test.ts` runs the real
+script against fixtures carrying secret-shaped values and asserts the success path exits 0, every
+refusal path exits non-zero, and no refusal leaks a value.
 
 The stale line is inert once `deploy/compose.yaml` supplies `AVENLYO_API_URL` — Compose's
 `environment:` overrides `env_file:` — but it is a second authority for a security-relevant value,
@@ -397,15 +398,9 @@ echo 'AVENLYO_DEPLOYMENT_ENV=staging' >> "$T"          # or production
 sudo install -o avenlyo -g avenlyo -m 640 "$T" /etc/avenlyo/api.env
 rm -f "$T"
 
-# Verify: the key appeared exactly once, and nothing else moved.
-test "$(sudo grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env)" = "1" \
-  || { echo "unexpected AVENLYO_DEPLOYMENT_ENV key count"; false; }
-A=$(mktemp); B=$(mktemp); chmod 600 "$A" "$B"
-grep -v '^AVENLYO_DEPLOYMENT_ENV=' "$BK/api.env.bak" > "$A"
-sudo grep -v '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env > "$B"
-cmp -s "$A" "$B" && echo "verified: only the deployment identity was added" \
-                || echo "REFUSED: something else changed -- restore from the backup"
-rm -f "$A" "$B"
+# Verify: the key appeared exactly once, and nothing else moved. Same verifier, same guarantees.
+sudo deploy/scripts/verify-env-migration.sh \
+  "$BK/api.env.bak" /etc/avenlyo/api.env AVENLYO_DEPLOYMENT_ENV 0 1
 ```
 
 It must match the profile's `AVENLYO_DEPLOYMENT_ENV`; `ops:preflight` fails the deployment if the

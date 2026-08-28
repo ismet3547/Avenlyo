@@ -632,9 +632,13 @@ describe('the host migration off the pre-Phase-20 env layout is documented', () 
     // Verification is by silent comparison, not by diffing two secret-bearing files. The previous
     // wording asked for a diff that "must show exactly one removed line" -- which is exactly the
     // disclosure this now forbids: an unintended second change would have printed a secret.
-    expect(text).toContain('cmp -s');
+    // Verification is the shipped verifier, whose exit code is executed in
+    // env-migration-verification.test.ts rather than merely described here.
+    expect(text).toContain('deploy/scripts/verify-env-migration.sh');
     expect(text).toContain('verified: only the AVENLYO_API_URL assignment changed');
     expect(text).not.toContain('must show exactly one removed line');
+    // The fail-open shape must never come back.
+    expect(text).not.toContain('|| echo "REFUSED');
   });
 
   it('keeps the source contract that made the host key obsolete', async () => {
@@ -795,19 +799,27 @@ describe('env-file migration is verified without printing any value', () => {
     }
   });
 
-  it('compares filtered copies silently instead', async () => {
-    const text = await runbook();
+  it('compares filtered copies silently, in the shipped verifier', async () => {
+    // The comparison moved out of the runbook and into deploy/scripts/verify-env-migration.sh, so
+    // that the documented behaviour and the verified behaviour are the same code. The runbook
+    // invokes it; the script performs the filtered, silent comparison.
+    const script = await readFile('deploy/scripts/verify-env-migration.sh', 'utf8');
 
-    expect(text).toContain('cmp -s');
-    expect(text).toContain("grep -v '^AVENLYO_API_URL='");
-    expect(text).toContain("grep -v '^AVENLYO_DEPLOYMENT_ENV='");
+    expect(script).toContain('cmp -s');
+    expect(script).toContain('grep -v "^${key}=" "$backup"');
+    expect(script).toContain('grep -v "^${key}=" "$live"');
+    expect(await runbook()).toContain('deploy/scripts/verify-env-migration.sh');
   });
 
   it('proves the key count moved exactly 1 -> 0', async () => {
-    const text = await runbook();
+    // Expressed as the verifier's own arguments now: <expected-before> <expected-after>.
+    const text = (await runbook()).replace(/\\\n\s*/g, '').replace(/[ \t]+/g, ' ');
 
-    expect(text).toContain("before=$(grep -c '^AVENLYO_API_URL=' \"$BK/web.env.bak\")");
-    expect(text).toMatch(/test "\$before" = "1" && test "\$after" = "0"/);
+    expect(text).toContain('/etc/avenlyo/web.env AVENLYO_API_URL 1 0');
+
+    const script = await readFile('deploy/scripts/verify-env-migration.sh', 'utf8');
+    expect(script).toContain('"$before" != "$expected_before"');
+    expect(script).toContain('"$after" != "$expected_after"');
   });
 
   it('creates the backup directory first, 0700, with 0600 backup files', async () => {
@@ -839,7 +851,10 @@ describe('env-file migration is verified without printing any value', () => {
     const text = await runbook();
 
     expect(text).toContain('### Adding the deployment identity to api.env');
-    expect(text).toMatch(/test "\$\(sudo grep -c '\^AVENLYO_DEPLOYMENT_ENV=' \/etc\/avenlyo\/api\.env\)" = "1"/);
+    // Same verifier, same guarantees, expressed as its arguments: 0 assignments before, 1 after.
+    expect(text.replace(/\\\n\s*/g, '').replace(/[ \t]+/g, ' ')).toContain(
+      '/etc/avenlyo/api.env AVENLYO_DEPLOYMENT_ENV 0 1',
+    );
   });
 
   it('never cats an env file anywhere in the runbook', async () => {

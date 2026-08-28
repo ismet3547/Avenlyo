@@ -1,0 +1,10 @@
+# Shell scripts must keep LF endings on every platform.
+#
+# `core.autocrlf=true` is common on Windows workstations, and it rewrites text files to CRLF on
+# checkout. For a script that runs on the Linux deployment host that is not cosmetic: the shebang
+# becomes `#!/usr/bin/env bash\r`, which the kernel resolves to a program named "bash\r", and the
+# script fails to start with a message that points nowhere near the real cause.
+#
+# Deliberately narrow. This pins the executable text that has to run somewhere other than the
+# machine it was checked out on; it is not a general line-ending policy for the repository.
+*.sh text eol=lf
