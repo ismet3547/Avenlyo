@@ -73,11 +73,19 @@ Beyond the hostnames above:
 
 - `AVENLYO_DEPLOYMENT_ENV=production`
 - `AVENLYO_RELEASE` — the exact 40-character commit SHA
-- `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` — the production project ref. **Mandatory in production:**
+- `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` — the production project ref, **in the deployment profile**
+  (`deploy/env/production.public.env.example`), never in `api.env`. **Mandatory in production:**
   preflight fails without it. A Supabase URL is opaque and says nothing about which environment it
   belongs to, so production accidentally pointed at the staging database is not detectable from the
   URL alone. Declaring the expected ref is what makes a mismatch provable, and leaving it unset is
   not a neutral omission — it is the unverified state, which must not pass in production.
+
+  The split matters as much as the value. **EXPECTED** identity lives in the profile; **ACTUAL**
+  identity is `SUPABASE_URL` in `/etc/avenlyo/api.env`; preflight compares the two. Put both in one
+  file and the check cannot catch the defect it exists for — a host cross-wired to the wrong database
+  would carry the wrong URL and a matching wrong expectation side by side and agree with itself.
+  `deploy/compose.yaml` mirrors the profile value into the API as
+  `AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF`, so each half's provenance stays visible.
 - `STRIPE_MODE=live`, with live keys and a live webhook secret. The runtime enforces this against
   the deployment identity: a production deployment refuses to start with `STRIPE_MODE=test`, while
   staging is free to use test mode. `STRIPE_MODE=live` additionally requires an `sk_live_…` secret.

@@ -905,6 +905,49 @@ jobs:
           git checkout -- deploy/compose.yaml
           echo "Confirmed: the profile cannot overwrite the api runtime deployment identity."
 
+      # The EXPECTED Supabase project ref must reach the API from the deployment profile. It was
+      # declared in the profile but never forwarded, so the value was inert and the documented
+      # production path failed with an undeclared identity unless the operator duplicated the key
+      # into api.env -- which is exactly where it must not live, because that file also holds the
+      # SUPABASE_URL being checked.
+      - name: The expected Supabase project ref must be mirrored from the profile
+        run: |
+          for injection in \
+            '/^      AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF:/d' \
+            's#^      AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: .*#      AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: hardcodedref#' \
+            's#^      AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: #      AVENLYO_EXPECTED_SUPABASE_PROJECT_REF: #'; do
+            sed -i "$injection" deploy/compose.yaml
+            if git diff --quiet deploy/compose.yaml; then
+              echo "::error::Injection '$injection' did not apply; this proves nothing."
+              exit 1
+            fi
+            if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env; then
+              echo "::error::Accepted a compose file with injection: $injection"
+              git checkout -- deploy/compose.yaml
+              exit 1
+            fi
+            git checkout -- deploy/compose.yaml
+            echo "Confirmed rejected: $injection"
+          done
+
+      # Positive half: the mirror actually carries the profile's value into the api service, and the
+      # runtime name is never supplied by compose.
+      - name: The mirrored expected ref reaches the api service
+        run: |
+          docker compose --env-file /tmp/profiles/production.env -f deploy/compose.yaml config \
+            > /tmp/rendered.yaml
+          api_block=$(awk '/^  api:/,/^  caddy:/' /tmp/rendered.yaml)
+          if ! echo "$api_block" | grep -q '^      AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: ciplaceholderproject'; then
+            echo "::error::The profile's expected project ref did not reach the api service."
+            exit 1
+          fi
+          if awk '/^  api:/,/^  caddy:/' deploy/compose.yaml | grep -qE '^      AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:'; then
+            echo "::error::compose supplies the runtime name; the expectation must be mirrored only."
+            exit 1
+          fi
+          echo "Confirmed: EXPECTED comes from the profile, ACTUAL stays in api.env."
+          rm -f /tmp/rendered.yaml
+
       - name: The profile identity mirror must exist and come from the profile
         run: |
           for injection in \

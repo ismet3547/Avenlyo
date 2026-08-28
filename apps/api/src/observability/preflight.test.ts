@@ -391,3 +391,115 @@ describe('a deployed preflight will not pass on a profile it never saw', () => {
     expect(report.failed).not.toContain('config:deployment_profile_complete');
   });
 });
+
+describe('Supabase project identity: EXPECTED and ACTUAL come from different files', () => {
+  /**
+   * The defect this pins closed.
+   *
+   * `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` was declared in the deployment profile, but
+   * `deploy/compose.yaml` never forwarded it, so the profile value was inert and the documented
+   * production path failed with an undeclared identity unless the operator duplicated the key into
+   * `/etc/avenlyo/api.env`. That workaround is worse than the bug: api.env also holds `SUPABASE_URL`,
+   * so the expectation would sit beside the value it checks, and a production host cross-wired to
+   * the staging database would carry a staging URL and a staging expectation together and agree
+   * with itself.
+   *
+   * EXPECTED now comes from the profile, ACTUAL from api.env, and preflight compares the two.
+   */
+  const STAGING_REF = 'stagingprojectrefxx';
+  const PRODUCTION_REF = 'productionprojectrf';
+
+  const identity = (input: {
+    readonly environment: 'staging' | 'production';
+    readonly expected?: string | undefined;
+    readonly url?: string | undefined;
+  }) => {
+    const start = input.environment === 'staging' ? staging() : base();
+    return evaluatePreflight({
+      ...start,
+      expectedSupabaseProjectRef: input.expected,
+      supabaseUrl: input.url,
+    });
+  };
+
+  const outcomeOf = (report: ReturnType<typeof evaluatePreflight>) =>
+    report.checks.find((check) => check.name === 'supabase_project_identity')?.outcome;
+
+  it('staging: profile ref plus a matching runtime URL passes', () => {
+    const report = identity({
+      environment: 'staging',
+      expected: STAGING_REF,
+      url: `https://${STAGING_REF}.supabase.co`,
+    });
+
+    expect(outcomeOf(report)).toBe('pass');
+    expect(report.ok).toBe(true);
+  });
+
+  it('production: profile ref plus a matching runtime URL passes', () => {
+    const report = identity({
+      environment: 'production',
+      expected: PRODUCTION_REF,
+      url: `https://${PRODUCTION_REF}.supabase.co`,
+    });
+
+    expect(outcomeOf(report)).toBe('pass');
+    expect(report.ok).toBe(true);
+  });
+
+  it('production: omitting the expected ref fails', () => {
+    // Unverified is not a neutral state in production -- "nobody said which database this is"
+    // is exactly what must not exit 0.
+    const report = identity({
+      environment: 'production',
+      expected: undefined,
+      url: `https://${PRODUCTION_REF}.supabase.co`,
+    });
+
+    expect(outcomeOf(report)).toBe('fail');
+    expect(report.failed).toContain('supabase_project_identity');
+  });
+
+  it('production expectation against a staging database fails', () => {
+    // The cross-wire the whole mechanism exists for.
+    const report = identity({
+      environment: 'production',
+      expected: PRODUCTION_REF,
+      url: `https://${STAGING_REF}.supabase.co`,
+    });
+
+    expect(outcomeOf(report)).toBe('fail');
+    expect(report.failed).toContain('supabase_project_identity');
+  });
+
+  it('staging expectation against a production database fails', () => {
+    // The reverse cross-wire, which matters just as much: a staging deploy writing to production.
+    const report = identity({
+      environment: 'staging',
+      expected: STAGING_REF,
+      url: `https://${PRODUCTION_REF}.supabase.co`,
+    });
+
+    expect(outcomeOf(report)).toBe('fail');
+    expect(report.failed).toContain('supabase_project_identity');
+  });
+
+  it('staging keeps the softer policy when no expectation is declared', () => {
+    const report = identity({
+      environment: 'staging',
+      expected: undefined,
+      url: `https://${STAGING_REF}.supabase.co`,
+    });
+
+    expect(outcomeOf(report)).toBe('skip');
+    expect(report.ok).toBe(true);
+  });
+
+  it('names the profile as the place to declare it', () => {
+    const report = identity({ environment: 'production', expected: undefined });
+    const check = report.checks.find((entry) => entry.name === 'supabase_project_identity');
+
+    expect(check?.detail).toContain('AVENLYO_EXPECTED_SUPABASE_PROJECT_REF');
+    expect(check?.detail).toContain('deployment profile');
+  });
+});

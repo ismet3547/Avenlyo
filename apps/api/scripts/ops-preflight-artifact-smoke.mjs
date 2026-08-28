@@ -63,6 +63,7 @@ const CLEARED = [
   'GOOGLE_OAUTH_REDIRECT_URI',
   'EZYVET_PARTNER_ID',
   'AVENLYO_EXPECTED_SUPABASE_PROJECT_REF',
+  'AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF',
   'AVENLYO_DEPLOYMENT_ENV',
   'AVENLYO_PROFILE_DEPLOYMENT_ENV',
   'AVENLYO_PROFILE_APP_URL',
@@ -327,11 +328,28 @@ await expectChecksFailed(
 await expectChecksFailed(
   'expected ref matched only by an arbitrary domain’s first label',
   healthyProductionProfile({
-    AVENLYO_EXPECTED_SUPABASE_PROJECT_REF: 'abc123',
+    AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: 'abc123',
     SUPABASE_URL: 'https://abc123.example.com',
   }),
   'supabase_project_identity',
   ['abc123'],
+);
+
+// The second authority is gone, proven through the real CLI.
+//
+// AVENLYO_EXPECTED_SUPABASE_PROJECT_REF used to be read from /etc/avenlyo/api.env -- the same file
+// that holds SUPABASE_URL. That made the check unable to detect the defect it exists for: a
+// production host cross-wired to the staging database would carry the staging URL and a staging
+// expectation together and agree with itself. Setting only the old runtime name, with a URL that
+// matches it perfectly, must still fail a production preflight.
+await expectChecksFailed(
+  'the retired runtime key cannot satisfy the production identity check',
+  healthyProductionProfile({
+    AVENLYO_EXPECTED_SUPABASE_PROJECT_REF: 'abcdefghijklmnopqrst',
+    SUPABASE_URL: 'https://abcdefghijklmnopqrst.supabase.co',
+    // AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF deliberately absent.
+  }),
+  'supabase_project_identity',
 );
 
 if (failures === 0) {

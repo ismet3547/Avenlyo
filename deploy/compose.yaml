@@ -152,6 +152,18 @@ services:
       # `:?` on purpose: an operator who omits one should get a bounded preflight finding naming the
       # setting, not an opaque Compose interpolation error. env.ts treats "" as absent so the
       # omission reaches the policy as an omission.
+      # The EXPECTED Supabase project ref, mirrored from the deployment profile.
+      #
+      # Provenance is the whole point of this one. The ACTUAL project the API talks to comes from
+      # SUPABASE_URL in /etc/avenlyo/api.env; the EXPECTED project is declared here, in the
+      # source-controlled deployment profile. Preflight compares the two, so they have to come from
+      # different files -- an expectation living beside the value it checks proves nothing, because
+      # whoever mis-set one would set the other to match.
+      #
+      # This is why it is not simply read from api.env, which is where it used to be documented: a
+      # production host cross-wired to the staging database would have had both the staging URL and
+      # a staging expectation in the same file, and agreed with itself.
+      AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF: ${AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:-}
       AVENLYO_PROFILE_API_HOST: ${AVENLYO_API_HOST:-}
       AVENLYO_PROFILE_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
       AVENLYO_PROFILE_PUBLIC_API_URL: ${NEXT_PUBLIC_AVENLYO_API_URL:-}
