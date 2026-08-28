@@ -68,11 +68,14 @@ Beyond the hostnames above:
 
 - `AVENLYO_DEPLOYMENT_ENV=production`
 - `AVENLYO_RELEASE` — the exact 40-character commit SHA
-- `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` — the production project ref. A Supabase URL is opaque and
-  says nothing about which environment it belongs to, so production accidentally pointed at the
-  staging database is not detectable from the URL alone. Declaring the expected ref is what makes a
-  mismatch provable; leaving it unset makes preflight report `unverified` rather than passing.
-- `STRIPE_MODE=live`, with live keys and a live webhook secret
+- `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` — the production project ref. **Mandatory in production:**
+  preflight fails without it. A Supabase URL is opaque and says nothing about which environment it
+  belongs to, so production accidentally pointed at the staging database is not detectable from the
+  URL alone. Declaring the expected ref is what makes a mismatch provable, and leaving it unset is
+  not a neutral omission — it is the unverified state, which must not pass in production.
+- `STRIPE_MODE=live`, with live keys and a live webhook secret. The runtime enforces this against
+  the deployment identity: a production deployment refuses to start with `STRIPE_MODE=test`, while
+  staging is free to use test mode. `STRIPE_MODE=live` additionally requires an `sk_live_…` secret.
 - `GOOGLE_OAUTH_REDIRECT_URI` and `TWILIO_MESSAGING_WEBHOOK_BASE_URL` — production URLs, never
   `*-staging.avenlyo.com`
 
@@ -90,10 +93,26 @@ pnpm ops:preflight
 
 Read-only, contacts no provider, writes nothing. It must exit 0. It is the check that catches a
 production configuration still carrying a staging hostname, a `test` Stripe key in production, a
-release that is not an exact SHA, a mismatched Supabase project, and a CORS origin that has drifted
-from the app origin.
+release that is not an exact SHA, a mismatched or undeclared Supabase project, a CORS origin that
+has drifted from the app origin, a public URL on a port Caddy does not publish, and a web container
+configured to reach the API without crossing Caddy.
+
+It is fail-closed in a deployed environment: it will not exit 0 while schema compatibility is
+unproven, and in production it will not exit 0 while the Supabase project identity is unverified.
+The full matrix is in the runbook.
 
 Findings name the setting, never its value, so the output is safe to paste into a ticket.
+
+### Where preflight gets the browser-facing values
+
+Preflight runs inside the API container. The browser-facing half of the profile —
+`NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_AVENLYO_API_URL`, `AVENLYO_WEB_HOST`, `AVENLYO_API_HOST`,
+`AVENLYO_API_URL` — is passed in by `deploy/compose.yaml` as `AVENLYO_PROFILE_*`, sourced from the
+same `--env-file` the build and the rest of the deployment read.
+
+The same file, deliberately: a separate input for preflight would be a second source of truth, and
+preflight would certify a profile the deployment did not use. All five values are non-secret. No
+key, token, or anon key is passed in for this, and none may be added to make a check possible.
 
 ## Go-live work not done by Phase 20
 

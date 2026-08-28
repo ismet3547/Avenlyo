@@ -291,3 +291,121 @@ describe('Supabase project identity is reported honestly', () => {
     ).toBe('mismatch');
   });
 });
+
+describe('browser origin agreement uses origin semantics, not hostname matching', () => {
+  const production = (overrides: Partial<DeploymentConfigInput> = {}): DeploymentConfigInput => ({
+    deploymentEnv: 'production',
+    internalApiUrl: INTERNAL_API_URL,
+    publicWebUrl: 'https://avenlyo.com',
+    release: 'c000caf742f7e4ca5d8dc85376931fcbb7a9e6a7',
+    ...overrides,
+  });
+
+  const checksOf = (input: DeploymentConfigInput) =>
+    evaluateDeploymentConfig(input).map((finding) => finding.check);
+
+  it('accepts the ordinary case where every public origin is identical', () => {
+    expect(
+      checksOf(
+        production({
+          apiCorsOrigin: 'https://avenlyo.com',
+          webChatIframeOrigin: 'https://avenlyo.com',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('treats an explicit :443 as the same origin, because it is', () => {
+    // Normalization, not string comparison: https://avenlyo.com:443 and https://avenlyo.com are the
+    // same origin to every browser, so reporting a defect here would be a false positive.
+    expect(
+      checksOf(
+        production({
+          apiCorsOrigin: 'https://avenlyo.com:443',
+          webChatIframeOrigin: 'https://avenlyo.com',
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('catches a CORS origin that shares the hostname but is a different origin', () => {
+    // The defect a hostname comparison misses entirely. https://avenlyo.com:444 is NOT the same
+    // browser origin as https://avenlyo.com, so a CORS allow-list naming it does not allow the app.
+    expect(
+      checksOf(
+        production({
+          apiCorsOrigin: 'https://avenlyo.com:444',
+          webChatIframeOrigin: 'https://avenlyo.com',
+        }),
+      ),
+    ).toContain('public_web_origin_agreement');
+  });
+
+  it('catches an iframe ancestor origin drifting by port alone', () => {
+    expect(
+      checksOf(
+        production({
+          apiCorsOrigin: 'https://avenlyo.com',
+          webChatIframeOrigin: 'https://avenlyo.com:8443',
+        }),
+      ),
+    ).toContain('public_web_origin_agreement');
+  });
+
+  it('still catches a plain hostname drift', () => {
+    expect(
+      checksOf(
+        production({
+          apiCorsOrigin: 'https://other.example.com',
+          webChatIframeOrigin: 'https://avenlyo.com',
+        }),
+      ),
+    ).toContain('public_web_origin_agreement');
+  });
+});
+
+describe('public URLs may only name a port Caddy actually publishes', () => {
+  const production = (overrides: Partial<DeploymentConfigInput> = {}): DeploymentConfigInput => ({
+    deploymentEnv: 'production',
+    internalApiUrl: INTERNAL_API_URL,
+    release: 'c000caf742f7e4ca5d8dc85376931fcbb7a9e6a7',
+    ...overrides,
+  });
+
+  const checksOf = (input: DeploymentConfigInput) =>
+    evaluateDeploymentConfig(input).map((finding) => finding.check);
+
+  it('rejects a public web URL on a port nothing listens on', () => {
+    // deploy/compose.yaml publishes 80, 443 and 443/udp only. A profile naming 8443 builds a
+    // browser bundle that calls an address the host does not answer -- and every hostname check
+    // still passes, which is why this needs its own rule.
+    expect(checksOf(production({ publicWebUrl: 'https://avenlyo.com:8443' }))).toContain(
+      'public_port_is_published',
+    );
+  });
+
+  it('rejects a public API URL on an unpublished port', () => {
+    expect(checksOf(production({ publicApiUrl: 'https://api.avenlyo.com:4000' }))).toContain(
+      'public_port_is_published',
+    );
+  });
+
+  it('accepts the default port and an explicit 443', () => {
+    for (const url of ['https://avenlyo.com', 'https://avenlyo.com:443']) {
+      expect(checksOf(production({ publicWebUrl: url }))).not.toContain(
+        'public_port_is_published',
+      );
+    }
+  });
+
+  it('names the setting and never the value', () => {
+    const findings = evaluateDeploymentConfig(
+      production({ publicWebUrl: 'https://avenlyo.com:8443' }),
+    );
+    const port = findings.find((finding) => finding.check === 'public_port_is_published');
+
+    expect(port?.setting).toBe('NEXT_PUBLIC_APP_URL');
+    expect(JSON.stringify(port)).not.toContain('avenlyo.com');
+    expect(JSON.stringify(port)).not.toContain('8443');
+  });
+});

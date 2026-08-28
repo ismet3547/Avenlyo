@@ -250,7 +250,9 @@ jobs:
       # not merely present. /etc/avenlyo/api.env needs enough to satisfy apps/api/src/env.ts's
       # NODE_ENV=production HTTPS guard; /etc/avenlyo/web.env can stay empty -- every NEXT_PUBLIC_*
       # value web's runtime touches is already inlined into the built server bundle at this point,
-      # not read from the environment again at container start.
+      # not read from the environment again at container start. It also needs
+      # AVENLYO_DEPLOYMENT_ENV: NODE_ENV=production no longer identifies a deployment on its own,
+      # and this fixture is staging-shaped, so it declares staging exactly as the real host does.
       - name: Create placeholder env files
         run: |
           cat > deploy/env/build.env <<'EOF'
@@ -264,6 +266,7 @@ jobs:
           cat <<'EOF' | sudo tee /etc/avenlyo/api.env > /dev/null
           API_HOST=0.0.0.0
           API_PORT=4000
+          AVENLYO_DEPLOYMENT_ENV=staging
           NODE_ENV=production
           WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com
           EOF
@@ -438,21 +441,25 @@ jobs:
         run: |
           mkdir -p /tmp/profiles
           cat > /tmp/profiles/staging.env <<'EOF'
+          AVENLYO_DEPLOYMENT_ENV=staging
           NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key
           NEXT_PUBLIC_APP_URL=https://staging.avenlyo.com
           NEXT_PUBLIC_AVENLYO_API_URL=https://api-staging.avenlyo.com
           AVENLYO_WEB_HOST=staging.avenlyo.com
           AVENLYO_API_HOST=api-staging.avenlyo.com
+          AVENLYO_API_URL=http://caddy:8080
           AVENLYO_RELEASE=${{ github.sha }}
           EOF
           cat > /tmp/profiles/production.env <<'EOF'
+          AVENLYO_DEPLOYMENT_ENV=production
           NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key
           NEXT_PUBLIC_APP_URL=https://avenlyo.com
           NEXT_PUBLIC_AVENLYO_API_URL=https://api.avenlyo.com
           AVENLYO_WEB_HOST=avenlyo.com
           AVENLYO_API_HOST=api.avenlyo.com
+          AVENLYO_API_URL=http://caddy:8080
           AVENLYO_RELEASE=${{ github.sha }}
           EOF
           sudo mkdir -p /etc/avenlyo
@@ -477,13 +484,38 @@ jobs:
           fi
           echo "Confirmed: the cross-wired production profile is rejected."
 
+      # The deployment identity must come from the profile, not from this workflow's argument.
+      # If the argument were the authority, a profile could claim to be staging -- or claim nothing
+      # -- and still be validated under production rules because the caller said so.
+      - name: Profile whose declared identity disagrees with the target must fail
+        run: |
+          sed 's#AVENLYO_DEPLOYMENT_ENV=production#AVENLYO_DEPLOYMENT_ENV=staging#' \
+            /tmp/profiles/production.env > /tmp/profiles/mislabelled.env
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/mislabelled.env; then
+            echo "::error::A profile declaring staging was accepted as production."
+            exit 1
+          fi
+          echo "Confirmed: a profile whose identity disagrees with the target is rejected."
+
+      - name: Deployed profile with no declared identity must fail
+        run: |
+          grep -v '^AVENLYO_DEPLOYMENT_ENV=' /tmp/profiles/production.env > /tmp/profiles/anonymous.env
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/anonymous.env; then
+            echo "::error::A deployed profile with no declared deployment identity was accepted."
+            exit 1
+          fi
+          echo "Confirmed: an undeclared deployment identity is rejected."
+
       # Second negative proof, for the structural half. Phase 19's one-hop trust boundary is a
       # property of the topology, not of any hostname, so put web back onto api_edge -- where it can
       # reach the API directly and the trusted-proxy assumption stops holding -- and the assertion
       # has to reject it. Edits the checkout, which is disposable, and restores it afterwards.
       - name: Injected web/api network merge must fail the deployment contract
         run: |
-          sed -i '77,78s/      - web_edge/      - web_edge\n      - api_edge/' deploy/compose.yaml
+          # Range-addressed rather than line-numbered, so an unrelated edit to compose.yaml cannot
+          # silently move the injection somewhere harmless and turn this proof into a no-op.
+          sed -i '/^  web:/,/^  api:/ s/^      - web_edge$/      - web_edge\n      - api_edge/' \
+            deploy/compose.yaml
           if git diff --quiet deploy/compose.yaml; then
             echo "::error::The injection did not apply, so this negative test proves nothing."
             exit 1

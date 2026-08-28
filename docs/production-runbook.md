@@ -175,16 +175,52 @@ What it checks:
   hostname. A drift between the CORS origin and the app origin is a security defect, not a typo.
 - No staging hostname appears in a production configuration, and no production hostname in staging.
 - `STRIPE_MODE` is not `test` in production.
-- The Supabase project ref matches `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF`. A Supabase URL is an
-  opaque ref that says nothing about which environment it belongs to, so production pointed at the
-  staging database is **not** detectable from the URL alone. When the expected ref is unset this is
-  reported as `unverified` rather than passing — an unasked question is not a satisfied one.
+- Public URLs name a port Caddy actually publishes. Only `443` is served, so a URL on `:8443`
+  describes an endpoint nothing listens on — and every hostname check would still pass it.
 - Required capabilities are configured, and no capability is `partial`. A half-configured
   integration fails; one cleanly disabled passes.
 - The database is reachable and the schema is at least the required version.
 
+### Where the values it checks come from
+
+Preflight runs inside the API container, which by itself holds only the server-side half of the
+profile. The browser-facing half — `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_AVENLYO_API_URL`,
+`AVENLYO_WEB_HOST`, `AVENLYO_API_HOST`, `AVENLYO_API_URL` — is passed into the container by
+`deploy/compose.yaml` as `AVENLYO_PROFILE_*`, from **the same `--env-file` the build and the rest of
+the deployment already read**.
+
+That sameness is the point. A separate file for preflight to read would be a second source of truth,
+and preflight would end up certifying a profile the deployment did not use. Every one of these
+values is non-secret; no key, token, or anon key belongs in that block.
+
+Without them preflight can only check the values the API happens to hold for its own behaviour,
+which is not the profile it claims to validate.
+
+### What is fail-closed
+
+A deployed preflight must not exit `0` while something it is supposed to prove is unproven:
+
+| Condition | development | staging | production |
+| --- | --- | --- | --- |
+| Schema probe did not answer | skip | **fail** | **fail** |
+| Schema older than required | fail | **fail** | **fail** |
+| Schema >= required | pass | pass | pass |
+| Supabase project ref undeclared | skip | skip (unverified) | **fail** |
+| Supabase ref declared, mismatched | fail | **fail** | **fail** |
+
+A run whose database did not answer has established nothing about schema compatibility, so exiting 0
+would wave through precisely the case the check exists for. The `>=` rule is unchanged — a newer
+schema passes, which is what keeps additive rollback possible.
+
+The Supabase row is the one asymmetry, and it is deliberate. In production the declaration is
+mandatory: a Supabase URL is an opaque ref, so production pointed at the staging database is
+invisible unless an operator states which project they meant, and "nobody said" is the unverified
+state that must not pass. Staging keeps the softer policy because it is the environment where the
+project may legitimately be rebuilt; there an undeclared expectation is reported as unverified.
+
 Exit codes: `0` all checks passed, `1` a check failed, `2` the configuration could not be parsed at
-all. `2` means the environment is malformed rather than merely wrong.
+all. `2` means the environment is malformed rather than merely wrong — a missing or invalid
+`AVENLYO_DEPLOYMENT_ENV`, for instance. It prints bounded fixed text, never a stack trace.
 
 Findings name the **setting**, never its value, so preflight output is safe to paste into a ticket.
 

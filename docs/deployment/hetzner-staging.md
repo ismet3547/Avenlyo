@@ -146,17 +146,33 @@ Staging runs `NODE_ENV=production` -- it exercises production runtime behavior, 
 project decision, not the more permissive `NODE_ENV=development` an earlier draft audit of this
 repository considered.
 
-Payments are intentionally not configured at this project stage. `apps/api/src/env.ts`'s production
-guard only rejects the specific combination `NODE_ENV=production` **and** `STRIPE_MODE=test`:
+Because staging runs `NODE_ENV=production`, staging also has to declare which deployment it is:
+
+```
+AVENLYO_DEPLOYMENT_ENV=staging
+```
+
+A production-mode container without it refuses to start. `NODE_ENV` cannot answer the question —
+production will run `NODE_ENV=production` too.
+
+Payments are intentionally not configured at this project stage. The Stripe rule keys off the
+deployment identity, not off `NODE_ENV`:
 
 ```ts
-if (env.NODE_ENV === 'production' && env.STRIPE_MODE === 'test') {
-  throw new Error('STRIPE_MODE must be live in production.');
+if (deploymentEnvironment === 'production' && env.STRIPE_MODE === 'test') {
+  throw new Error('STRIPE_MODE must be live in a production deployment.');
 }
 ```
 
-Leaving `STRIPE_MODE` and every `STRIPE_*` variable **entirely unset** in `api.env` avoids this
-guard without weakening it: the application's own capability system (`isStripeBillingConfigured` in
+So `STRIPE_MODE=test` is permitted on staging, which is the correct mode for staging. It was
+previously keyed on `NODE_ENV`, which rejected a test key on staging — harmless only because staging
+leaves Stripe unset, and wrong the moment staging configured it.
+
+The key/mode prefix rule is independent of environment and still applies everywhere:
+`STRIPE_MODE=test` requires an `sk_test_…` secret, `STRIPE_MODE=live` requires `sk_live_…`.
+
+Leaving `STRIPE_MODE` and every `STRIPE_*` variable **entirely unset** in `api.env` remains the
+current staging posture: the application's own capability system (`isStripeBillingConfigured` in
 `apps/api/src/env.ts`) already reports the billing boundary unconfigured when its secrets are
 absent, and every billing-dependent code path fails closed exactly as it is designed to. Do not set
 fake or placeholder Stripe credentials merely to make staging boot -- it already boots correctly

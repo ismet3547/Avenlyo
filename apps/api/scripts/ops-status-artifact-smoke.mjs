@@ -63,6 +63,9 @@ function run() {
       env: {
         API_HOST: '127.0.0.1',
         API_PORT: '4101',
+        // Staging-shaped. NODE_ENV=production no longer identifies a deployment on its own, so a
+        // fixture that omits this is not "minimal" -- it is a fixture that cannot boot.
+        AVENLYO_DEPLOYMENT_ENV: 'staging',
         NODE_ENV: 'production',
         PATH: process.env.PATH ?? '',
         WEB_CHAT_IFRAME_ORIGIN: 'https://staging.invalid',

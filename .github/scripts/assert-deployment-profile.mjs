@@ -17,9 +17,20 @@ import { readFileSync } from 'node:fs';
  * Usage: assert-deployment-profile.mjs <staging|production> <env-file>
  */
 
-const [, , target, envFile] = process.argv;
+/**
+ * The deployed environments, mirrored from `DEPLOYED_ENVIRONMENTS` in packages/shared.
+ *
+ * Duplicated rather than imported because `@avenlyo/shared` exports raw TypeScript, which plain
+ * `node` cannot load, and running this CI script through a source loader would make the deployment
+ * gate depend on the toolchain it is meant to check. The duplication is guarded instead: a test in
+ * apps/api/src/security/deployment-contract.test.ts reads this file and fails if this list and the
+ * shared one ever diverge, so it cannot drift silently.
+ */
+const DEPLOYED_ENVIRONMENTS = ['staging', 'production'];
 
-if (target !== 'staging' && target !== 'production') {
+const [, , expectedTarget, envFile] = process.argv;
+
+if (expectedTarget !== 'staging' && expectedTarget !== 'production') {
   process.stderr.write('usage: assert-deployment-profile.mjs <staging|production> <env-file>\n');
   process.exit(2);
 }
@@ -38,6 +49,44 @@ const profile = Object.fromEntries(
       return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
     }),
 );
+
+// ---------------------------------------------------------------------------------------------
+// Deployment identity comes from the PROFILE, not from the command line.
+// ---------------------------------------------------------------------------------------------
+// The whole Phase 20 premise is that the deployment identity is explicit and part of the deployment
+// configuration. If this script took the caller's word for which target it was looking at, a profile
+// could declare staging, or declare nothing at all, and still be validated under production rules
+// because the CI step happened to say "production" -- the identity would be out-of-band, which is
+// the thing being ruled out.
+//
+// So the profile is the authority. The argument is kept, but only as an assertion about what the
+// caller believed: a disagreement means the two sources of truth have drifted and is itself a
+// failure, not something to resolve in favour of either side.
+const declared = profile.AVENLYO_DEPLOYMENT_ENV;
+
+if (!declared) {
+  process.stderr.write(
+    `deployment profile "${envFile}" FAILED:\n  - AVENLYO_DEPLOYMENT_ENV is not declared in the ` +
+      'profile; a deployed profile must state which deployment it is\n',
+  );
+  process.exit(1);
+}
+if (!DEPLOYED_ENVIRONMENTS.includes(declared)) {
+  process.stderr.write(
+    `deployment profile "${envFile}" FAILED:\n  - AVENLYO_DEPLOYMENT_ENV must be one of ` +
+      `${DEPLOYED_ENVIRONMENTS.join(', ')} for a deployed profile\n`,
+  );
+  process.exit(1);
+}
+if (declared !== expectedTarget) {
+  process.stderr.write(
+    `deployment profile "${envFile}" FAILED:\n  - the profile declares a different deployment ` +
+      'environment than the caller expected; the identity and the caller have drifted\n',
+  );
+  process.exit(1);
+}
+
+const target = declared;
 
 // ---------------------------------------------------------------------------------------------
 // Render the compose file exactly the way a deploy does.

@@ -13,6 +13,18 @@ import {
   isTrustedBackendConfigured,
 } from './observability/capabilities.js';
 
+/**
+ * Treats an empty string as an unset variable.
+ *
+ * Compose renders `${FOO:-}` as `FOO=` when FOO is unset, so a value that is simply not part of a
+ * deployment profile arrives as "" rather than absent. Applied only to the non-secret profile
+ * values below: for those, "not supplied" must leave a preflight check unperformed rather than fail
+ * it against an empty string. Every other variable keeps its ordinary validation.
+ */
+function emptyAsAbsent<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => (value === '' ? undefined : value), schema.optional());
+}
+
 export const env = parseEnvironment(
   z.object({
     API_CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
@@ -24,6 +36,25 @@ export const env = parseEnvironment(
     AVENLYO_DEPLOYMENT_ENV: z.string().trim().min(1).max(20).optional(),
     /** Optional, non-secret. Declaring it lets preflight prove the intended Supabase project. */
     AVENLYO_EXPECTED_SUPABASE_PROJECT_REF: z.string().trim().min(1).max(60).optional(),
+    /**
+     * The non-secret public deployment profile, supplied by deploy/compose.yaml from the same
+     * --env-file the build reads. See the comment on the `api` service there for why.
+     *
+     * Nothing in the API's behaviour reads these. They exist so `ops:preflight` can compare the
+     * browser-facing half of the deployment profile against the server-facing half -- an
+     * API_CORS_ORIGIN that has drifted from the app origin, a compiled bundle aimed at a hostname
+     * Caddy does not serve, or a web container reaching the API without crossing Caddy. Without
+     * them preflight can only check the values the API happens to hold, which is not the profile it
+     * claims to validate.
+     *
+     * Empty is absent, not invalid: Compose's `environment:` renders an unset variable as "", and an
+     * unset profile value should leave a check unperformed rather than fail it against "".
+     */
+    AVENLYO_PROFILE_API_HOST: emptyAsAbsent(z.string().trim().min(1).max(253)),
+    AVENLYO_PROFILE_APP_URL: emptyAsAbsent(z.string().url()),
+    AVENLYO_PROFILE_PUBLIC_API_URL: emptyAsAbsent(z.string().url()),
+    AVENLYO_PROFILE_WEB_API_URL: emptyAsAbsent(z.string().url()),
+    AVENLYO_PROFILE_WEB_HOST: emptyAsAbsent(z.string().trim().min(1).max(253)),
     AVENLYO_RELEASE: z.string().trim().min(1).max(120).optional(),
     // Server-only, and shared with the Next.js server alone. It authenticates the selected
     // workspace a billing mutation is acting on; it is never an authorization by itself, never
@@ -83,8 +114,32 @@ if (
   throw new Error('STRIPE_SECRET_KEY must match the configured STRIPE_MODE.');
 }
 
-if (env.NODE_ENV === 'production' && env.STRIPE_MODE === 'test') {
-  throw new Error('STRIPE_MODE must be live in production.');
+/**
+ * Which deployment this is, resolved once at the boundary and fail-closed.
+ *
+ * A container running NODE_ENV=production without declaring this raises here, at startup, rather
+ * than letting every downstream environment check silently assume the friendlier answer.
+ *
+ * Resolved before the Stripe rule below because that rule needs the answer.
+ */
+export const deploymentEnvironment: DeploymentEnvironment = resolveDeploymentEnvironment({
+  deploymentEnv: env.AVENLYO_DEPLOYMENT_ENV,
+  nodeEnv: env.NODE_ENV,
+});
+
+/**
+ * Live Stripe keys in production, keyed on the deployment identity rather than on NODE_ENV.
+ *
+ * This used to read `NODE_ENV === 'production'`, which was wrong for the reason Phase 20 exists:
+ * staging deliberately runs NODE_ENV=production, so the rule rejected a test-mode Stripe key on
+ * staging -- the one environment where a test key is the correct configuration. The old check was
+ * only harmless because staging leaves Stripe entirely unconfigured, so it never fired.
+ *
+ * Staging keeps test mode. Production requires live. Development is unconstrained. The key/mode
+ * prefix consistency check above is independent of environment and still applies to all three.
+ */
+if (deploymentEnvironment === 'production' && env.STRIPE_MODE === 'test') {
+  throw new Error('STRIPE_MODE must be live in a production deployment.');
 }
 
 /**
@@ -118,17 +173,6 @@ export const expectedStripeLivemode = env.STRIPE_MODE === 'live';
 
 /** A deployment identifier the operator supplies. Never generated per request, never a secret. */
 export const release = env.AVENLYO_RELEASE ?? 'unknown';
-
-/**
- * Which deployment this is, resolved once at the boundary and fail-closed.
- *
- * A container running NODE_ENV=production without declaring this raises here, at startup, rather
- * than letting every downstream environment check silently assume the friendlier answer.
- */
-export const deploymentEnvironment: DeploymentEnvironment = resolveDeploymentEnvironment({
-  deploymentEnv: env.AVENLYO_DEPLOYMENT_ENV,
-  nodeEnv: env.NODE_ENV,
-});
 
 /** True only for a real deployment, where release identity and public URL policy are enforced. */
 export const isDeployedEnvironment = deploymentEnvironment !== 'development';

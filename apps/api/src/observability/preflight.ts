@@ -111,9 +111,21 @@ export function evaluatePreflight(input: PreflightInput): PreflightReport {
   );
 
   // -- Schema --------------------------------------------------------------------------------
+  // Fail-closed in a deployed environment. A preflight whose database did not answer has not
+  // established that the schema is compatible -- it has established nothing -- and a gate that
+  // exits 0 on "I could not check" is a gate that waves through the case it exists to catch. In
+  // development a missing probe is ordinary (there may be no database at all), so it stays a skip.
+  //
+  // The >= rule is unchanged: a newer schema passes, which is what keeps additive rollback possible.
   if (input.schemaVersion === null) {
     checks.push(
-      check('schema_compatible', 'skip', 'no schema probe was supplied to this preflight run'),
+      deployed
+        ? check(
+            'schema_compatible',
+            'fail',
+            'the database did not answer the readiness probe, so schema compatibility is unproven',
+          )
+        : check('schema_compatible', 'skip', 'no schema probe was supplied to this preflight run'),
     );
   } else if (input.schemaVersion >= input.requiredSchemaVersion) {
     checks.push(
@@ -176,15 +188,31 @@ export function evaluatePreflight(input: PreflightInput): PreflightReport {
   }
 
   // -- Supabase project identity -------------------------------------------------------------
+  // A Supabase URL is an opaque project ref: it says nothing about which environment it belongs to,
+  // so production accidentally pointed at the staging database is not detectable from the URL. The
+  // only thing that makes it detectable is an operator declaring which project they meant.
+  //
+  // In production that declaration is therefore mandatory, and its absence is a failure rather than
+  // a skip -- "nobody said which database this should be" is precisely the unverified state that
+  // must not exit 0. Staging keeps the softer policy deliberately: it is the environment where the
+  // project may legitimately be rebuilt, and an unverified check there is reported as unverified.
   const assurance = supabaseIdentityAssurance({
     expectedProjectRef: input.expectedSupabaseProjectRef,
     supabaseUrl: input.supabaseUrl,
   });
+  const identityUnverifiedInProduction =
+    assurance.status === 'unverified' && input.deploymentEnvironment === 'production';
   checks.push(
     check(
       'supabase_project_identity',
-      assurance.status === 'mismatch' ? 'fail' : assurance.status === 'match' ? 'pass' : 'skip',
-      assurance.detail,
+      assurance.status === 'mismatch' || identityUnverifiedInProduction
+        ? 'fail'
+        : assurance.status === 'match'
+          ? 'pass'
+          : 'skip',
+      identityUnverifiedInProduction
+        ? 'AVENLYO_EXPECTED_SUPABASE_PROJECT_REF must be declared for a production deployment'
+        : assurance.detail,
     ),
   );
 

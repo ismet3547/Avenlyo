@@ -1,4 +1,5 @@
 export {
+  CADDY_PUBLISHED_TLS_PORT,
   DEPLOYED_ENVIRONMENTS,
   DEPLOYMENT_ENVIRONMENTS,
   DeploymentEnvironmentError,
@@ -9,6 +10,8 @@ export {
   isExactReleaseSha,
   isProductionWebHostname,
   isStagingHostname,
+  originOf,
+  portOf,
   PRODUCTION_WEB_HOSTNAMES,
   resolveDeploymentEnvironment,
   STAGING_HOSTNAMES,

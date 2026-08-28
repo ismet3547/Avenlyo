@@ -116,6 +116,42 @@ export function hostnameOf(value: string): string | null {
   }
 }
 
+/**
+ * The normalized browser origin -- scheme, host and port together.
+ *
+ * Origin, not hostname, because the browser's same-origin rule is not a hostname rule.
+ * `https://avenlyo.com` and `https://avenlyo.com:444` share a hostname and are different origins, so
+ * a CORS allow-list or an iframe ancestor check compared by hostname would call a real mismatch
+ * agreement. `URL.origin` also elides the default port, so `https://avenlyo.com:443` and
+ * `https://avenlyo.com` compare equal -- which they should, being genuinely the same origin.
+ */
+export function originOf(value: string): string | null {
+  try {
+    return new URL(value).origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The only TLS port this topology serves.
+ *
+ * `deploy/compose.yaml` has Caddy publish 80, 443 and 443/udp, and nothing else. A public URL naming
+ * any other port describes an endpoint no container is listening on, so the deployment would build a
+ * browser bundle that calls an address the host does not answer -- and the agreement checks above
+ * would happily pass it, because every hostname involved would still match.
+ */
+export const CADDY_PUBLISHED_TLS_PORT = '443';
+
+/** The explicit port in a URL, `''` when it is the scheme default, `null` when unparseable. */
+export function portOf(value: string): string | null {
+  try {
+    return new URL(value).port;
+  } catch {
+    return null;
+  }
+}
+
 /** True for a hostname this repository knows is staging, including the `*-staging.avenlyo.com` shape. */
 export function isStagingHostname(host: string | null): boolean {
   if (!host) return false;
@@ -273,25 +309,51 @@ export function evaluateDeploymentConfig(input: DeploymentConfigInput): readonly
     requireHttps(findings, setting, value, 'public_scheme_is_https');
   }
 
-  // -- Origin agreement ----------------------------------------------------------------------
-  // These three must name the same browser origin. CORS and the Web Chat iframe check are the two
-  // controls standing between a customer's site and this API; if either drifts from the app's own
-  // origin the widget breaks, or worse, trusts the wrong one.
-  const webHost = hostnameOf(input.publicWebUrl ?? '');
+  // -- Public ports --------------------------------------------------------------------------
+  // Checked before the agreement rules below, because a port drift is invisible to them: every
+  // hostname still matches, and the deployment ships a bundle calling a port nothing publishes.
   for (const [setting, value] of [
+    ['NEXT_PUBLIC_APP_URL', input.publicWebUrl],
+    ['NEXT_PUBLIC_AVENLYO_API_URL', input.publicApiUrl],
     ['API_CORS_ORIGIN', input.apiCorsOrigin],
     ['WEB_CHAT_IFRAME_ORIGIN', input.webChatIframeOrigin],
   ] as const) {
-    const host = hostnameOf(value ?? '');
-    if (webHost && host && host !== webHost) {
+    if (value === undefined) continue;
+    const port = portOf(value);
+    if (port !== null && port !== '' && port !== CADDY_PUBLISHED_TLS_PORT) {
       findings.push({
-        check: 'public_web_origin_agreement',
-        detail: 'does not name the same host as NEXT_PUBLIC_APP_URL',
+        check: 'public_port_is_published',
+        detail: `names a port Caddy does not publish; this topology serves ${CADDY_PUBLISHED_TLS_PORT} only`,
         setting,
         severity: 'error',
       });
     }
   }
+
+  // -- Origin agreement ----------------------------------------------------------------------
+  // These three must name the same browser *origin*. CORS and the Web Chat iframe check are the two
+  // controls standing between a customer's site and this API; if either drifts from the app's own
+  // origin the widget breaks, or worse, trusts the wrong one.
+  //
+  // Compared as origins rather than hostnames because that is the rule the browser actually applies:
+  // https://avenlyo.com and https://avenlyo.com:444 are different origins sharing a hostname, and a
+  // hostname comparison would call that pair agreement.
+  const webOrigin = originOf(input.publicWebUrl ?? '');
+  for (const [setting, value] of [
+    ['API_CORS_ORIGIN', input.apiCorsOrigin],
+    ['WEB_CHAT_IFRAME_ORIGIN', input.webChatIframeOrigin],
+  ] as const) {
+    const origin = originOf(value ?? '');
+    if (webOrigin && origin && origin !== webOrigin) {
+      findings.push({
+        check: 'public_web_origin_agreement',
+        detail: 'does not name the same browser origin as NEXT_PUBLIC_APP_URL',
+        setting,
+        severity: 'error',
+      });
+    }
+  }
+  const webHost = hostnameOf(input.publicWebUrl ?? '');
 
   // The public API URL the browser is built against and the hostname Caddy answers on must agree,
   // or the compiled bundle calls an endpoint this deployment does not serve.

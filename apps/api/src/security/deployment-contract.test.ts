@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-import { evaluateDeploymentConfig, INTERNAL_API_URL } from '@avenlyo/shared';
+import { DEPLOYED_ENVIRONMENTS, evaluateDeploymentConfig, INTERNAL_API_URL } from '@avenlyo/shared';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -192,5 +192,38 @@ describe('deployment profiles render safely for both targets', () => {
     const injected = { ...productionProfile, internalApiUrl: 'http://api:4000' };
 
     expect(errorsFor(injected).map((f) => f.check)).toContain('internal_api_boundary');
+  });
+});
+
+describe('the CI profile assertion cannot drift from the shared policy', () => {
+  const script = () => readFile('.github/scripts/assert-deployment-profile.mjs', 'utf8');
+
+  /**
+   * The assertion script mirrors DEPLOYED_ENVIRONMENTS as a literal, because `@avenlyo/shared`
+   * exports raw TypeScript and the script runs under plain `node` in CI -- running the deployment
+   * gate through a source loader would make it depend on the toolchain it exists to check.
+   *
+   * Duplication is acceptable only while it is guarded, which is what this does. If someone adds a
+   * deployed environment to the shared policy and not to the script, the script would silently
+   * reject a legitimate profile; if they add it only to the script, it would accept one the policy
+   * does not recognise. Either way this fails first.
+   */
+  it('mirrors DEPLOYED_ENVIRONMENTS exactly', async () => {
+    const source = await script();
+    const declared = /const DEPLOYED_ENVIRONMENTS = \[([^\]]*)\]/.exec(source);
+
+    expect(declared).not.toBeNull();
+    const mirrored = [...(declared?.[1] ?? '').matchAll(/'([a-z]+)'/g)].map((match) => match[1]);
+    expect(mirrored).toEqual([...DEPLOYED_ENVIRONMENTS]);
+  });
+
+  it('reads the deployment identity from the profile rather than trusting the caller', async () => {
+    const source = await script();
+
+    // The identity must come from the file being validated. If the CLI argument were the authority,
+    // a profile could declare staging -- or declare nothing -- and still be checked under
+    // production rules because the caller said "production".
+    expect(source).toContain('profile.AVENLYO_DEPLOYMENT_ENV');
+    expect(source).toMatch(/declared !== expectedTarget/);
   });
 });
