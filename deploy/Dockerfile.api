@@ -37,7 +37,8 @@ RUN pnpm --filter @avenlyo/api build
 
 # devDependencies (esbuild, typescript, vitest, ...) are no longer needed once dist/ exists; pruning
 # them here, before anything crosses the stage boundary, is what keeps the runtime stage's
-# node_modules to just the 12 runtime npm packages apps/api/esbuild.config.mjs marks `external`.
+# node_modules to just the runtime npm packages apps/api/esbuild.config.mjs marks `external` --
+# which now includes @fastify/helmet and @fastify/rate-limit, added in Phase 19.
 RUN pnpm prune --prod
 
 # ---------------------------------------------------------------------------------------------

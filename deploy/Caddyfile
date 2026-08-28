@@ -1,17 +1,57 @@
 # Avenlyo Hetzner staging reverse proxy.
 #
-# Caddy is the only internet-facing process (ports 80/443). Both upstreams are reached by Docker's
-# internal DNS -- `web` and `api` are the compose service names in deploy/compose.yaml, not
+# Caddy is the only internet-facing process (ports 80/443) and the only container that peers with
+# `api` at all -- deploy/compose.yaml puts `web` and `api` on separate networks precisely so that
+# the API's trusted-proxy boundary is structurally one hop rather than "any private container".
+# Upstreams are reached by Docker's internal DNS (`web`, `api` are the compose service names), not
 # 127.0.0.1, which from inside this container would loop back to Caddy itself.
 #
 # TLS is fully automatic: Caddy requests and renews certificates via ACME (Let's Encrypt) the
 # moment DNS for these two hostnames resolves to this host and 80/443 are reachable. No certificate
 # file is ever committed to this repository, and no Certbot or other separate ACME client is used.
 
+# Forwarding information is REPLACED, never appended to.
+#
+# Caddy's default is to append the connecting address to whatever X-Forwarded-For arrived, so an
+# internet client can prepend entries of its choosing and they survive the hop. The API decides a
+# caller's abuse-control identity from this header, and a caller writing its own value there is a
+# caller choosing its own rate-limit bucket -- or someone else's. `{remote_host}` is the address
+# Caddy actually accepted the connection from, so anything the client wrote is discarded at the one
+# hop that knows the truth.
+#
+# The API does not depend on this being correct: apps/api/src/security/client-identity.ts honours a
+# forwarding header only from an internal peer, and the network split means the only such peer is
+# this process. Two independent controls, either sufficient.
+(sanitized_forwarding) {
+	header_up X-Forwarded-For {remote_host}
+	header_up X-Real-IP {remote_host}
+}
+
 staging.avenlyo.com {
-	reverse_proxy web:3000
+	reverse_proxy web:3000 {
+		import sanitized_forwarding
+	}
 }
 
 api-staging.avenlyo.com {
-	reverse_proxy api:4000
+	reverse_proxy api:4000 {
+		import sanitized_forwarding
+	}
+}
+
+# Internal-only listener for the web container's own server-side API calls.
+#
+# `web` no longer shares a network with `api`, so `AVENLYO_API_URL=http://api:4000` cannot resolve.
+# The dashboard's appointment, billing and integration server actions still need to reach the API,
+# and routing them out to the public hostname and back would add a TLS hairpin plus a dependency on
+# public DNS from inside the container for what is a purely internal call.
+#
+# So they go through Caddy, which is already the one process allowed to talk to `api`. This port is
+# NOT in the `ports:` block of deploy/compose.yaml, so it is reachable only from the two compose
+# networks -- never from the host or the internet. No hostname is matched here, so it never triggers
+# an ACME request.
+:8080 {
+	reverse_proxy api:4000 {
+		import sanitized_forwarding
+	}
 }
