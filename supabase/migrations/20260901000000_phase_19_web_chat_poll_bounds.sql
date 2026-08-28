@@ -126,21 +126,37 @@ grant execute on function public.get_web_chat_messages(text, text, timestamptz) 
 -- ## Why this path checks the session first, and the three-argument one does not
 --
 -- The authoritative function charges the quota *before* the session lookup, so an invalid token
--- cannot be used as an unmetered probe. That is right there, because its scope comes from the
--- canonical client address: the key space is the set of client addresses, and rotating chat tokens
--- mints no new scopes.
+-- cannot be used as an unmetered probe. That ordering is right there, because its scope comes from
+-- the canonical client address: the key space is the set of client addresses, and rotating chat
+-- tokens mints no new scopes.
 --
--- It is wrong here. A rolled-back Phase 18 binary has no edge limiter and accepts any syntactically
--- valid 43-character token, so the scope this wrapper derives is attacker-controlled. Delegating
--- straight through would mean every rotated token became a fresh `web-poll:` scope and therefore a
--- fresh row in `messaging_rate_limits`, whose primary key is `scope_key` -- unbounded durable state
--- created by a caller who never held a session, with the 42501 arriving only afterwards.
+-- This wrapper cannot borrow that reasoning. A rolled-back Phase 18 binary has no edge limiter and
+-- accepts any syntactically valid 43-character token, so the scope derived here comes from a
+-- caller-supplied value rather than a trusted one.
 --
--- So this path proves the session exists before it creates any limiter state, using the
--- (token_hash, expires_at) index that already exists for exactly this lookup. A caller without a
--- live session gets the same bounded 42501 and leaves nothing behind. The three-argument function
--- then repeats the lookup, which is one indexed read on the path that already succeeded -- a cost
--- worth paying to keep one implementation of the actual polling behaviour rather than two.
+-- What that does *not* cause, and it is worth being exact because the opposite is easy to assume:
+-- it does not leave committed rows behind. If this wrapper delegated straight through, an unknown
+-- token would reach `consume_messaging_rate_limit`, which would execute its INSERT ... ON CONFLICT,
+-- and then the session lookup would RAISE 42501 -- aborting the same transaction and rolling that
+-- INSERT back. Verified directly against a real database with this gate removed: the call reaches
+-- the limiter, and a subsequent transaction finds zero rows for the derived scope. No committed row
+-- survives, so `messaging_rate_limits` key cardinality does not grow.
+--
+-- The gate is still worth having, for reasons that do not depend on that:
+--
+--   * An unknown token never reaches the limiter at all, rather than reaching it and being undone.
+--     Aborted work is still work -- an INSERT, its WAL, its index maintenance and the dead tuple it
+--     leaves for autovacuum -- and a rolled-back binary has no edge limiter in front of it.
+--   * It makes the safe ordering explicit at the point where the scope is untrusted, instead of
+--     leaving a reader to reconstruct why the opposite ordering is fine one function away.
+--   * It stops the property depending on the three-argument function continuing to charge before it
+--     validates, and on every future caller propagating the error rather than swallowing it in an
+--     exception handler, a subtransaction, or a retry loop.
+--
+-- So this path proves the session exists first, using the (token_hash, expires_at) index that
+-- already exists for exactly this lookup. A caller without a live session gets the same bounded
+-- 42501. The three-argument function then repeats the lookup, which is one indexed read on the path
+-- that already succeeded -- worth paying to keep one implementation of the polling behaviour.
 --
 -- Overload resolution is unambiguous in both directions and asserted in
 -- supabase/tests/database/web_chat_poll_bounds.test.sql: only this function has `target_after`

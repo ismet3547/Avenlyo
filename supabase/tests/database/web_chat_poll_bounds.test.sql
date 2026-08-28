@@ -197,10 +197,13 @@ select extensions.lives_ok(
 -- ---------------------------------------------------------------------------------------
 -- An invalid legacy token must leave nothing behind.
 --
--- The concern: a rolled-back Phase 18 binary has no edge limiter and accepts any syntactically
--- valid token, so if the wrapper delegated straight through, every rotated token would derive a
--- fresh `web-poll:` scope and therefore a fresh row in messaging_rate_limits, whose primary key is
--- scope_key -- durable state from a caller who never held a session.
+-- A rolled-back Phase 18 binary has no edge limiter and accepts any syntactically valid token, so
+-- the scope the wrapper derives comes from a caller-supplied value. Delegating straight through
+-- would let an unknown token reach consume_messaging_rate_limit and execute its INSERT ... ON
+-- CONFLICT -- which the subsequent 42501 then rolls back, in the same transaction. No committed row
+-- survives either way, so this was never durable cardinality growth. The gate's value is that an
+-- unknown token does not reach the limiter at all: no aborted INSERT, no WAL, no dead tuple, and no
+-- dependence on a future caller propagating the error rather than swallowing it.
 --
 -- Two separate things are asserted below, and it is worth being exact about which is which,
 -- because they are not equally strong.

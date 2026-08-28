@@ -1,30 +1,54 @@
 # Avenlyo Hetzner staging
 
-Runbook for the production-like staging deployment introduced by this PR. Nothing here has been
-executed: no Hetzner VM is provisioned, no DNS record changed, no migration run against hosted
-Supabase. This document describes the procedure a human runs manually, later.
+Runbook for the production-like staging deployment.
+
+**Status.** The Hetzner staging runtime exists and is running: the VM is provisioned, DNS resolves,
+Caddy holds certificates for both hostnames, and Phase 18 was verified end to end on it — health,
+sandboxed Chromium, hosted migrations and the Agent Test path.
+
+**Phase 19 is not deployed.** Its code and its migration are on the branch and green in CI; nothing
+from this phase has been applied to the staging host or its hosted Supabase project. Everything
+below is the procedure a human runs.
 
 ```
-                          Internet
-                             |
-                        [ 80 / 443 ]
-                             |
-                          caddy   (auto TLS, host-based routing)
-                     /                     \
-      staging.avenlyo.com          api-staging.avenlyo.com
-                |                             |
-             web:3000                      api:4000
-          (next start)          (fastify + in-process messaging,
-                                  billing, and knowledge-import
-                                  workers + sandboxed Chromium
-                                  rendered fallback)
-                                             |
-                                    hosted Supabase (external,
-                                    authoritative -- staging project)
+                                Internet
+                                    |
+                            [ 80 / 443 published ]
+                                    |
+                        +-----------------------+
+                        |         caddy         |   auto TLS, host-based routing
+                        |  (on BOTH networks)   |
+                        +-----------------------+
+                         /          |           \
+        staging.avenlyo.com         |            api-staging.avenlyo.com
+                |                   |                        |
+   == web_edge network ==           |         == api_edge network ==
+                |                   |                        |
+             web:3000               |                     api:4000
+          (next start)              |         (fastify + in-process messaging,
+                |                   |          billing and knowledge-import
+                |                   |          workers + sandboxed Chromium)
+                |                   |                        |
+                |              :8080 (NOT published)         |
+                +---------------->--+------------------------+
+                  web's server-side calls: web -> caddy:8080 -> api
+                                                             |
+                                                    hosted Supabase
+                                            (external, authoritative -- staging)
 ```
 
-`3000` and `4000` exist only on the Docker-internal network defined in `deploy/compose.yaml`.
-Caddy is the only process with a published host port.
+**Two networks, not one.** `web` sits on `web_edge`, `api` on `api_edge`, and only Caddy is on both.
+`web` and `api` share no network, so nothing but Caddy can open a socket to the API — which is what
+makes the API's trusted-proxy boundary structurally one hop rather than "any private container".
+
+**Public path:** Internet → Caddy `80/443` → `web:3000` or `api:4000`.
+**Internal server-side path:** `web` → `caddy:8080` → `api:4000`, for the dashboard's appointment,
+billing and integration server actions (`AVENLYO_API_URL=http://caddy:8080`).
+
+`3000`, `4000` and Caddy's `:8080` are **not** published to the host — `:8080` appears in the
+Caddyfile but never in the compose `ports:` block, so it is reachable only from the two compose
+networks, never from the host or the internet. Caddy's `80`, `443` and `443/udp` are the only
+published ports in the deployment.
 
 ## Build-time vs. runtime configuration
 
@@ -156,8 +180,9 @@ exact already-built image; never rebuild during rollback.**
 
 ## Migration deployment order
 
-**Not automated by this PR.** No container startup runs a migration. No `supabase db push` was run
-in this implementation session. The order a human follows, later:
+**Never automated.** No container startup runs a migration, and none should. Phase 18's migrations
+were pushed to the linked staging project by hand, in this order. Phase 19's has not been. The order
+a human follows:
 
 1. CI green on the PR that needs the new schema.
 2. Take whatever backup/checkpoint the team's standard practice calls for.
@@ -169,12 +194,15 @@ in this implementation session. The order a human follows, later:
 6. Verify API `GET /health/ready` reports `ready`.
 7. Verify web `GET /api/health` reports `ok`.
 
-This PR's base branch carries three Phase 18 migrations and requires schema version 18
-(`REQUIRED_SCHEMA_VERSION` in `apps/api/src/observability/readiness.ts`). The existing readiness
-contract is what makes this safe to sequence exactly this way: `evaluateReadiness` accepts a schema
-version greater than or equal to what the running build requires, specifically so a newer additive
-schema keeps an older build servable and a rollback never needs a destructive down-migration. This
-PR does not add one.
+Phase 19 adds one migration, `20260901000000_phase_19_web_chat_poll_bounds.sql`, and requires
+**schema version 19** (`REQUIRED_SCHEMA_VERSION` in `apps/api/src/observability/readiness.ts`). It is
+additive; no destructive down-migration exists or is needed.
+
+The readiness contract is what makes this safe to sequence this way. `evaluateReadiness` accepts a
+schema version greater than or equal to what the running build requires, so a newer schema keeps an
+older build servable. Schema 19 honours that in both directions: it advances the contract **and**
+preserves the Phase 18 two-argument `get_web_chat_messages` overload, so a rolled-back Phase 18 image
+still makes its exact old call successfully. See "Schema contract 19 and rollback compatibility".
 
 ## Deploy procedure
 
@@ -233,6 +261,24 @@ exactly the failure mode this command is written to make impossible.
 Chromium rolls back with it automatically, by construction: the browser binary and its stable
 symlink (`/opt/avenlyo/chromium/chrome`, see `deploy/Dockerfile.api`) are baked into the image layer
 itself, never a mounted volume, so the previous image's tag is also the previous browser revision.
+
+### Rolling back across the Phase 19 boundary
+
+A routine rollback switches **only the SHA-tagged images**. Keep the Phase 19 runtime exactly as it
+is: the `web_edge` / `api_edge` split, Caddy's internal `:8080` listener, and
+`AVENLYO_API_URL=http://caddy:8080` in `/etc/avenlyo/web.env`.
+
+Do **not** check out the Phase 18 `deploy/compose.yaml` or `deploy/Caddyfile` while leaving the
+Phase 19 environment in place. Those two are a matched pair: the old compose file puts every service
+back on one network and defines no `:8080` listener, so a host still pointing `AVENLYO_API_URL` at
+`http://caddy:8080` would have nothing answering, and the dashboard's appointment, billing and
+integration actions would fail. If you genuinely need the old topology, revert the env file with it.
+
+**Schema 19 stays deployed.** Do not attempt to undo the migration. A rolled-back Phase 18 image
+calls `get_web_chat_messages(target_token_hash, target_after)`, and schema 19 keeps exactly that
+overload — bounded, service-role only, delegating to the current implementation — precisely so this
+rollback works without a down-migration. Readiness accepts a schema newer than the build requires,
+so an 18 image reports ready against 19 and its web-chat polling works.
 
 Caddy configuration changes should be committed and tagged the same way as any other change to this
 repository -- `deploy/Caddyfile` is version-controlled, so "which Caddyfile was live" is always a
@@ -342,15 +388,21 @@ an unrelated correction.
 
 ## What remains manual
 
-Everything this document describes as a procedure, not something this PR executed:
+Provisioning, DNS, the real env files on the host, the first `docker compose up`, and the Chromium
+sandbox check on the real host were all done during the Phase 18 deployment; the runtime described
+above is live. What stays manual on every release, by design:
 
-- Provisioning the Hetzner VM.
-- The DNS records in "Server security runbook."
-- Writing the real `/etc/avenlyo/web.env`, `/etc/avenlyo/api.env`, and `deploy/env/build.env` files
-  on whatever host runs this.
-- `supabase db push` against the staging project.
-- The first `docker compose up`.
-- Verifying the Chromium sandbox on the real host, per the note above.
+- `supabase db push` against the linked **staging** project, before the containers restart.
+- The `build` / `up -d --no-build` pair, with `AVENLYO_RELEASE` exported once.
+- Health verification afterwards: API `/health/ready`, web `/api/health`.
+
+Outstanding for **Phase 19** specifically, none of which has been done:
+
+- Its migration has not been pushed to hosted staging.
+- Its images have not been built or deployed.
+- `/etc/avenlyo/web.env` on the host still carries `AVENLYO_API_URL=http://api:4000` and **must** be
+  updated to `http://caddy:8080` as part of that deploy, or the dashboard's appointment, billing and
+  integration server actions stop resolving once `web` and `api` no longer share a network.
 
 ## API edge security (Phase 19)
 
@@ -487,12 +539,26 @@ keeps answering the older build's calls, so the Phase 19 migration **recreates**
 two-argument signature — same parameter names, because PostgREST calls RPCs by name — as a thin
 delegate to the current implementation.
 
-The delegate is not a restoration of the old behaviour. It has no query, no session touch and no
-bound of its own; rate limiting, session lookup, the coalesced touch and the 100-row ceiling all
-happen inside the function it calls. The one thing a rolled-back binary cannot supply is a client
-rate scope, since it predates the trusted-proxy work, so the scope is derived deterministically from
-the session token hash: a per-session bucket rather than a per-client one. Coarser on purpose — it
-still bounds any single session's polling, and a rolled-back release is a temporary state.
+The delegate is not a restoration of the old behaviour. It contains exactly one narrow indexed
+existence lookup — does a live session hold this token hash — and nothing else of its own: no
+messages query, no session touch or update, and no result limit. The poll quota, the session lookup
+that drives the coalesced touch, and the 100-row ceiling all remain in the three-argument
+implementation it delegates to.
+
+That lookup runs *before* the scope is derived, deliberately. The authoritative path charges the
+quota before its own session lookup, which is right there because its scope comes from the canonical
+client address and cannot be inflated by rotating tokens. Here the scope comes from a
+caller-supplied token, so an unknown one is refused before it reaches the limiter at all. That is
+not fixing a durable-storage leak — an unknown token that did reach the limiter would have its
+`INSERT ... ON CONFLICT` rolled back by the same transaction's `42501`, and no committed row would
+survive. It avoids the aborted write, its WAL and its dead tuple, makes the safe ordering explicit
+where the input is untrusted, and stops the property depending on every future caller propagating
+the error rather than swallowing it.
+
+The one thing a rolled-back binary cannot supply is a client rate scope, since it predates the
+trusted-proxy work, so the scope is derived deterministically from the session token hash: a
+per-session bucket rather than a per-client one. Coarser on purpose — it still bounds any single
+session's polling, and a rolled-back release is a temporary state.
 
 Both overloads are `service_role` only, both are `security definer` with an empty `search_path`, and
 `supabase/tests/database/web_chat_poll_bounds.test.sql` asserts that exactly those two exist,
