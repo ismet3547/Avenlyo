@@ -73,5 +73,8 @@ await build({
     // copies `dist/` and not `src/`, and the production image has no tsx -- so leaving this out of
     // the bundle meant the documented operational check simply did not exist in production.
     'scripts/ops-status': 'src/scripts/ops-status.ts',
+    // Phase 20's deployment safety gate. Shipped for the same reason ops-status is: the runbook
+    // tells an operator to run it, and the production image copies dist/ and carries no tsx.
+    'scripts/ops-preflight': 'src/scripts/ops-preflight.ts',
   },
 });

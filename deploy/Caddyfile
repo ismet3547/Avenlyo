@@ -27,13 +27,23 @@
 	header_up X-Real-IP {remote_host}
 }
 
-staging.avenlyo.com {
+# Public hostnames are deployment configuration. The upstreams are not.
+#
+# Caddy substitutes {$VAR} from its own environment, so staging and production share one file and
+# one topology rather than drifting as two copies. The defaults keep an operator who sets nothing
+# on exactly today's staging behaviour, so this change is a no-op for the running deployment.
+#
+# Deliberately NOT configurable: `web:3000`, `api:4000`, and the internal `:8080` listener below.
+# Those are the trusted destinations the Phase 19 network split exists to protect. An environment
+# variable may choose a different public *name*; it must never be able to choose a different place
+# for Caddy to send traffic, because Caddy is the one process allowed to reach the API.
+{$AVENLYO_WEB_HOST:staging.avenlyo.com} {
 	reverse_proxy web:3000 {
 		import sanitized_forwarding
 	}
 }
 
-api-staging.avenlyo.com {
+{$AVENLYO_API_HOST:api-staging.avenlyo.com} {
 	reverse_proxy api:4000 {
 		import sanitized_forwarding
 	}

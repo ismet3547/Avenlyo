@@ -7,7 +7,7 @@
  * provider credential, and no customer credential.
  */
 
-export type SmokeCheckName = 'api_live' | 'api_ready' | 'web_live';
+export type SmokeCheckName = 'api_live' | 'api_ready' | 'api_release' | 'web_live';
 
 export interface SmokeCheckResult {
   readonly detail: string;
@@ -45,6 +45,35 @@ export function summarizeSmokeResults(results: readonly SmokeCheckResult[]): {
 } {
   const failed = results.filter((result) => !result.ok).map((result) => result.name);
   return { failed, ok: failed.length === 0 };
+}
+
+/**
+ * Did the deployment come up as the release we intended?
+ *
+ * A smoke that only asks "is it healthy" passes just as happily when `up` silently kept the previous
+ * image -- the failure mode the SHA-tagged build-once model exists to prevent, and the one nobody
+ * notices because everything is green. The release is already in the public health body, so this
+ * costs nothing and needs no credential.
+ *
+ * Only checked when the caller states an expectation: a smoke run against an unknown deployment
+ * should not invent one.
+ */
+export function evaluateReleaseCheck(
+  response: SmokeResponse | null,
+  expectedRelease: string,
+): SmokeCheckResult {
+  const name: SmokeCheckName = 'api_release';
+  if (!response) return { detail: 'unreachable', name, ok: false };
+  if (response.status !== 200) return { detail: `http_${response.status}`, name, ok: false };
+  const body = response.body;
+  const actual =
+    body && typeof body === 'object' ? (body as { release?: unknown }).release : undefined;
+  if (typeof actual !== 'string') return { detail: 'release_missing', name, ok: false };
+  // The mismatch detail names neither value: an operator can read both from their own deploy
+  // command, and a smoke's output is the wrong place to start echoing identifiers.
+  return actual === expectedRelease
+    ? { detail: 'ok', name, ok: true }
+    : { detail: 'release_mismatch', name, ok: false };
 }
 
 export function smokeTargets(input: {

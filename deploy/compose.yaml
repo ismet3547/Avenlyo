@@ -160,7 +160,15 @@ services:
     # Pinned to a specific minor line, not `latest` or a bare major tag. Bump deliberately; see
     # docs/deployment/hetzner-staging.md for how.
     image: caddy:2.8-alpine
+    environment:
+      # The two public hostnames deploy/Caddyfile substitutes. Deployment configuration, not a
+      # trusted destination: the upstreams in the Caddyfile are literals and cannot be overridden.
+      # Defaulting to the staging names keeps this file a no-op for the running deployment.
+      AVENLYO_WEB_HOST: ${AVENLYO_WEB_HOST:-staging.avenlyo.com}
+      AVENLYO_API_HOST: ${AVENLYO_API_HOST:-api-staging.avenlyo.com}
     ports:
+      # Still the only service publishing anything, and still only these three. Caddy's internal
+      # :8080 listener is absent here on purpose -- that is what keeps it unreachable from the host.
       - "80:80"
       - "443:443"
       - "443:443/udp"

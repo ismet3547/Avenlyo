@@ -1,3 +1,25 @@
+export {
+  DEPLOYED_ENVIRONMENTS,
+  DEPLOYMENT_ENVIRONMENTS,
+  DeploymentEnvironmentError,
+  evaluateDeploymentConfig,
+  hostnameOf,
+  INTERNAL_API_URL,
+  isDeploymentEnvironment,
+  isExactReleaseSha,
+  isProductionWebHostname,
+  isStagingHostname,
+  PRODUCTION_WEB_HOSTNAMES,
+  resolveDeploymentEnvironment,
+  STAGING_HOSTNAMES,
+  supabaseIdentityAssurance,
+} from './deployment';
+export type {
+  DeploymentCheckSeverity,
+  DeploymentConfigInput,
+  DeploymentEnvironment,
+  DeploymentFinding,
+} from './deployment';
 export { EnvironmentValidationError, parseEnvironment } from './env';
 export {
   businessDaySchema,

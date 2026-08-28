@@ -1,6 +1,10 @@
 import 'dotenv/config';
 
-import { parseEnvironment } from '@avenlyo/shared';
+import {
+  parseEnvironment,
+  resolveDeploymentEnvironment,
+  type DeploymentEnvironment,
+} from '@avenlyo/shared';
 import { WORKSPACE_PROOF_MIN_SECRET_LENGTH } from '@avenlyo/shared/workspace-proof';
 import { z } from 'zod';
 
@@ -12,6 +16,14 @@ import {
 export const env = parseEnvironment(
   z.object({
     API_CORS_ORIGIN: z.string().url().default('http://localhost:3000'),
+    /**
+     * Which deployment this process belongs to. Deliberately separate from NODE_ENV, because
+     * staging and production both run NODE_ENV=production and are otherwise indistinguishable.
+     * Validated below rather than here so a missing value can be judged against NODE_ENV.
+     */
+    AVENLYO_DEPLOYMENT_ENV: z.string().trim().min(1).max(20).optional(),
+    /** Optional, non-secret. Declaring it lets preflight prove the intended Supabase project. */
+    AVENLYO_EXPECTED_SUPABASE_PROJECT_REF: z.string().trim().min(1).max(60).optional(),
     AVENLYO_RELEASE: z.string().trim().min(1).max(120).optional(),
     // Server-only, and shared with the Next.js server alone. It authenticates the selected
     // workspace a billing mutation is acting on; it is never an authorization by itself, never
@@ -106,3 +118,17 @@ export const expectedStripeLivemode = env.STRIPE_MODE === 'live';
 
 /** A deployment identifier the operator supplies. Never generated per request, never a secret. */
 export const release = env.AVENLYO_RELEASE ?? 'unknown';
+
+/**
+ * Which deployment this is, resolved once at the boundary and fail-closed.
+ *
+ * A container running NODE_ENV=production without declaring this raises here, at startup, rather
+ * than letting every downstream environment check silently assume the friendlier answer.
+ */
+export const deploymentEnvironment: DeploymentEnvironment = resolveDeploymentEnvironment({
+  deploymentEnv: env.AVENLYO_DEPLOYMENT_ENV,
+  nodeEnv: env.NODE_ENV,
+});
+
+/** True only for a real deployment, where release identity and public URL policy are enforced. */
+export const isDeployedEnvironment = deploymentEnvironment !== 'development';

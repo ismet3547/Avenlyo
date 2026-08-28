@@ -398,3 +398,105 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f deploy/compose.yaml down -v
+
+  deployment-contract:
+    name: Deployment contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Phase 20 proves that BOTH deployment targets render safely, using placeholder configuration
+    # only. No production DNS is resolved, no ACME request is made, no hosted database, Stripe,
+    # Twilio, OpenAI, Google or ezyVet endpoint is contacted, and no real secret exists in this job.
+    #
+    # It deliberately does not rebuild the images. The heavy container proof already runs once in
+    # "Hetzner staging container validation", and the two targets share one topology -- only public
+    # hostname data differs. Building the same Dockerfiles twice would double the slowest job in CI
+    # to re-prove something the render already shows, so this asserts the rendered configuration and
+    # leaves the real container proof where it is.
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fixtures, never the real deploy/env/build.env: that file is untracked, exists only on a
+      # deployment host, and a CI job that read one would be a CI job that needs a secret.
+      - name: Create placeholder deployment profiles
+        run: |
+          mkdir -p /tmp/profiles
+          cat > /tmp/profiles/staging.env <<'EOF'
+          NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key
+          NEXT_PUBLIC_APP_URL=https://staging.avenlyo.com
+          NEXT_PUBLIC_AVENLYO_API_URL=https://api-staging.avenlyo.com
+          AVENLYO_WEB_HOST=staging.avenlyo.com
+          AVENLYO_API_HOST=api-staging.avenlyo.com
+          AVENLYO_RELEASE=${{ github.sha }}
+          EOF
+          cat > /tmp/profiles/production.env <<'EOF'
+          NEXT_PUBLIC_SUPABASE_URL=https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=ci-placeholder-anon-key
+          NEXT_PUBLIC_APP_URL=https://avenlyo.com
+          NEXT_PUBLIC_AVENLYO_API_URL=https://api.avenlyo.com
+          AVENLYO_WEB_HOST=avenlyo.com
+          AVENLYO_API_HOST=api.avenlyo.com
+          AVENLYO_RELEASE=${{ github.sha }}
+          EOF
+          sudo mkdir -p /etc/avenlyo
+          sudo touch /etc/avenlyo/web.env /etc/avenlyo/api.env
+          sudo chmod 0644 /etc/avenlyo/*.env
+
+      - name: Render and assert the staging profile
+        run: node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env
+
+      - name: Render and assert the production profile
+        run: node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/production.env
+
+      # Negative proof. The guard must catch an injected cross-wire rather than merely existing:
+      # a production profile carrying a staging hostname has to fail this job.
+      - name: Injected staging hostname must fail the production profile
+        run: |
+          sed 's#https://api.avenlyo.com#https://api-staging.avenlyo.com#' \
+            /tmp/profiles/production.env > /tmp/profiles/crosswired.env
+          if node .github/scripts/assert-deployment-profile.mjs production /tmp/profiles/crosswired.env; then
+            echo "::error::A production profile containing a staging hostname was accepted."
+            exit 1
+          fi
+          echo "Confirmed: the cross-wired production profile is rejected."
+
+      # Second negative proof, for the structural half. Phase 19's one-hop trust boundary is a
+      # property of the topology, not of any hostname, so put web back onto api_edge -- where it can
+      # reach the API directly and the trusted-proxy assumption stops holding -- and the assertion
+      # has to reject it. Edits the checkout, which is disposable, and restores it afterwards.
+      - name: Injected web/api network merge must fail the deployment contract
+        run: |
+          sed -i '77,78s/      - web_edge/      - web_edge\n      - api_edge/' deploy/compose.yaml
+          if git diff --quiet deploy/compose.yaml; then
+            echo "::error::The injection did not apply, so this negative test proves nothing."
+            exit 1
+          fi
+          if node .github/scripts/assert-deployment-profile.mjs staging /tmp/profiles/staging.env; then
+            echo "::error::A topology placing web and api on one network was accepted."
+            git checkout -- deploy/compose.yaml
+            exit 1
+          fi
+          git checkout -- deploy/compose.yaml
+          echo "Confirmed: merging the web and api networks is rejected."
+
+      - name: Preflight ships in the production artifact and runs under plain node
+        run: |
+          pnpm --filter @avenlyo/api build
+          pnpm --filter @avenlyo/api smoke:ops-preflight
