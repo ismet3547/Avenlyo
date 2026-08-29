@@ -9,9 +9,9 @@ credential, hosted production data, or production deployment is created or chang
 
 **PRODUCTION DEPLOYMENT: BLOCKED**
 
-The application/deployment candidate has strong staging and CI evidence, but production is not yet
-ready to deploy because infrastructure/account prerequisites are intentionally absent and `main`
-currently has no enforced branch protection/status-check gate.
+The application/deployment candidate has strong staging and CI evidence, and repository release
+governance is now enforced. Production is still not ready to deploy because the real
+infrastructure/account prerequisites are intentionally absent.
 
 This is a useful result: the remaining work is now bounded and explicit rather than mixed together
 with application correctness.
@@ -97,25 +97,36 @@ The detailed host evidence is in
 PR #28 was independently reviewed, squash-merged, and its `main` push CI run `33247916310` passed
 all six expected jobs. That commit is documentation-only and does not replace the runtime candidate.
 
-## Blocking finding 1 — repository release governance
+## Resolved finding 1 — repository release governance
 
-Read-only GitHub inspection on 2026-08-29 reported:
+The first read-only GitHub inspection on 2026-08-29 reported:
 
 - `main`: `protected=false`;
 - required status checks enforcement: `off`;
 - repository rulesets: none.
 
-That means the repository currently permits a path where `main` can move without the CI/review gate
-that the production runbook assumes operators rely on.
+That was a production-readiness blocker because a green voluntary CI run was not equivalent to an
+enforced merge gate.
 
-**Required before go-live:** protect `main` (legacy branch protection or a repository ruleset) so the
-production release branch cannot be advanced by an unchecked direct push. The enforced policy must,
-at minimum, make the repository's CI success a merge requirement and require changes to enter
-`main` through the intended reviewed PR path.
+The branch protection rule was then created and tightened. A subsequent independent GitHub API
+readback reports:
 
-After changing this setting, read it back and record evidence that `main` is protected and the
-required checks are enforced. Do not treat a green voluntary CI run as equivalent to an enforced
-merge gate.
+- `main`: `protected=true`;
+- branch protection: `enabled=true`;
+- required status-check enforcement level: `everyone`;
+- all six expected GitHub Actions checks are required:
+  - `Application checks`;
+  - `API production artifact`;
+  - `Deployment contract`;
+  - `Rendered browser security`;
+  - `Hetzner staging container validation`;
+  - `Database security tests`.
+
+The saved rule also uses the reviewed-PR path and disallows bypassing the protection settings; force
+pushes and branch deletion remain disabled. The API readback independently proves the most important
+release property: none of the six required CI checks are optional, including for administrators.
+
+**Result: repository release-governance blocker RESOLVED.**
 
 ## Blocking finding 2 — production infrastructure and accounts do not exist yet
 
@@ -201,7 +212,7 @@ The authorized deploy must preserve the proven sequence:
 This gate may move from **BLOCKED** to **READY FOR EXPLICIT PRODUCTION DEPLOY AUTHORIZATION** only
 when all of the following have evidence:
 
-- [ ] `main` is protected and required CI checks are enforced;
+- [x] `main` is protected and all six required CI checks are enforced for everyone;
 - [ ] production host exists and host security baseline is verified;
 - [ ] separate production Supabase project exists;
 - [ ] backup/PITR is confirmed current;
