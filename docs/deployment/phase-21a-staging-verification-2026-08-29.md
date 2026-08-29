@@ -20,14 +20,24 @@ the required schema contract remains **19**.
 
 ## Why this re-promotion was required
 
-The first Phase 21A promotion attempt exposed a deployment-identity provenance defect. The public
-deployment profile declared `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF`, but the API container did not
-receive that expectation from the profile. The only way to make preflight see it on the real host
-was to duplicate the same expected project ref into `/etc/avenlyo/api.env`, which already contains
-`SUPABASE_URL`.
+Phase 21A exposed two separate deployment-provenance defects in sequence.
+
+The first promotion attempt on 2026-08-28 stopped at the pre-build gate because the deployment
+assertion tried to infer source provenance from `docker compose config`. Compose had already merged
+`/etc/avenlyo/api.env` into the rendered environment, so a correctly configured host carrying
+`AVENLYO_DEPLOYMENT_ENV=staging` failed the assertion. Nothing was built or deployed in that attempt;
+the host was restored to its pre-attempt state. That defect was corrected separately before the
+promotion continued.
+
+After that correction, the subsequent real staging promotion exposed a second defect in the
+Supabase identity wiring: the public deployment profile declared
+`AVENLYO_EXPECTED_SUPABASE_PROJECT_REF`, but the API container did not receive that expectation from
+the profile. The temporary way to make preflight see it on the real host was to duplicate the same
+expected project ref into `/etc/avenlyo/api.env`, which already contains `SUPABASE_URL`.
 
 That workaround was not an acceptable final state: EXPECTED and ACTUAL Supabase identity could then
-come from one authority and agree with each other even if the host were cross-wired.
+come from one authority and agree with each other even if the host were cross-wired. Release
+`be199775a1f7e89292ad768d4746c817f9bdd4e5` is the correction for this second defect.
 
 The merged correction makes the two authorities independent:
 
@@ -160,7 +170,9 @@ The running API container executed the Chromium sandbox smoke successfully:
 - sandbox: enabled
 - result: PASS
 
-No host security weakening was introduced by this re-promotion.
+This verification proves that the serving release still launches Chromium under the non-root API UID
+with its sandbox enabled. It does not claim any additional host-kernel or security-policy change was
+made or independently re-audited during this re-promotion.
 
 ## Rollback posture
 
