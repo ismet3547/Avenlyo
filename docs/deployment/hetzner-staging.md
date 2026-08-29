@@ -3,18 +3,20 @@
 Runbook for the production-like staging deployment.
 
 **Status.** The Hetzner staging runtime exists and is running: the VM is provisioned, DNS resolves,
-Caddy holds certificates for both hostnames, and Phase 18 was verified end to end on it — health,
-sandboxed Chromium, hosted migrations and the Agent Test path.
+Caddy holds certificates for both hostnames, and the production-like runtime has been verified on the
+real host across health, sandboxed Chromium, hosted schema compatibility and operator smoke paths.
 
-**Phase 19 is deployed.** It was merged, its migration was applied to the hosted staging project, and
-real staging verification passed on the host. The hosted staging schema is at **19**, the Phase 19
-rollback drill was performed and passed, and the runtime now running on the host is Phase-19
-tree-equivalent.
+**Phase 21A staging is verified.** The currently serving release is
+`be199775a1f7e89292ad768d4746c817f9bdd4e5`. Phase 20's environment-isolation changes and both
+Phase 21A provenance corrections are now present on staging. The hosted staging schema remains at
+**19**; Phase 20 and the Phase 21A hotfixes add no migration. The corrected re-promotion removed the
+retired runtime `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` workaround and proved the profile EXPECTED
+Supabase project ref matches the ACTUAL project derived from `SUPABASE_URL`.
 
-**Phase 20 is not deployed.** Its code is on `feat/phase-20-production-readiness` and green in CI;
-nothing from Phase 20 has been applied to the staging host, and Phase 20 adds no migration — the
-schema contract stays at 19. Production does not exist at all; see `docs/deployment/production.md`.
-Everything below is the procedure a human runs.
+The detailed operator evidence is recorded in
+[`phase-21a-staging-verification-2026-08-29.md`](./phase-21a-staging-verification-2026-08-29.md).
+Production is still separate and untouched by this staging verification; see
+`docs/deployment/production.md`. Everything below is the procedure a human runs.
 
 ```
                                 Internet
@@ -250,8 +252,8 @@ exact already-built image; never rebuild during rollback.**
 ## Migration deployment order
 
 **Never automated.** No container startup runs a migration, and none should. Phase 18's and Phase
-19's migrations were pushed to the linked staging project by hand, in this order. Phase 20 adds no
-migration. The order a human follows:
+19's migrations were pushed to the linked staging project by hand, in this order. Phase 20 and the
+Phase 21A hotfixes add no migration. The order a human follows:
 
 1. CI green on the PR that needs the new schema.
 2. Take whatever backup/checkpoint the team's standard practice calls for.
@@ -266,7 +268,7 @@ migration. The order a human follows:
 Phase 19 added one migration, `20260901000000_phase_19_web_chat_poll_bounds.sql`, and requires
 **schema version 19** (`REQUIRED_SCHEMA_VERSION` in `apps/api/src/observability/readiness.ts`). It is
 additive; no destructive down-migration exists or is needed. It has been applied to hosted staging,
-and the hosted staging schema is at 19. **Phase 20 adds no migration and does not move the
+and the hosted staging schema is at 19. **Phase 20 and Phase 21A add no migration and do not move the
 contract.**
 
 The readiness contract is what makes this safe to sequence this way. `evaluateReadiness` accepts a
@@ -293,16 +295,23 @@ export AVENLYO_RELEASE="$(git rev-parse HEAD)"
 
 git commit -> GitHub
   -> CI green (.github/workflows/ci.yml: application, rendered-browser-security,
-     database-security, api-production-artifact, hetzner-staging-containers)
-  -> migrations: supabase db push against the linked staging project (before restart)
+     database-security, api-production-artifact, hetzner-staging-containers, deployment-contract)
+  -> migrations: only when this release actually adds one; none for Phase 20 / Phase 21A
   -> BUILD ONCE, under the SHA tag:
        docker compose --env-file deploy/env/build.env -f deploy/compose.yaml build
+  -> PRE-DEPLOY exact-image gate:
+       docker image inspect "avenlyo-api:${AVENLYO_RELEASE}" > /dev/null
+       docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+         run --rm --no-deps -T api node dist/scripts/ops-preflight.js
   -> DEPLOY that exact already-built image -- --no-build must not silently rebuild:
-       docker compose --env-file deploy/env/build.env -f deploy/compose.yaml up -d --no-build
-  -> health verification:
-       docker compose -f deploy/compose.yaml exec api node -e "fetch('http://127.0.0.1:4000/health/ready')..."
-       curl https://staging.avenlyo.com/api/health
-     (do not consider the deploy complete, or route real traffic to it, until both pass)
+       docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+         up -d --no-build --wait web api caddy
+  -> post-deploy exact-release smoke:
+       docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+         run --rm --no-deps -T api node dist/scripts/smoke-production.js
+  -> running operational state:
+       docker compose --env-file deploy/env/build.env -f deploy/compose.yaml \
+         exec -T api node dist/scripts/ops-status.js
   -> rollback (only if verification fails) -- see below
 ```
 
@@ -358,9 +367,10 @@ git question, not a question about what's currently on disk on the host.
 
 ## Server security runbook (Hetzner Ubuntu host)
 
-Not executed by this PR. For whoever provisions the actual VM:
+The current staging VM is provisioned. These remain the host invariants to preserve on maintenance
+or reprovisioning:
 
-- Ubuntu LTS (24.04 at the time of writing).
+- Ubuntu LTS (24.04 on the current host).
 - A dedicated deployment/application user; do not deploy as root.
 - SSH keys only -- `PasswordAuthentication no` in `sshd_config`.
 - Disable direct root SSH login once the dedicated user's access is confirmed working.
@@ -372,27 +382,15 @@ Not executed by this PR. For whoever provisions the actual VM:
   reachable over TCP (unix socket, local only).
 - `/etc/avenlyo/` -- directory `0750`, files `0640`, owned by a dedicated user/group as described
   above.
-- DNS: `staging.avenlyo.com` and `api-staging.avenlyo.com`, both A (and AAAA) records pointing at
-  the VM's public IP -- not created by this PR.
+- DNS: `staging.avenlyo.com` and `api-staging.avenlyo.com`, both A (and AAAA where configured)
+  records pointing at the VM's public addresses.
 - Caddy TLS prerequisite: ports 80 and 443 reachable from the internet before first start, so the
   ACME HTTP-01 challenge can complete.
-- **User-namespace / Chromium sandbox verification on the actual Hetzner host is required before
-  relying on rendered imports in staging.** Two layers were needed, both proven by this PR's own CI,
-  not assumed:
-  1. **Host kernel**: `kernel.apparmor_restrict_unprivileged_userns=0` (or
-     `kernel.unprivileged_userns_clone=1`) -- Ubuntu 24.04 GitHub runners restrict unprivileged user
-     namespaces by default, the same restriction the pre-existing `rendered-browser-security` job
-     already worked around on a bare runner.
-  2. **Container seccomp**: even with the host kernel fixed, the *container's* first attempt failed
-     identically ("No usable sandbox!") under Docker's default seccomp profile -- confirmed directly
-     in this PR's CI run, not inferred. `deploy/chromium-seccomp.json` (Docker's default profile plus
-     Playwright's own documented one-line addition permitting `clone`/`setns`/`unshare`) fixed it.
-     `deploy/compose.yaml`'s `api` service already applies it.
-
-  Hetzner's Ubuntu 24.04 image very likely needs the identical host-level sysctl for layer 1, but
-  that specific host has not been provisioned or tested by this PR -- confirm it there specifically
-  before trusting the rendered-import capability in staging. Layer 2 (the seccomp profile) is baked
-  into the image/compose file already and needs no host-specific action.
+- **Chromium sandbox verification on the actual host is required after relevant runtime changes.**
+  The real staging API has repeatedly passed `chromium-sandbox-smoke` as non-root UID `10001` with
+  the sandbox enabled. The current host did not require weakening its observed AppArmor/userns
+  posture to obtain the Phase 21A PASS. The container still applies `deploy/chromium-seccomp.json`;
+  do not replace this with `--no-sandbox` or add `SYS_ADMIN`.
 - Disk/log rotation: see "Logging" below.
 - Rollback procedure: see above.
 
@@ -400,28 +398,24 @@ Not executed by this PR. For whoever provisions the actual VM:
 
 `deploy/compose.yaml` sets `mem_limit: 2g` for `api` (the dominant driver is an occasional Chromium
 render, not steady-state usage) and `mem_limit: 1g` for `web`. These are conservative starting
-points, not the product of load testing against a real host -- there is no VM to load test against
-yet. They are deliberately not tight enough to make a single render immediately OOM: rendered
-concurrency is already bounded by the application's own existing behavior (this PR does not add or
-change any parallel-rendering logic).
+points, not the product of a dedicated load test on the real staging VM. They are deliberately not
+tight enough to make a single render immediately OOM: rendered concurrency is already bounded by
+the application's own existing behavior.
 
-Estimated VM sizing (unchanged from the earlier read-only audit, restated here for one place to
-look): **4 vCPU / 8 GB RAM / ~80 GB disk** recommended for staging; 2 vCPU / 4 GB / 40 GB as a
-minimum viable floor. Marked as estimates -- no Hetzner VM has been provisioned to measure against.
+Current sizing remains **4 vCPU / 8 GB RAM class** for staging. Treat the limits above as operational
+starting points rather than measured capacity guarantees; change them only with observed load data.
 
 ## Logging
 
-Fastify's default Pino logger already emits structured JSON (unchanged by this PR). All three
-containers write to stdout/stderr; `deploy/compose.yaml` sets a bounded `json-file` policy for all
-of them via a shared `x-logging` anchor -- `max-size: "10m"`, `max-file: "5"`, roughly a 50 MB
-ceiling per service (150 MB across all three). This is a conservative starting point for staging,
-not a measured figure -- there is no provisioned host to size it against yet, and it is easy to
-raise later if it proves too tight. `docker compose config` renders the resolved `logging:` block
-for each service; this PR's CI checks that it's present.
+Fastify's default Pino logger already emits structured JSON. All three containers write to
+stdout/stderr; `deploy/compose.yaml` sets a bounded `json-file` policy for all of them via a shared
+`x-logging` anchor -- `max-size: "10m"`, `max-file: "5"`, roughly a 50 MB ceiling per service
+(150 MB across all three). The policy is deployed on the real host but has not been sized from a
+formal load test; raise it deliberately if observed operations show it is too tight.
 
 No ELK, Loki, Grafana, Datadog, or other logging SaaS. Never log environment values, tokens,
-cookies, raw imported website content, or PII -- this is existing, unchanged application discipline
-(the readiness route's sanitized public body, for one example), not new tooling this PR adds.
+cookies, raw imported website content, or PII -- this is existing application discipline, not new
+tooling this runbook introduces.
 
 ## Chromium / browser version strategy
 
@@ -439,7 +433,7 @@ rebuilding the image is the only way this path's target changes.
 
 `deploy/Dockerfile.api` and `deploy/Dockerfile.web` reference `node:22-bookworm-slim`;
 `deploy/compose.yaml`'s `caddy` service references `caddy:2.8-alpine`. Both are tags, not digests --
-considered and deliberately left as tags rather than pinned to a `sha256:...` digest for this PR.
+considered and deliberately left as tags rather than pinned to a `sha256:...` digest.
 
 **What this means precisely:** an immutable Avenlyo SHA tag (`avenlyo-api:<sha>`,
 `avenlyo-web:<sha>`) is exactly reproducible for rollback -- once built, that image's layers do not
@@ -450,63 +444,73 @@ the same tag, so a rebuild next month may pick up a newer base image than a rebu
 from unchanged Avenlyo source. Do not claim full byte-for-byte rebuild reproducibility while these
 tags float.
 
-**Why not pin now:** digest-pinning requires recording the exact current digest for each tag, which
-this PR cannot verify against a live registry pull in this environment, and turning it into a
-dependency-upgrade exercise (choosing and validating exact digests, plus the process for bumping them
-later) is explicitly out of this PR's scope. If the team decides the staging reproducibility promise
-needs to extend to rebuilds, not just rollbacks, pin `FROM node:22-bookworm-slim@sha256:<digest>` and
-`image: caddy:2.8-alpine@sha256:<digest>` as a small, separate, deliberate change -- not bundled into
-an unrelated correction.
+If rebuild reproducibility becomes a requirement, pin the base images by digest in a separate,
+deliberate dependency change with CI and staging validation; do not mix it into an unrelated deploy.
 
 ## What remains manual
 
-Provisioning, DNS, the real env files on the host, the first `docker compose up`, and the Chromium
-sandbox check on the real host were all done during the Phase 18 deployment; the runtime described
-above is live. What stays manual on every release, by design:
+Provisioning, DNS, the real env files on the host, the first `docker compose up`, and the initial
+Chromium sandbox proof were completed in earlier staging phases. What stays manual on every release,
+by design:
 
-- `supabase db push` against the linked **staging** project, before the containers restart.
-- The `build` / `up -d --no-build` pair, with `AVENLYO_RELEASE` exported once.
-- Health verification afterwards: API `/health/ready`, web `/api/health`.
+- run migrations against the linked **staging** project only when the release actually adds one;
+- the exact-SHA `build` / preflight / `up -d --no-build` sequence, with `AVENLYO_RELEASE` fixed once;
+- post-deploy exact-release smoke and operational status;
+- public API live/ready and web health verification;
+- real-host Chromium sandbox verification when the runtime/browser boundary changes.
 
-**Phase 19 is complete on staging**: its migration was pushed to hosted staging, its images were
-built and deployed, the `AVENLYO_API_URL` cutover to `http://caddy:8080` was made, and the rollback
-drill passed.
+**Phase 20 host migration is complete on staging.** The one-time layout now has exactly one
+`AVENLYO_DEPLOYMENT_ENV=staging` assignment in `/etc/avenlyo/api.env`, no stale
+`AVENLYO_API_URL` assignment in `/etc/avenlyo/web.env`, and the deployment profile owns
+`AVENLYO_API_URL=http://caddy:8080`.
 
-Outstanding for **Phase 20** specifically, none of which has been done:
+### Phase 21A first attempt — 2026-08-28
 
-- Phase 20 has not been deployed to the staging host. No image has been built or deployed from it,
-  and no file under `/etc/avenlyo/` has been touched.
-- On the next deploy, `deploy/env/build.env` must be reassembled from
-  `deploy/env/staging.public.env.example` plus the two `NEXT_PUBLIC_SUPABASE_*` values, because the
-  profile now carries `AVENLYO_DEPLOYMENT_ENV` and `AVENLYO_API_URL`, and `docker compose config`
-  fails closed without them.
-- `/etc/avenlyo/api.env` must gain `AVENLYO_DEPLOYMENT_ENV=staging`, or the container refuses to
-  start under `NODE_ENV=production`. It must equal the profile's value.
-- Any `AVENLYO_API_URL` line left in `/etc/avenlyo/web.env` should be deleted: Compose's
-  `environment:` now supplies it from the profile, so the stale line is inert rather than dangerous,
-  but leaving it preserves the two-authority ambiguity Phase 20 removed.
-
-Both env-file edits are one-time, non-secret, and key-level. The exact secret-safe procedure --
-how to test for the key without printing its value, and how to edit with a backup while preserving
-owner/group/mode -- is in `docs/production-runbook.md`, "Migrating a host off the pre-Phase-20 env
-layout". Confirm afterwards with counts, never with `cat`:
-
-```bash
-sudo grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env   # must be 1
-sudo grep -c '^AVENLYO_API_URL='        /etc/avenlyo/web.env   # must be 0
-```
-
-### Phase 21A attempt, 2026-08-28
-
-A first promotion attempt reached the pre-build gate and stopped there. It found a real defect in the
-merged Phase 20 release: the deployment assertion asked `docker compose config` where a value came
-from, but Compose resolves `env_file:` into the rendered environment, so a host whose `api.env`
+The first promotion attempt reached the pre-build gate and stopped there. It found a real defect in
+the merged Phase 20 release: the deployment assertion asked `docker compose config` where a value
+came from, but Compose resolves `env_file:` into the rendered environment, so a host whose `api.env`
 correctly declared `AVENLYO_DEPLOYMENT_ENV=staging` failed the gate. CI had not caught it because its
 fixture wrote an empty `api.env`.
 
-Nothing was deployed. The host was returned to its exact pre-attempt state, verified by checksum, and
-the running containers were never recreated. The three findings above -- no Node runtime, narrowed
-refspec, and the two env-file migrations -- were all first observed during that attempt.
+Nothing was deployed in that attempt. The host was returned to its exact pre-attempt state, verified
+by checksum, and the running containers were never recreated. The no-Node host, narrowed refspec and
+one-time Phase 20 env migrations were also recorded during this work.
+
+### Phase 21A corrected re-promotion — 2026-08-29
+
+After the first assertion defect was corrected, the subsequent staging work exposed a second,
+separate provenance gap: `AVENLYO_EXPECTED_SUPABASE_PROJECT_REF` existed in the deployment profile
+but was not forwarded to the API. A temporary runtime copy in `/etc/avenlyo/api.env` made the check
+same-authority with `SUPABASE_URL` and therefore unsuitable as a final assurance.
+
+The correction merged as release `be199775a1f7e89292ad768d4746c817f9bdd4e5` makes EXPECTED come
+from the deployment profile, mirrored as `AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF`, while
+ACTUAL remains the project derived from runtime `SUPABASE_URL`. Before the re-promotion, the retired
+runtime expected-ref assignment was removed with the secret-safe verifier and the two independent
+refs matched without printing either value.
+
+Real-host verification then passed:
+
+- exact target checkout and clean tracked tree;
+- post-merge CI 6/6 green on the exact target release;
+- compose `config --quiet` PASS;
+- exact SHA API and web images built once;
+- exact-image `ops-preflight` PASS, schema 19, Supabase project identity PASS;
+- `up -d --no-build --wait web api caddy`, all three healthy;
+- post-deploy smoke 4/4 PASS including `api_release`;
+- public API live/ready and web health all reported the exact target release;
+- `ops-status` PASS with one active runtime, zero stale runtimes and zero expired message-job leases;
+- Chromium sandbox smoke PASS as UID 10001 with sandbox enabled.
+
+The previous serving release was `20550ce7204a968f3d3a700ea77b1dbbcb7230c0`. A second rollback
+drill was not performed during this hotfix re-promotion; the previous immutable image remains the
+known rollback target and rollback remains `--no-build`.
+
+Full bounded operator evidence:
+[`phase-21a-staging-verification-2026-08-29.md`](./phase-21a-staging-verification-2026-08-29.md).
+
+**Current staging verdict: PHASE 21A STAGING VERIFIED — PASS.** This is staging evidence only and is
+not authorization to provision, configure, migrate or deploy production.
 
 ## API edge security (Phase 19)
 
@@ -530,8 +534,7 @@ Stripe, Twilio and Chromium.
 Because `web` can no longer address `api` directly, its server-side dashboard actions (appointments,
 billing, integrations) go through an **unpublished** Caddy listener on `:8080`, reachable from the
 compose networks alone and never from the host or the internet. `AVENLYO_API_URL` is therefore
-`http://caddy:8080`, not `http://api:4000`. **A host still carrying the old value must be updated at
-the next deploy or those three action groups stop resolving.**
+`http://caddy:8080`, not `http://api:4000`.
 
 Fastify is configured with a `trustProxy` **predicate**, not `true` and not a hop count. It honours
 `X-Forwarded-For` only when the peer that presented it holds a private or loopback address -- which
