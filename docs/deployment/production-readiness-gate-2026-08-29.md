@@ -108,23 +108,29 @@ The first read-only GitHub inspection on 2026-08-29 reported:
 That was a production-readiness blocker because a green voluntary CI run was not equivalent to an
 enforced merge gate.
 
-The branch protection rule was then created and tightened. A subsequent independent GitHub API
-readback reports:
+A legacy branch-protection rule was first created and tightened. The final solo-maintainer governance
+state was then moved to an active repository ruleset targeting `refs/heads/main`. Independent GitHub
+API readback of that ruleset reports:
 
-- `main`: `protected=true`;
-- branch protection: `enabled=true`;
-- required status-check enforcement level: `everyone`;
+- enforcement: `active`;
+- pull requests are required before merging;
+- required approving review count: `0`, avoiding a solo-maintainer approval deadlock;
 - all six expected GitHub Actions checks are required:
   - `Application checks`;
   - `API production artifact`;
   - `Deployment contract`;
   - `Rendered browser security`;
   - `Hetzner staging container validation`;
-  - `Database security tests`.
+  - `Database security tests`;
+- branch deletion is blocked;
+- non-fast-forward updates are blocked;
+- bypass actors: none;
+- the current administrator cannot bypass the ruleset.
 
-The saved rule also uses the reviewed-PR path and disallows bypassing the protection settings; force
-pushes and branch deletion remain disabled. The API readback independently proves the most important
-release property: none of the six required CI checks are optional, including for administrators.
+The earlier legacy branch-protection rule is fully covered by the ruleset and is no longer the
+authoritative release-governance mechanism. The important release property is unchanged: `main`
+can only advance through a pull request whose required CI checks pass, without an administrator
+bypass path.
 
 **Result: repository release-governance blocker RESOLVED.**
 
@@ -212,7 +218,7 @@ The authorized deploy must preserve the proven sequence:
 This gate may move from **BLOCKED** to **READY FOR EXPLICIT PRODUCTION DEPLOY AUTHORIZATION** only
 when all of the following have evidence:
 
-- [x] `main` is protected and all six required CI checks are enforced for everyone;
+- [x] `main` is governed by an active PR-required ruleset with all six required CI checks and no bypass actor;
 - [ ] production host exists and host security baseline is verified;
 - [ ] separate production Supabase project exists;
 - [ ] backup/PITR is confirmed current;
