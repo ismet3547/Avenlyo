@@ -380,11 +380,100 @@ Target behavior:
 4. Avoid duplicate customer creation when a reliable match exists.
 5. Create a new conversation and, when appropriate, a new lead/appointment linked to the same customer.
 
+## Locked intent contract
+
+Intent understanding is multi-layered. The agent must not collapse a customer message into one flat label when multiple meanings matter operationally.
+
+### Intent layers
+
+1. **Interrupt** — a signal that may suspend the normal task flow, such as a safety escalation or explicit human request.
+2. **Primary task** — the main customer outcome to resolve.
+3. **Secondary task** — an additional request that can be handled without corrupting the primary flow.
+4. **Modifiers** — details such as date, time preference, subject name, urgency, location, resource preference, or corrections.
+
+### V1 intent taxonomy
+
+- `SAFETY_ESCALATION`
+- `HUMAN_REQUEST`
+- `CONFIRMATION_RESPONSE`
+- `APPOINTMENT_BOOK`
+- `APPOINTMENT_RESCHEDULE`
+- `APPOINTMENT_CANCEL`
+- `APPOINTMENT_LOOKUP`
+- `BUSINESS_INFORMATION`
+- `SERVICE_INTEREST`
+- `COMPLAINT_OR_EXCEPTION`
+- `GENERAL_CONVERSATION`
+- `OUT_OF_SCOPE`
+
+`LEAD` is not a customer intent. It is a business-side outcome that may result from a genuine `SERVICE_INTEREST`, appointment request, or other qualifying interaction.
+
+### Intent precedence
+
+The locked precedence model is:
+
+```text
+interrupts
+  ↓
+valid pending confirmation / correction state
+  ↓
+mutating customer tasks
+  ↓
+read-only customer tasks
+  ↓
+commercial/service-interest outcomes
+  ↓
+general conversation
+```
+
+Specific rules:
+
+- `SAFETY_ESCALATION` or `HUMAN_REQUEST` may suspend an otherwise valid appointment flow.
+- A valid `CONFIRMATION_RESPONSE` is interpreted only against an existing, current pending action in the same conversation context.
+- A correction to a pending action invalidates the stale candidate/intent and requires the affected action to be prepared again.
+- “Cancel this appointment and book another time” should normalize to `APPOINTMENT_RESCHEDULE` when the same appointment is clearly being moved and the provider capability supports reschedule.
+- Secondary read-only questions may be answered during a booking flow when doing so does not weaken action safety or confirmation requirements.
+
+### One pending mutation rule
+
+A conversation may have at most one actionable mutating intent pending confirmation at a time.
+
+If the customer requests multiple distinct mutations, Avenlyo must either:
+
+- normalize them into one supported atomic product operation, such as a reschedule; or
+- sequence them as separate prepare → confirm → commit → verify cycles.
+
+A single ambiguous “yes” must never authorize multiple external mutations.
+
+### Intent is not permission
+
+Correctly identifying a task does not grant authority to perform it. Every external or durable action must independently satisfy all applicable gates:
+
+```text
+intent understood
+  ↓
+capability enabled
+  ↓
+identity sufficient
+  ↓
+target unambiguous
+  ↓
+provider capability supports operation
+  ↓
+product / industry policy allows operation
+  ↓
+required confirmation is current and valid
+  ↓
+trusted execution succeeds
+```
+
+Only after trusted success may the agent represent the action as completed.
+
 ## Phase 22A.2 — Required design outputs
 
 Before implementation begins, the blueprint must be extended with:
 
-1. exact intent taxonomy and precedence rules;
+1. exact intent taxonomy and precedence rules; **LOCKED**
 2. confirmation policy matrix for every agent action;
 3. customer identity and disambiguation policy;
 4. appointment state machine and concurrency/idempotency rules;
@@ -394,6 +483,40 @@ Before implementation begins, the blueprint must be extended with:
 8. industry-specific journey deltas for Veterinary, Auto Repair, and Medspa;
 9. analytics event/outcome taxonomy for the north-star metric;
 10. V1 acceptance scenarios and explicit non-goals.
+
+## Phase 22A.3 — Action confirmation matrix — IN DESIGN
+
+The next locked contract will determine when the agent may observe, prepare, commit, request explicit customer confirmation, require fresh confirmation after a change, or refuse autonomous commit and hand off.
+
+Draft dimensions for each action:
+
+- action name
+- action class: observe / prepare / commit / escalate
+- external or durable side effect
+- identity requirement
+- target ambiguity requirement
+- explicit confirmation requirement
+- confirmation invalidation conditions
+- provider/capability preconditions
+- success evidence required before customer-facing completion claim
+- unknown-outcome behavior
+- handoff boundary
+
+Candidate actions to classify in the matrix:
+
+- search/read business information
+- search appointment availability
+- capture/update a lead
+- create a human handoff
+- prepare appointment booking
+- book appointment
+- retrieve upcoming appointments
+- prepare appointment reschedule
+- execute appointment reschedule
+- prepare appointment cancellation
+- execute appointment cancellation
+- send follow-up/reminder communications where product-authorized
+- future customer/profile mutations
 
 ## V1 non-goals until explicitly promoted
 
