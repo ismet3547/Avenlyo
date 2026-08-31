@@ -74,7 +74,7 @@ describe('WorkStateToolExecutor', () => {
     ]);
   });
 
-  it('exposes only the matching execution tool and removes its model-owned id parameter', () => {
+  it('exposes only the matching execution tool while retaining prepare tools for corrections', () => {
     const { executor } = delegate();
     const scoped = new WorkStateToolExecutor(
       executor,
@@ -85,9 +85,9 @@ describe('WorkStateToolExecutor', () => {
     expect(names).toContain('book_appointment');
     expect(names).not.toContain('reschedule_appointment');
     expect(names).not.toContain('cancel_appointment');
-    expect(names).not.toContain('prepare_appointment_booking');
-    expect(names).not.toContain('prepare_appointment_reschedule');
-    expect(names).not.toContain('prepare_appointment_cancellation');
+    expect(names).toContain('prepare_appointment_booking');
+    expect(names).toContain('prepare_appointment_reschedule');
+    expect(names).toContain('prepare_appointment_cancellation');
     expect(scoped.tools.find((entry) => entry.name === 'book_appointment')?.parameters).toEqual({
       additionalProperties: false,
       properties: {},
@@ -187,7 +187,7 @@ describe('WorkStateToolExecutor', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('redacts prepared action authority ids before returning tool output to the model', async () => {
+  it('allows correction preparation while pending and redacts replacement authority ids', async () => {
     const authorityId = '33333333-3333-4333-8333-333333333333';
     const execute = vi.fn().mockResolvedValue({
       execution: {
@@ -212,7 +212,13 @@ describe('WorkStateToolExecutor', () => {
       execute,
       tools: [tool('prepare_appointment_booking', { candidate_id: { type: 'string' } })],
     };
-    const scoped = new WorkStateToolExecutor(executor, state(null));
+    const scoped = new WorkStateToolExecutor(
+      executor,
+      state({
+        actionIntentId: '11111111-1111-4111-8111-111111111111',
+        intent: 'APPOINTMENT_BOOK',
+      }),
+    );
 
     const result = await scoped.execute(
       {
@@ -223,6 +229,7 @@ describe('WorkStateToolExecutor', () => {
       context,
     );
 
+    expect(execute).toHaveBeenCalledOnce();
     expect(result.modelOutput).not.toContain(authorityId);
     expect(JSON.parse(result.modelOutput)).toEqual({
       intent: {
