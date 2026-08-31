@@ -76,6 +76,37 @@ function rejected(call: AgentToolCall): ToolExecutionResult {
   };
 }
 
+function redactPreparedActionIntent(
+  call: AgentToolCall,
+  result: ToolExecutionResult,
+): ToolExecutionResult {
+  if (!isActiveToolName(call.name) || !prepareMutationTools.has(call.name)) return result;
+  try {
+    const parsed = JSON.parse(result.modelOutput) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return result;
+    const record = parsed as Record<string, unknown>;
+    const intent = record.intent;
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return result;
+    const safeIntent = { ...(intent as Record<string, unknown>) };
+    delete safeIntent.bookingIntentId;
+    delete safeIntent.changeIntentId;
+    delete safeIntent.booking_intent_id;
+    delete safeIntent.change_intent_id;
+    return {
+      ...result,
+      modelOutput: JSON.stringify({ ...record, intent: safeIntent }),
+    };
+  } catch {
+    return {
+      ...result,
+      modelOutput: JSON.stringify({
+        ok: false,
+        message: 'The prepared action could not be represented safely.',
+      }),
+    };
+  }
+}
+
 /**
  * Turn-scoped policy wrapper around the source-controlled executor.
  *
@@ -101,25 +132,24 @@ export class WorkStateToolExecutor implements ToolExecutor {
       .map(publicTool);
   }
 
-  public execute(
+  public async execute(
     call: AgentToolCall,
     context: AgentExecutionContext,
   ): Promise<ToolExecutionResult> {
-    if (!allowedByWorkState(call.name, this.workState)) return Promise.resolve(rejected(call));
+    if (!allowedByWorkState(call.name, this.workState)) return rejected(call);
 
     const pending = this.workState.pendingMutation;
-    if (!pending || !executionTools.has(call.name as ActiveToolName)) {
-      return this.delegate.execute(call, context);
+    if (pending && executionTools.has(call.name as ActiveToolName)) {
+      const trustedArguments =
+        pending.intent === 'APPOINTMENT_BOOK'
+          ? { booking_intent_id: pending.actionIntentId }
+          : { change_intent_id: pending.actionIntentId };
+      return this.delegate.execute(
+        { ...call, arguments: JSON.stringify(trustedArguments) },
+        context,
+      );
     }
 
-    const trustedArguments =
-      pending.intent === 'APPOINTMENT_BOOK'
-        ? { booking_intent_id: pending.actionIntentId }
-        : { change_intent_id: pending.actionIntentId };
-
-    return this.delegate.execute(
-      { ...call, arguments: JSON.stringify(trustedArguments) },
-      context,
-    );
+    return redactPreparedActionIntent(call, await this.delegate.execute(call, context));
   }
 }
