@@ -84,6 +84,11 @@ export class VoiceSessionManager {
     }
   }
 
+  /** A durable post-call handoff ends AI ownership after its final bounded acknowledgement. */
+  public async finalizeHandoff(callId: string): Promise<void> {
+    await this.finish(callId, 'completed', 'handoff', true);
+  }
+
   public async finalizeTransferred(callId: string): Promise<void> {
     await this.finish(callId, 'transferred', 'transfer', false);
   }
