@@ -1,5 +1,7 @@
 import type { VoiceFunctionTool, VoiceToolCall, VoiceToolExecution } from '@avenlyo/voice';
 
+import type { CustomerSchedulingCapabilities } from '../scheduling/customer-scheduling-capabilities.js';
+
 const emptyParameters = {
   additionalProperties: false,
   properties: {},
@@ -7,11 +9,33 @@ const emptyParameters = {
   type: 'object',
 } as const;
 
+const allSchedulingCapabilities: CustomerSchedulingCapabilities = {
+  booking: true,
+  cancel: true,
+  lookup: true,
+  reschedule: true,
+};
+
 const authorityBoundTools = new Set<VoiceFunctionTool['name']>([
   'book_appointment',
   'reschedule_appointment',
   'cancel_appointment',
   'confirm_sms_followup_consent',
+]);
+
+const bookingTools = new Set<VoiceFunctionTool['name']>([
+  'get_available_appointments',
+  'prepare_appointment_booking',
+  'book_appointment',
+]);
+const rescheduleTools = new Set<VoiceFunctionTool['name']>([
+  'get_reschedule_options',
+  'prepare_appointment_reschedule',
+  'reschedule_appointment',
+]);
+const cancellationTools = new Set<VoiceFunctionTool['name']>([
+  'prepare_appointment_cancellation',
+  'cancel_appointment',
 ]);
 
 const authorityKeys = new Set([
@@ -27,6 +51,19 @@ type PendingMutation = {
   readonly intentId: string;
   readonly kind: 'book' | 'cancel' | 'reschedule';
 };
+
+function schedulingToolAllowed(
+  name: string,
+  capabilities: CustomerSchedulingCapabilities,
+): boolean {
+  if (bookingTools.has(name as VoiceFunctionTool['name'])) return capabilities.booking;
+  if (name === 'get_upcoming_appointments') {
+    return capabilities.lookup || capabilities.reschedule || capabilities.cancel;
+  }
+  if (rescheduleTools.has(name as VoiceFunctionTool['name'])) return capabilities.reschedule;
+  if (cancellationTools.has(name as VoiceFunctionTool['name'])) return capabilities.cancel;
+  return true;
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -68,15 +105,18 @@ function publicDescription(tool: VoiceFunctionTool): string {
   }
 }
 
-/** Provider-visible tool contracts never expose durable mutation-authority identifiers. */
+/** Provider-visible tool contracts never expose unavailable operations or durable authority ids. */
 export function customerVisibleVoiceTools(
   tools: readonly VoiceFunctionTool[],
+  capabilities: CustomerSchedulingCapabilities = allSchedulingCapabilities,
 ): readonly VoiceFunctionTool[] {
-  return tools.map((tool) =>
-    authorityBoundTools.has(tool.name)
-      ? { ...tool, description: publicDescription(tool), parameters: emptyParameters }
-      : tool,
-  );
+  return tools
+    .filter((tool) => schedulingToolAllowed(tool.name, capabilities))
+    .map((tool) =>
+      authorityBoundTools.has(tool.name)
+        ? { ...tool, description: publicDescription(tool), parameters: emptyParameters }
+        : tool,
+    );
 }
 
 /**
@@ -89,6 +129,14 @@ export function customerVisibleVoiceTools(
 export class VoiceToolAuthorityState {
   private pendingConsentIntentId: string | null = null;
   private pendingMutation: PendingMutation | null = null;
+
+  public constructor(
+    private readonly capabilities: CustomerSchedulingCapabilities = allSchedulingCapabilities,
+  ) {}
+
+  public allows(name: string): boolean {
+    return schedulingToolAllowed(name, this.capabilities);
+  }
 
   public clearSchedulingAuthority(): void {
     this.pendingMutation = null;
