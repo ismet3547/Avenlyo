@@ -9,6 +9,7 @@ function normalized(message: string): string {
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLocaleLowerCase('en-US')
+    .replace(/ı/g, 'i')
     .replace(/[’']/g, '')
     .replace(/\s+/g, ' ')
     .trim();
