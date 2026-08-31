@@ -92,12 +92,12 @@ select extensions.ok(
   'both overloads pin an empty search_path'
 );
 
--- The whole point of the version bump: a Phase 19 build must refuse an 18 database, because its
--- poll RPC does not exist there.
+-- This suite originated in Phase 19, but the repository-level schema contract is global. Phase 23
+-- now requires the confirmation-presentation migrations as well, so the current database must be 20.
 select extensions.is(
   (select schema_version from public.platform_schema_contract where id),
-  19,
-  'the schema contract is 19 after every Phase 19 migration'
+  20,
+  'the current schema contract is 20 after the Phase 23 migrations'
 );
 
 -- ---------------------------------------------------------------------------------------
