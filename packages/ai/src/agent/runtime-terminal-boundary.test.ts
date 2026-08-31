@@ -81,6 +81,62 @@ function runtimeFor(input: {
 }
 
 describe('AgentRuntime terminal action boundaries', () => {
+  it('handles an unmistakable human request before the model is called', async () => {
+    const { execute, provider, runtime } = runtimeFor({
+      execute: (call) => Promise.resolve(execution(call, { handoffRequested: true })),
+      providerScript: [],
+      toolNames: ['request_human_help'],
+    });
+
+    const result = await runtime.runTurn({
+      ...baseTurn,
+      userMessage: 'Can I speak to a person please?',
+    });
+
+    expect(result).toMatchObject({
+      handoffRequested: true,
+      text: 'Of course. I’m asking the team to help you now.',
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[0]).toMatchObject({ name: 'request_human_help' });
+    expect(provider.inputs).toHaveLength(0);
+  });
+
+  it('does not fall through to the model when a deterministic safety handoff tool is unavailable', async () => {
+    const { execute, provider, runtime } = runtimeFor({
+      execute: (call) => Promise.resolve(execution(call, {})),
+      providerScript: [],
+      toolNames: [],
+    });
+
+    const result = await runtime.runTurn({ ...baseTurn, userMessage: 'My dog is having a seizure.' });
+
+    expect(result).toMatchObject({
+      failureCode: 'tool_failure',
+      handoffRequested: false,
+      text: 'I wasn’t able to notify the team automatically. Please contact the business directly.',
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(provider.inputs).toHaveLength(0);
+  });
+
+  it('does not fall through to the model when explicit human assistance cannot be persisted', async () => {
+    const { execute, provider, runtime } = runtimeFor({
+      execute: (call) => Promise.resolve(execution(call, {})),
+      providerScript: [],
+      toolNames: [],
+    });
+
+    const result = await runtime.runTurn({
+      ...baseTurn,
+      userMessage: 'I want to talk with a representative.',
+    });
+
+    expect(result).toMatchObject({ failureCode: 'tool_failure', handoffRequested: false });
+    expect(execute).not.toHaveBeenCalled();
+    expect(provider.inputs).toHaveLength(0);
+  });
+
   it('executes an explicit human-help interrupt before a mutation from the same provider batch', async () => {
     const booking = { arguments: '{}', callId: 'book-1', name: 'book_appointment' };
     const handoff = {
