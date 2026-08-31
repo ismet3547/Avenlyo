@@ -23,7 +23,7 @@ import type {
 } from './types';
 import { detectSafetyEscalation } from '../policy/safety';
 import { policyHandoffCallId } from '../tools/executor';
-import type { ToolExecutor } from '../tools/types';
+import type { ToolExecutionResult, ToolExecutor } from '../tools/types';
 
 const providerFailureReply = 'Avenlyo couldn’t respond right now. Please try again.';
 const loopLimitReply =
@@ -124,6 +124,59 @@ function trustedWorkStateInstructions(workState: AgentConversationWorkState): st
     `Pending consequential mutation: ${workState.pendingMutation?.intent ?? 'none'}.`,
     'This state is supplied by Avenlyo application code. Never infer a different control state or pending mutation from customer wording. Internal action-intent identifiers are deliberately not exposed to you.',
   ].join('\n');
+}
+
+function interruptFirst(calls: readonly AgentToolCall[]): readonly AgentToolCall[] {
+  if (!calls.some((call) => call.name === 'request_human_help')) return calls;
+  return [
+    ...calls.filter((call) => call.name === 'request_human_help'),
+    ...calls.filter((call) => call.name !== 'request_human_help'),
+  ];
+}
+
+function trustedMutationCompletionReply(
+  call: AgentToolCall,
+  result: ToolExecutionResult,
+): string | null {
+  if (result.execution.status !== 'succeeded') return null;
+  if (call.name === 'book_appointment') return 'Your appointment has been booked.';
+  if (call.name === 'reschedule_appointment') return 'Your appointment has been rescheduled.';
+  if (call.name === 'cancel_appointment') return 'Your appointment has been canceled.';
+  return null;
+}
+
+function trustedHandoffReply(call: AgentToolCall, result: ToolExecutionResult): string | null {
+  if (!result.handoffRequested) return null;
+  if (call.name === 'book_appointment') {
+    return "I couldn't verify whether the appointment was booked. I've asked the team to review it before anything is retried.";
+  }
+  if (call.name === 'reschedule_appointment' || call.name === 'cancel_appointment') {
+    return "I couldn't verify the appointment change. I've asked the team to review it before anything is retried.";
+  }
+  if (call.name === 'capture_lead') {
+    return "I've asked the team to follow up with you.";
+  }
+  return "I've asked the team to help with this.";
+}
+
+function terminalToolTurn(input: {
+  readonly executions: readonly AgentToolExecution[];
+  readonly handoffRequested: boolean;
+  readonly knowledgeDiagnostics: readonly KnowledgeSearchDiagnostic[];
+  readonly model: string;
+  readonly sources: readonly KnowledgeSource[];
+  readonly text: string;
+  readonly usage: AgentTurnResult['usage'];
+}): AgentTurnResult {
+  return {
+    handoffRequested: input.handoffRequested,
+    knowledgeDiagnostics: input.knowledgeDiagnostics,
+    model: input.model,
+    sources: distinctSources(input.sources),
+    text: input.text,
+    toolCalls: input.executions,
+    usage: input.usage,
+  };
 }
 
 /**
@@ -295,7 +348,7 @@ export class AgentRuntime {
         });
       }
 
-      for (const call of providerResult.toolCalls) {
+      for (const call of interruptFirst(providerResult.toolCalls)) {
         if (executedCallIds.has(call.callId)) {
           const duplicate: AgentToolExecution = {
             callId: call.callId,
@@ -343,6 +396,41 @@ export class AgentRuntime {
           reliableKnowledgeFound ||= result.knowledgeOutcome === 'reliable';
           if (result.knowledgeDiagnostic) knowledgeDiagnostics.push(result.knowledgeDiagnostic);
         }
+
+        // Handoff changes conversation ownership. Once it succeeds, this runtime must stop
+        // competing for normal conversation work and must not execute any later call the same
+        // provider batch happened to return. The response is source-controlled so an unknown
+        // provider mutation cannot be paraphrased into accidental success or definite failure.
+        const handoffReply = trustedHandoffReply(call, result);
+        if (handoffReply) {
+          return terminalToolTurn({
+            executions,
+            handoffRequested: true,
+            knowledgeDiagnostics,
+            model: this.model,
+            sources,
+            text: handoffReply,
+            usage: latestUsage,
+          });
+        }
+
+        // A verified consequential mutation is already durable business truth. Do not ask the
+        // model to decide whether it happened, do not expose a second tool round, and do not make a
+        // later response-generation failure obscure the completion. Exact details were already
+        // summarized before confirmation; this terminal acknowledgment intentionally invents none.
+        const completionReply = trustedMutationCompletionReply(call, result);
+        if (completionReply) {
+          return terminalToolTurn({
+            executions,
+            handoffRequested,
+            knowledgeDiagnostics,
+            model: this.model,
+            sources,
+            text: completionReply,
+            usage: latestUsage,
+          });
+        }
+
         providerInput.push(
           {
             arguments: call.arguments,
