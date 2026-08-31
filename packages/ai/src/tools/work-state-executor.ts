@@ -43,7 +43,7 @@ function isActiveToolName(value: string): value is ActiveToolName {
     'reschedule_appointment',
     'prepare_appointment_cancellation',
     'cancel_appointment',
-  ].includes(value as ActiveToolName);
+  ].includes(value);
 }
 
 function allowedByWorkState(name: string, workState: AgentConversationWorkState): boolean {
