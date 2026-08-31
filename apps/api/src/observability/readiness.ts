@@ -16,18 +16,16 @@ import type { RuntimeComponent } from './runtime-state.js';
 /**
  * Raised when this application build needs migrations the deployed database does not have yet.
  *
- * 19 as of Phase 19: the web-chat poll path calls
- * `get_web_chat_messages(target_token_hash, target_rate_scope, target_after)`, which does not exist
- * on an 18 database. Leaving this at 18 would have let a Phase 19 process report ready against a
- * schema where every poll fails -- which is precisely the failure `platform_schema_contract` exists
- * to prevent.
+ * 20 as of Phase 23: the customer agent now depends on trusted work-state RPCs, durable mutation
+ * confirmation presentation/binding, and Phase 23 transition guards. A Phase 19 database can still
+ * serve the rollback binary, but it cannot safely serve this build because the new authority facts
+ * and claim guards do not exist there.
  *
  * The comparison stays `>=`, so a *newer* schema remains compatible with an older build and a
- * rollback needs no down-migration. That promise is only kept if the schema also keeps serving the
- * older build's call shapes, which is why the Phase 19 migration recreates the two-argument
- * `get_web_chat_messages` as a bounded delegate rather than dropping it.
+ * rollback needs no down-migration. Phase 23 retains the legacy claim call shapes and applies its
+ * stricter transition rule only to rows carrying the new prompt-binding state.
  */
-export const REQUIRED_SCHEMA_VERSION = 19;
+export const REQUIRED_SCHEMA_VERSION = 20;
 
 export type ReadinessReason =
   | 'shutting_down'
