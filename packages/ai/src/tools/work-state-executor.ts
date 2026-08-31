@@ -95,6 +95,32 @@ function rejected(
   };
 }
 
+/**
+ * Expected mutation refusals are classified by the trusted service (`confirmation_required`,
+ * `unavailable`, `unknown`, ...). If a consequential execution instead comes back as a generic
+ * failed tool result with no outcome, the provider boundary cannot be proven untouched from this
+ * layer. Escalate conservatively rather than allowing another normal model turn to guess/retry.
+ */
+function requireHumanReviewForUnclassifiedMutationFailure(
+  result: ToolExecutionResult,
+): ToolExecutionResult {
+  if (result.execution.status !== 'failed' || result.handoffRequested) return result;
+  try {
+    const parsed = JSON.parse(result.modelOutput) as unknown;
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      typeof (parsed as Record<string, unknown>).outcome === 'string'
+    ) {
+      return result;
+    }
+  } catch {
+    // A malformed failure payload is itself unclassified and therefore requires review.
+  }
+  return { ...result, handoffRequested: true };
+}
+
 function preparedAuthority(
   call: AgentToolCall,
   result: ToolExecutionResult,
@@ -237,10 +263,11 @@ export class WorkStateToolExecutor implements ToolExecutor {
         pending.intent === 'APPOINTMENT_BOOK'
           ? { booking_intent_id: pending.actionIntentId }
           : { change_intent_id: pending.actionIntentId };
-      return this.delegate.execute(
+      const result = await this.delegate.execute(
         { ...call, arguments: JSON.stringify(trustedArguments) },
         context,
       );
+      return requireHumanReviewForUnclassifiedMutationFailure(result);
     }
 
     const result = await this.delegate.execute(call, context);
