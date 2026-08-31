@@ -152,6 +152,23 @@ describe('Phase 23 voice mutation handoff boundary', () => {
         urgency: 'normal',
       }),
     );
+    expect(socket.sent).toContainEqual(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          audio: { input: { turn_detection: null } },
+          tools: [],
+        }),
+        type: 'session.update',
+      }),
+    );
+    expect(
+      socket.sent.some(
+        (event) =>
+          event.type === 'response.create' &&
+          JSON.stringify(event).includes('handoff_ack') &&
+          JSON.stringify(event).includes("won't repeat it"),
+      ),
+    ).toBe(true);
 
     socket.emitMessage({
       arguments: '{"appointment_type":"Wellness","dates":["2026-09-03"]}',
@@ -163,12 +180,12 @@ describe('Phase 23 voice mutation handoff boundary', () => {
     await flushQueue();
 
     expect(getAvailableAppointments).not.toHaveBeenCalled();
-    const blocked = socket.sent.find(
+    const lateFunctionOutput = socket.sent.find(
       (event) =>
         event.type === 'conversation.item.create' &&
         (event.item as { call_id?: string } | undefined)?.call_id === 'slots_after_unknown',
     );
-    expect(JSON.stringify(blocked)).toContain('requested action is unavailable');
+    expect(lateFunctionOutput).toBeUndefined();
   });
 
   it('still closes scheduling and tells the model not to retry when durable handoff persistence is unavailable', async () => {
