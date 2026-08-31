@@ -29,6 +29,13 @@ const prepareMutationTools = new Set<ActiveToolName>([
   'prepare_appointment_reschedule',
 ]);
 
+type PendingMutation = NonNullable<AgentConversationWorkState['pendingMutation']>;
+
+export type MutationAuthorityRevalidator = (
+  pending: PendingMutation,
+  context: AgentExecutionContext,
+) => Promise<boolean>;
+
 function isActiveToolName(value: string): value is ActiveToolName {
   return [
     'capture_lead',
@@ -63,13 +70,16 @@ function publicTool(tool: AgentFunctionTool): AgentFunctionTool {
   };
 }
 
-function rejected(call: AgentToolCall): ToolExecutionResult {
+function rejected(
+  call: AgentToolCall,
+  summary = 'Tool is unavailable for the current trusted work state.',
+): ToolExecutionResult {
   return {
     execution: {
       callId: call.callId,
       name: call.name,
       status: 'rejected',
-      summary: 'Tool is unavailable for the current trusted work state.',
+      summary,
     },
     handoffRequested: false,
     modelOutput: JSON.stringify({ ok: false, message: 'The requested action is unavailable.' }),
@@ -111,11 +121,14 @@ function redactPreparedActionIntent(
 /**
  * Turn-scoped policy wrapper around the source-controlled executor.
  *
- * It serves two purposes that must remain application-owned rather than model-owned:
+ * It serves three purposes that must remain application-owned rather than model-owned:
  * - a pending consequential mutation prevents preparing a competing mutation and exposes only the
  *   matching execution tool;
  * - execution tool authority is bound to the opaque action-intent id from trusted work state, so
- *   the model never receives or chooses that identifier.
+ *   the model never receives or chooses that identifier;
+ * - a customer adapter may revalidate that exact authority immediately before consequential
+ *   execution, closing takeover, expiry, correction, and conflict races without teaching this
+ *   package anything about the database.
  */
 export class WorkStateToolExecutor implements ToolExecutor {
   public readonly tools: readonly AgentFunctionTool[];
@@ -123,6 +136,7 @@ export class WorkStateToolExecutor implements ToolExecutor {
   public constructor(
     private readonly delegate: ToolExecutor,
     private readonly workState: AgentConversationWorkState,
+    private readonly revalidateMutationAuthority?: MutationAuthorityRevalidator,
   ) {
     this.tools = delegate.tools
       .filter((tool) => allowedByWorkState(tool.name, workState))
@@ -160,6 +174,15 @@ export class WorkStateToolExecutor implements ToolExecutor {
 
     const pending = this.workState.pendingMutation;
     if (pending && executionTools.has(call.name as ActiveToolName)) {
+      if (this.revalidateMutationAuthority) {
+        try {
+          if (!(await this.revalidateMutationAuthority(pending, context))) {
+            return rejected(call, 'Trusted mutation authority changed before execution.');
+          }
+        } catch {
+          return rejected(call, 'Trusted mutation authority could not be revalidated.');
+        }
+      }
       const trustedArguments =
         pending.intent === 'APPOINTMENT_BOOK'
           ? { booking_intent_id: pending.actionIntentId }
