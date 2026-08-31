@@ -77,7 +77,7 @@ insert into public.appointments
 values ('c3120000-0000-0000-0000-000000000001', 'c3020000-0000-0000-0000-000000000001',
   'c3030000-0000-0000-0000-000000000001', 'c3090000-0000-0000-0000-000000000001',
   'Phase 23 appointment', 'confirmed', now() + interval '5 days', now() + interval '5 days 30 minutes',
-  'google_calendar', 'phase23-event', 'c3050000-0000-0000-000000000001',
+  'google_calendar', 'phase23-event', 'c3050000-0000-0000-0000-000000000001',
   'c3110000-0000-0000-0000-000000000002', 'c3070000-0000-0000-0000-000000000001',
   'confirmed', '+14155550123');
 insert into public.appointment_change_intents
@@ -174,11 +174,11 @@ select extensions.is(
 );
 reset role;
 select extensions.is(
-  (select status from public.appointment_change_intents where id = 'c3130000-0000-0000-000000000001'),
+  (select status from public.appointment_change_intents where id = 'c3130000-0000-0000-0000-000000000001'),
   'failed', 'the vetoed appointment-change intent is terminal rather than left replayable'
 );
 select extensions.is(
-  (select failure_category from public.appointment_change_intents where id = 'c3130000-0000-0000-000000000001'),
+  (select failure_category from public.appointment_change_intents where id = 'c3130000-0000-0000-0000-000000000001'),
   'human_control', 'the appointment-change intent retains the bounded internal veto reason'
 );
 
@@ -196,7 +196,7 @@ select extensions.is(
 reset role;
 
 update public.conversations set ai_mode = 'human'
-where id = 'c3090000-0000-0000-000000000001';
+where id = 'c3090000-0000-0000-0000-000000000001';
 update public.appointment_change_intents set status = 'provider_state_unknown', failure_category = null
 where id = 'c3130000-0000-0000-0000-000000000001';
 set local role service_role;
