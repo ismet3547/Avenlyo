@@ -29,7 +29,7 @@ const execution = {
 
 function serviceFor(result: 'ambiguous' | 'cancelled') {
   const rpc = vi.fn((name: string) => {
-    if (name === 'claim_appointment_change_intent')
+    if (name === 'claim_presented_appointment_change_intent')
       return { data: [{ state: 'claimed' }], error: null };
     if (name === 'get_appointment_change_execution_context_v2')
       return { data: [execution], error: null };
@@ -139,6 +139,16 @@ describe('AppointmentLifecycleService provider confirmation', () => {
         { conversationId: 'conversation-1', triggeringInboundMessageId: 'message-1' },
       ),
     ).resolves.toEqual({ outcome: 'unknown' });
+    expect(rpc).toHaveBeenCalledWith(
+      'claim_presented_appointment_change_intent',
+      expect.objectContaining({
+        target_change_intent_id: 'change-1',
+        target_conversation_id: 'conversation-1',
+        target_inbound_message_id: 'message-1',
+        target_tool_call_id: 'tool-1',
+      }),
+    );
+    expect(rpc).not.toHaveBeenCalledWith('claim_appointment_change_intent', expect.any(Object));
     expect(rpc).toHaveBeenCalledWith(
       'persist_appointment_change_mutation_target',
       expect.any(Object),
