@@ -4,13 +4,22 @@ import type {
   AgentFunctionTool,
   AgentToolCall,
 } from '../agent/types';
-import type { ActiveToolName, RuntimeKnowledgeSearchResult, ToolExecutionResult, ToolExecutor } from './types';
+import type {
+  ActiveToolName,
+  ToolExecutionResult,
+  ToolExecutor,
+} from './types';
 
 const executionToolForIntent = {
   APPOINTMENT_BOOK: 'book_appointment',
   APPOINTMENT_CANCEL: 'cancel_appointment',
   APPOINTMENT_RESCHEDULE: 'reschedule_appointment',
-} as const satisfies Readonly<Record<NonNullable<AgentConversationWorkState['pendingMutation']>['intent'], ActiveToolName>>;
+} as const satisfies Readonly<
+  Record<
+    NonNullable<AgentConversationWorkState['pendingMutation']>['intent'],
+    ActiveToolName
+  >
+>;
 
 const executionTools = new Set<ActiveToolName>(Object.values(executionToolForIntent));
 const prepareMutationTools = new Set<ActiveToolName>([
@@ -77,22 +86,19 @@ function rejected(call: AgentToolCall): ToolExecutionResult {
  *   the model never receives or chooses that identifier.
  */
 export class WorkStateToolExecutor implements ToolExecutor {
+  public readonly searchKnowledgeForRuntime: ToolExecutor['searchKnowledgeForRuntime'];
   public readonly tools: readonly AgentFunctionTool[];
 
   public constructor(
     private readonly delegate: ToolExecutor,
     private readonly workState: AgentConversationWorkState,
   ) {
+    this.searchKnowledgeForRuntime = delegate.searchKnowledgeForRuntime
+      ? (query, context) => delegate.searchKnowledgeForRuntime!(query, context)
+      : undefined;
     this.tools = delegate.tools
       .filter((tool) => allowedByWorkState(tool.name, workState))
       .map(publicTool);
-  }
-
-  public searchKnowledgeForRuntime(
-    query: string,
-    context: AgentExecutionContext,
-  ): Promise<RuntimeKnowledgeSearchResult> | undefined {
-    return this.delegate.searchKnowledgeForRuntime?.(query, context);
   }
 
   public execute(
