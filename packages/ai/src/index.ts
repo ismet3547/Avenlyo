@@ -46,6 +46,8 @@ export {
 } from './agent/intent-contract';
 export type { AgentIntentFrame, CustomerIntent, IntentPrecedenceTier } from './agent/intent-contract';
 export { actionRiskByName, mayExposeHandoffTool } from './policy/action-policy';
+export { detectExplicitHumanRequest } from './policy/human-request';
+export type { HumanRequestInterrupt } from './policy/human-request';
 export { detectSafetyEscalation } from './policy/safety';
 export {
   buildResponsesRequest,
