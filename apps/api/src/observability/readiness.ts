@@ -16,16 +16,17 @@ import type { RuntimeComponent } from './runtime-state.js';
 /**
  * Raised when this application build needs migrations the deployed database does not have yet.
  *
- * 20 as of Phase 23: the customer agent now depends on trusted work-state RPCs, durable mutation
- * confirmation presentation/binding, and Phase 23 transition guards. A Phase 19 database can still
- * serve the rollback binary, but it cannot safely serve this build because the new authority facts
- * and claim guards do not exist there.
+ * 21 as of Phase 23 closure: the customer agent depends on trusted work-state RPCs, durable mutation
+ * confirmation presentation/binding, transition guards, and event-time presentation ordering. Schema
+ * 20 is an intentionally rejected intermediate Phase 23 state because it can exist after the first
+ * presentation migration but before the final security backstops. A Phase 19 database can still
+ * serve the rollback binary, but neither 19 nor 20 can safely serve this build.
  *
  * The comparison stays `>=`, so a *newer* schema remains compatible with an older build and a
  * rollback needs no down-migration. Phase 23 retains the legacy claim call shapes and applies its
  * stricter transition rule only to rows carrying the new prompt-binding state.
  */
-export const REQUIRED_SCHEMA_VERSION = 20;
+export const REQUIRED_SCHEMA_VERSION = 21;
 
 export type ReadinessReason =
   | 'shutting_down'
