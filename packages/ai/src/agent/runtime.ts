@@ -21,6 +21,7 @@ import type {
   AgentTurnResult,
   KnowledgeSource,
 } from './types';
+import { detectExplicitHumanRequest } from '../policy/human-request';
 import { detectSafetyEscalation } from '../policy/safety';
 import { policyHandoffCallId } from '../tools/executor';
 import type { ToolExecutionResult, ToolExecutor } from '../tools/types';
@@ -30,6 +31,8 @@ const loopLimitReply =
   'I couldn’t complete that request safely. I can ask the team to help with it.';
 const unknownKnowledgeReply =
   "I don't have reliable information about that yet. I can ask the team to help.";
+const unavailableHandoffReply =
+  'I wasn’t able to notify the team automatically. Please contact the business directly.';
 
 const testModeDefaultWorkState: AgentConversationWorkState = {
   control: 'ai_active',
@@ -86,13 +89,11 @@ function distinctSources(sources: readonly KnowledgeSource[]): readonly Knowledg
 function policyCall(
   context: AgentTurnInput['context'],
   message: string,
+  reason: string,
   urgency: 'normal' | 'urgent',
 ): AgentToolCall {
   return {
-    arguments: JSON.stringify({
-      reason: 'Avenlyo safety policy requires a human handoff for this message.',
-      urgency,
-    }),
+    arguments: JSON.stringify({ reason, urgency }),
     callId: policyHandoffCallId(context, message),
     name: 'request_human_help',
   };
@@ -212,10 +213,21 @@ export class AgentRuntime {
       return suppressedTurn(this.model, 'human_control');
     }
 
+    const handoffAvailable = this.executor.tools.some((tool) => tool.name === 'request_human_help');
     const safety = detectSafetyEscalation(input.industry, userMessage);
-    if (safety && this.executor.tools.some((tool) => tool.name === 'request_human_help')) {
+    if (safety) {
+      if (!handoffAvailable) {
+        return {
+          failureCode: 'tool_failure',
+          handoffRequested: false,
+          model: this.model,
+          sources: [],
+          text: unavailableHandoffReply,
+          toolCalls: [],
+        };
+      }
       const result = await this.executor.execute(
-        policyCall(input.context, userMessage, safety.urgency),
+        policyCall(input.context, userMessage, safety.reason, safety.urgency),
         input.context,
       );
       return {
@@ -223,9 +235,33 @@ export class AgentRuntime {
         handoffRequested: result.handoffRequested,
         model: this.model,
         sources: [],
-        text: result.handoffRequested
-          ? safety.reply
-          : 'I wasn’t able to notify the team automatically. Please contact the business directly.',
+        text: result.handoffRequested ? safety.reply : unavailableHandoffReply,
+        toolCalls: [result.execution],
+      };
+    }
+
+    const humanRequest = detectExplicitHumanRequest(userMessage);
+    if (humanRequest) {
+      if (!handoffAvailable) {
+        return {
+          failureCode: 'tool_failure',
+          handoffRequested: false,
+          model: this.model,
+          sources: [],
+          text: unavailableHandoffReply,
+          toolCalls: [],
+        };
+      }
+      const result = await this.executor.execute(
+        policyCall(input.context, userMessage, humanRequest.reason, humanRequest.urgency),
+        input.context,
+      );
+      return {
+        failureCode: result.handoffRequested ? undefined : 'tool_failure',
+        handoffRequested: result.handoffRequested,
+        model: this.model,
+        sources: [],
+        text: result.handoffRequested ? humanRequest.reply : unavailableHandoffReply,
         toolCalls: [result.execution],
       };
     }
