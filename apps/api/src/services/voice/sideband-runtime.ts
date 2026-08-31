@@ -11,6 +11,7 @@ import {
 } from '@avenlyo/voice';
 
 import type { VoiceStore } from './store.js';
+import { VoiceToolAuthorityState } from './tool-authority.js';
 
 export interface VoiceSidebandRuntimeOptions {
   readonly configuration: VoiceConfiguration;
@@ -29,6 +30,7 @@ export interface VoiceSidebandRuntimeOptions {
  */
 export class VoiceSidebandRuntime {
   private readonly executor: VoiceToolExecutor;
+  private readonly authority = new VoiceToolAuthorityState();
   private executionQueue: Promise<void> = Promise.resolve();
   private readonly auditedToolCallIds = new Set<string>();
   private readonly completedToolCallIds = new Set<string>();
@@ -144,6 +146,7 @@ export class VoiceSidebandRuntime {
     const safety = detectSafetyEscalation(this.options.context.industry, event.transcript);
     if (safety) {
       this.schedulingBlocked = true;
+      this.authority.clearSchedulingAuthority();
       await this.options.store.requestHandoff({
         externalCallId: this.options.context.callId,
         reason: safety.reason,
@@ -174,7 +177,7 @@ export class VoiceSidebandRuntime {
     // Realtime may replay a completed function call after a reconnect. The provider call ID is
     // the authoritative idempotency key for the entire sideband response sequence.
     if (this.completedToolCallIds.has(event.call_id)) return;
-    const result = await this.executor.execute({
+    const trustedCall = this.authority.bind({
       arguments: event.arguments,
       callId: event.call_id,
       confirmationText: this.latestCallerTranscript,
@@ -182,6 +185,7 @@ export class VoiceSidebandRuntime {
       name: event.name,
       schedulingBlocked: this.schedulingBlocked,
     });
+    const result = this.authority.observe(trustedCall, await this.executor.execute(trustedCall));
     if (!this.auditedToolCallIds.has(event.call_id)) {
       this.auditedToolCallIds.add(event.call_id);
       await this.options.store.recordToolExecution({
