@@ -33,7 +33,9 @@ export type {
 } from './agent/knowledge-reliability';
 export type {
   AgentBusinessContext,
+  AgentConversationControlState,
   AgentConversationMessage,
+  AgentConversationWorkState,
   AgentExecutionContext,
   AgentFunctionTool,
   AgentMode,
