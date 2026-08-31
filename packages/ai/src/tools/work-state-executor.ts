@@ -6,6 +6,7 @@ import type {
 } from '../agent/types';
 import type {
   ActiveToolName,
+  RuntimeKnowledgeSearchResult,
   ToolExecutionResult,
   ToolExecutor,
 } from './types';
@@ -117,19 +118,38 @@ function redactPreparedActionIntent(
  *   the model never receives or chooses that identifier.
  */
 export class WorkStateToolExecutor implements ToolExecutor {
-  public readonly searchKnowledgeForRuntime: ToolExecutor['searchKnowledgeForRuntime'];
   public readonly tools: readonly AgentFunctionTool[];
 
   public constructor(
     private readonly delegate: ToolExecutor,
     private readonly workState: AgentConversationWorkState,
   ) {
-    this.searchKnowledgeForRuntime = delegate.searchKnowledgeForRuntime
-      ? (query, context) => delegate.searchKnowledgeForRuntime!(query, context)
-      : undefined;
     this.tools = delegate.tools
       .filter((tool) => allowedByWorkState(tool.name, workState))
       .map(publicTool);
+  }
+
+  public searchKnowledgeForRuntime(
+    query: string,
+    context: AgentExecutionContext,
+  ): Promise<RuntimeKnowledgeSearchResult> {
+    if (this.delegate.searchKnowledgeForRuntime) {
+      return this.delegate.searchKnowledgeForRuntime(query, context);
+    }
+    return Promise.resolve({
+      diagnostic: {
+        knowledgeOutcome: 'failed',
+        matches: [],
+        origin: 'runtime_forced_search',
+        qualifiedCount: 0,
+        queryLength: query.length,
+        queryMatchesCustomerTurn: true,
+        retrievedCount: 0,
+        toolCallId: 'runtime-forced-search',
+      },
+      failed: true,
+      sources: [],
+    });
   }
 
   public async execute(
