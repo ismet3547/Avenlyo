@@ -86,7 +86,19 @@ values
    'inbound', 'text', 'Book Friday at 2pm', 'web', 'customer'),
   ('d6100000-0000-0000-0000-000000000002', 'd6020000-0000-0000-0000-000000000001',
    'd6030000-0000-0000-0000-000000000001', 'd6090000-0000-0000-0000-000000000002',
-   'inbound', 'text', 'Yes', 'sms', 'customer');
+   'inbound', 'text', 'Yes', 'sms', 'customer'),
+  ('d6100000-0000-0000-0000-000000000003', 'd6020000-0000-0000-0000-000000000001',
+   'd6030000-0000-0000-0000-000000000001', 'd6090000-0000-0000-0000-000000000001',
+   'outbound', 'text', 'Please confirm the exact Web booking. Reply YES to confirm.', 'web', 'ai');
+insert into public.message_deliveries
+  (id, organization_id, location_id, message_id, provider, status, status_rank, sent_at)
+values (
+  'd6130000-0000-0000-0000-000000000001',
+  'd6020000-0000-0000-0000-000000000001',
+  'd6030000-0000-0000-0000-000000000001',
+  'd6100000-0000-0000-0000-000000000003',
+  'web_chat', 'sent', 3, now()
+);
 
 insert into public.booking_candidates
   (id, organization_id, location_id, conversation_id, integration_id, appointment_type_id,
@@ -103,7 +115,8 @@ values (
   now() + interval '1 hour'
 );
 insert into public.booking_intents
-  (id, organization_id, location_id, conversation_id, integration_id, candidate_id, status)
+  (id, organization_id, location_id, conversation_id, integration_id, candidate_id, status,
+   confirmation_prompt_message_id)
 values (
   'd6120000-0000-0000-0000-000000000001',
   'd6020000-0000-0000-0000-000000000001',
@@ -111,7 +124,8 @@ values (
   'd6090000-0000-0000-0000-000000000001',
   'd6050000-0000-0000-0000-000000000001',
   'd6110000-0000-0000-0000-000000000001',
-  'awaiting_confirmation'
+  'awaiting_confirmation',
+  'd6100000-0000-0000-0000-000000000003'
 );
 
 set local role service_role;
@@ -120,7 +134,7 @@ select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
     'd6100000-0000-0000-0000-000000000001')),
   1,
-  'the originating Web conversation sees its one pending booking authority'
+  'the originating Web conversation sees its one presented pending booking authority'
 );
 select extensions.is(
   (select pending_mutation_intent_id from public.get_message_agent_work_state(
