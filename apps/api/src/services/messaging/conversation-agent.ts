@@ -1,6 +1,7 @@
 import {
   AgentRuntime,
   ControlledToolExecutor,
+  CustomerCapabilityToolExecutor,
   OpenAIResponsesProvider,
   WorkStateToolExecutor,
   type AgentConversationMessage,
@@ -11,8 +12,12 @@ import { resolveIndustryPack } from '@avenlyo/industries';
 import { OpenAIEmbeddingProvider } from '@avenlyo/knowledge';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import type { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
 import type { AppointmentLifecycleService } from '../scheduling/appointment-lifecycle-service.js';
+import {
+  noCustomerSchedulingCapabilities,
+  type CustomerSchedulingCapabilityService,
+} from '../scheduling/customer-scheduling-capabilities.js';
+import type { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
 import { LeadCaptureService } from '../leads/lead-capture-service.js';
 
 import { loadMessageAgentWorkState } from './agent-work-state.js';
@@ -59,6 +64,7 @@ export class ConversationAgentService {
       readonly model: string;
       readonly appointmentLifecycle?: AppointmentLifecycleService;
       readonly scheduling?: SchedulingBookingService;
+      readonly schedulingCapabilities?: CustomerSchedulingCapabilityService;
       readonly supabase: SupabaseClient<Database>;
     },
   ) {
@@ -98,6 +104,17 @@ export class ConversationAgentService {
     const history = historyFromJson(context.history);
     const userMessage = history.at(-1)?.content;
     if (!userMessage) throw new Error('Inbound message body is unavailable.');
+
+    const resolvedCapabilities = this.input.schedulingCapabilities
+      ? await this.input.schedulingCapabilities.forConversation(context.conversation_id)
+      : noCustomerSchedulingCapabilities;
+    const toolCapabilities = {
+      booking: this.input.scheduling !== undefined && resolvedCapabilities.booking,
+      cancel: this.input.appointmentLifecycle !== undefined && resolvedCapabilities.cancel,
+      lookup: this.input.appointmentLifecycle !== undefined && resolvedCapabilities.lookup,
+      reschedule: this.input.appointmentLifecycle !== undefined && resolvedCapabilities.reschedule,
+    };
+
     const baseExecutor = new ControlledToolExecutor(industry, {
       leadCapture: {
         capture: (tool, executionContext) =>
@@ -215,7 +232,8 @@ export class ConversationAgentService {
           }
         : {}),
     });
-    const executor = new WorkStateToolExecutor(baseExecutor, workState, async (pending) => {
+    const capabilityExecutor = new CustomerCapabilityToolExecutor(baseExecutor, toolCapabilities);
+    const executor = new WorkStateToolExecutor(capabilityExecutor, workState, async (pending) => {
       const current = await loadMessageAgentWorkState(this.input.supabase, inboundMessageId);
       if (current.kind !== 'ready' || current.workState.control !== 'ai_active') return false;
       const currentPending = current.workState.pendingMutation;
