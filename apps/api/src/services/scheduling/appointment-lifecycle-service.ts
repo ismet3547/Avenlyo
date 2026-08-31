@@ -228,7 +228,7 @@ export class AppointmentLifecycleService {
     turn: { readonly conversationId: string; readonly triggeringInboundMessageId: string | null },
   ) {
     if (!turn.triggeringInboundMessageId) return { outcome: 'confirmation_required' as const };
-    const claimResult = await this.rpc.rpc('claim_appointment_change_intent', {
+    const claimResult = await this.rpc.rpc('claim_presented_appointment_change_intent', {
       target_change_intent_id: input.changeIntentId,
       target_conversation_id: turn.conversationId,
       target_inbound_message_id: turn.triggeringInboundMessageId,
