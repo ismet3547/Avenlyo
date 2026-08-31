@@ -91,13 +91,13 @@ values
    'd6030000-0000-0000-0000-000000000001', 'd6090000-0000-0000-0000-000000000001',
    'outbound', 'text', 'Please confirm the exact Web booking. Reply YES to confirm.', 'web', 'ai');
 insert into public.message_deliveries
-  (id, organization_id, location_id, message_id, provider, status, status_rank, sent_at)
+  (id, organization_id, location_id, message_id, provider, status, sent_at)
 values (
   'd6130000-0000-0000-0000-000000000001',
   'd6020000-0000-0000-0000-000000000001',
   'd6030000-0000-0000-0000-000000000001',
   'd6100000-0000-0000-0000-000000000003',
-  'web_chat', 'sent', 3, now()
+  'web_chat', 'sent', now()
 );
 
 insert into public.booking_candidates
