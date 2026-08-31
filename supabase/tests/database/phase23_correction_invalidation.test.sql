@@ -1,7 +1,7 @@
 -- Phase 23: a material correction replaces only an uncommitted confirmation snapshot.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(24);
+select extensions.plan(26);
 
 insert into auth.users (id, email)
 values ('d4010000-0000-0000-0000-000000000001', 'phase23-correction@example.test');
@@ -67,7 +67,6 @@ values
    'd4030000-0000-0000-0000-000000000001', 'd4090000-0000-0000-0000-000000000001',
    'inbound', 'text', 'Actually move it to the new time', 'web', 'customer');
 
--- Three fresh booking offers plus one completed booking that backs the existing appointment.
 insert into public.booking_candidates
   (id, organization_id, location_id, conversation_id, integration_id, appointment_type_id,
    resource_id, starts_at, ends_at, timezone, status, expires_at)
@@ -228,7 +227,6 @@ select extensions.is(
 );
 reset role;
 
--- Changing intent kind also replaces the uncommitted booking instead of leaving two pending writes.
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
@@ -289,7 +287,6 @@ select extensions.is(
 );
 reset role;
 
--- Human ownership wins at preparation as well as execution.
 update public.conversations set ai_mode = 'human'
 where id = 'd4090000-0000-0000-0000-000000000001';
 set local role service_role;
@@ -303,7 +300,6 @@ select extensions.throws_ok(
 );
 reset role;
 
--- Provider-unknown truth is never overwritten by a correction attempt.
 update public.conversations set ai_mode = 'ai'
 where id = 'd4090000-0000-0000-0000-000000000001';
 update public.appointment_change_intents
