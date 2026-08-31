@@ -12,10 +12,26 @@ import type { WorkerObserver } from '../../observability/worker-observer.js';
 
 import type { TwilioOutboundClient } from './twilio.js';
 import type { ConversationAgentService } from './conversation-agent.js';
+import type { MutationConfirmationAuthority } from './mutation-confirmation.js';
 
 const IDLE_POLL_MS = 1_000;
 const REQUIRED_HANDOFF_REASON =
   'Avenlyo requires human review before automated handling can continue.';
+
+interface ConfirmationPersistenceRpc {
+  (
+    name: 'persist_ai_mutation_confirmation_reply',
+    args: {
+      target_action_intent_id: string;
+      target_action_intent_type: MutationConfirmationAuthority['intent'];
+      target_body: string;
+      target_inbound_message_id: string;
+    },
+  ): PromiseLike<{
+    data: { bound: boolean; created: boolean; message_id: string | null }[] | null;
+    error: unknown;
+  }>;
+}
 
 /** Small in-process worker backed by durable SQL claims; no timer spin occurs while work is running. */
 export class MessageProcessingWorker {
@@ -152,6 +168,10 @@ export class MessageProcessingWorker {
     const reply = await this.input.agent.replyTo(messageId);
     if (reply.suppressed) return;
     if (reply.handoffRequested) await this.ensureDurableHandoff(messageId);
+    if (reply.mutationConfirmation) {
+      await this.persistMutationConfirmation(messageId, reply.text, reply.mutationConfirmation);
+      return;
+    }
     await this.persist(messageId, reply.text, reply.handoffRequested);
   }
 
@@ -171,6 +191,28 @@ export class MessageProcessingWorker {
     });
     if (error || !data?.[0]?.handoff_id) {
       throw new Error('Required human handoff could not be persisted.');
+    }
+  }
+
+  /**
+   * Prepared action authority remains server-only until this atomic RPC both persists the exact
+   * confirmation prompt and binds that outbound message to the same still-awaiting action.
+   */
+  private async persistMutationConfirmation(
+    messageId: string,
+    body: string,
+    authority: MutationConfirmationAuthority,
+  ): Promise<void> {
+    const rpc = this.input.supabase.rpc.bind(this.input.supabase) as unknown as ConfirmationPersistenceRpc;
+    const { data, error } = await rpc('persist_ai_mutation_confirmation_reply', {
+      target_action_intent_id: authority.actionIntentId,
+      target_action_intent_type: authority.intent,
+      target_body: body,
+      target_inbound_message_id: messageId,
+    });
+    const row = data?.[0];
+    if (error || !row?.bound || !row.message_id) {
+      throw new Error('Mutation confirmation persistence failed.');
     }
   }
 
