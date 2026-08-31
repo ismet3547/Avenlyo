@@ -17,6 +17,7 @@ import {
 
 import { VoiceSidebandRuntime } from './sideband-runtime.js';
 import type { VoiceStore } from './store.js';
+import { customerVisibleVoiceTools } from './tool-authority.js';
 
 export interface VoiceInboundCallServiceOptions {
   readonly control: RealtimeCallControlProvider;
@@ -127,11 +128,13 @@ export class VoiceInboundCallService {
         greeting,
         instructions: buildVoiceInstructions(context, resolved.business),
         model: this.options.model,
-        tools: activeVoiceTools({
-          industry: context.industry,
-          schedulingEnabled,
-          transferEnabled: transferAvailable,
-        }),
+        tools: customerVisibleVoiceTools(
+          activeVoiceTools({
+            industry: context.industry,
+            schedulingEnabled,
+            transferEnabled: transferAvailable,
+          }),
+        ),
         voice: resolved.configuration.voice,
       });
       const socket = await this.options.control.connectSideband(event.data.call_id);
