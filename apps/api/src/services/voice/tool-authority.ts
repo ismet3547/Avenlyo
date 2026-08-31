@@ -22,6 +22,11 @@ const authorityBoundTools = new Set<VoiceFunctionTool['name']>([
   'cancel_appointment',
   'confirm_sms_followup_consent',
 ]);
+const mutationExecutionTools = new Set<VoiceFunctionTool['name']>([
+  'book_appointment',
+  'reschedule_appointment',
+  'cancel_appointment',
+]);
 
 const bookingTools = new Set<VoiceFunctionTool['name']>([
   'get_available_appointments',
@@ -207,18 +212,29 @@ export class VoiceToolAuthorityState {
         typeof top?.consent_intent_id === 'string' ? top.consent_intent_id : null;
     }
 
-    if (
-      call.name === 'book_appointment' ||
-      call.name === 'reschedule_appointment' ||
-      call.name === 'cancel_appointment'
-    ) {
-      if (top?.outcome !== 'confirmation_required') this.pendingMutation = null;
+    const isMutationExecution = mutationExecutionTools.has(
+      call.name as VoiceFunctionTool['name'],
+    );
+    if (isMutationExecution && top?.outcome !== 'confirmation_required') {
+      this.pendingMutation = null;
     }
 
     if (call.name === 'confirm_sms_followup_consent') this.pendingConsentIntentId = null;
 
+    // A trusted scheduling service normally classifies every expected mutation refusal/result with
+    // an `outcome`. If an authorized mutation instead returns a generic failed tool result with no
+    // outcome (for example a DB/network failure after a provider boundary may have been crossed),
+    // normal realtime continuation cannot safely infer whether a write occurred. Force the same
+    // durable human-review terminal used by explicit unknown/handoff outcomes.
+    const unclassifiedMutationFailure =
+      isMutationExecution &&
+      result.status === 'failed' &&
+      !result.handoffRequested &&
+      typeof top?.outcome !== 'string';
+
     return {
       ...result,
+      handoffRequested: result.handoffRequested || unclassifiedMutationFailure,
       modelOutput: JSON.stringify(
         parsed === null
           ? { ok: false, message: 'The tool result could not be represented safely.' }
