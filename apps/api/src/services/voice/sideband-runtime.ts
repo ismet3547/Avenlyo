@@ -8,8 +8,10 @@ import {
   type VoiceSchedulingServices,
   type VoiceRealtimeSocket,
   type VoiceSessionManager,
+  type VoiceToolExecution,
 } from '@avenlyo/voice';
 
+import type { CustomerSchedulingCapabilities } from '../scheduling/customer-scheduling-capabilities.js';
 import type { VoiceStore } from './store.js';
 import { VoiceToolAuthorityState } from './tool-authority.js';
 
@@ -18,10 +20,21 @@ export interface VoiceSidebandRuntimeOptions {
   readonly context: VoiceCallContext;
   readonly control: RealtimeCallControlProvider;
   readonly embed: (query: string) => Promise<readonly number[]>;
+  readonly schedulingCapabilities: CustomerSchedulingCapabilities;
   readonly sessions: VoiceSessionManager;
   readonly socket: VoiceRealtimeSocket;
   readonly scheduling?: VoiceSchedulingServices;
   readonly store: VoiceStore;
+}
+
+function unavailableCapability(): VoiceToolExecution {
+  return {
+    handoffRequested: false,
+    modelOutput: JSON.stringify({ ok: false, message: 'The requested action is unavailable.' }),
+    status: 'rejected',
+    summary: 'Tool is unavailable for the current trusted capability state.',
+    transferred: false,
+  };
 }
 
 /**
@@ -30,7 +43,7 @@ export interface VoiceSidebandRuntimeOptions {
  */
 export class VoiceSidebandRuntime {
   private readonly executor: VoiceToolExecutor;
-  private readonly authority = new VoiceToolAuthorityState();
+  private readonly authority: VoiceToolAuthorityState;
   private executionQueue: Promise<void> = Promise.resolve();
   private readonly auditedToolCallIds = new Set<string>();
   private readonly completedToolCallIds = new Set<string>();
@@ -39,6 +52,7 @@ export class VoiceSidebandRuntime {
   private schedulingBlocked = false;
 
   public constructor(private readonly options: VoiceSidebandRuntimeOptions) {
+    this.authority = new VoiceToolAuthorityState(options.schedulingCapabilities);
     const transferAllowed =
       options.configuration.transferEnabled &&
       options.configuration.providerTransferEnabled &&
@@ -177,15 +191,20 @@ export class VoiceSidebandRuntime {
     // Realtime may replay a completed function call after a reconnect. The provider call ID is
     // the authoritative idempotency key for the entire sideband response sequence.
     if (this.completedToolCallIds.has(event.call_id)) return;
-    const trustedCall = this.authority.bind({
+    const rawCall = {
       arguments: event.arguments,
       callId: event.call_id,
       confirmationText: this.latestCallerTranscript,
       triggeringInboundMessageId: this.latestCallerTranscriptMessageId,
       name: event.name,
       schedulingBlocked: this.schedulingBlocked,
-    });
-    const result = this.authority.observe(trustedCall, await this.executor.execute(trustedCall));
+    };
+    const result = this.authority.allows(event.name)
+      ? this.authority.observe(
+          this.authority.bind(rawCall),
+          await this.executor.execute(this.authority.bind(rawCall)),
+        )
+      : unavailableCapability();
     if (!this.auditedToolCallIds.has(event.call_id)) {
       this.auditedToolCallIds.add(event.call_id);
       await this.options.store.recordToolExecution({
