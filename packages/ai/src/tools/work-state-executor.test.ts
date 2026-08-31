@@ -119,6 +119,74 @@ describe('WorkStateToolExecutor', () => {
     );
   });
 
+  it('revalidates exact pending authority before a consequential execution', async () => {
+    const { execute, executor } = delegate();
+    const trustedId = '11111111-1111-4111-8111-111111111111';
+    const revalidate = vi.fn().mockResolvedValue(true);
+    const scoped = new WorkStateToolExecutor(
+      executor,
+      state({ actionIntentId: trustedId, intent: 'APPOINTMENT_BOOK' }),
+      revalidate,
+    );
+
+    await scoped.execute(
+      { arguments: '{}', callId: 'book-revalidated', name: 'book_appointment' },
+      context,
+    );
+
+    expect(revalidate).toHaveBeenCalledWith(
+      { actionIntentId: trustedId, intent: 'APPOINTMENT_BOOK' },
+      context,
+    );
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when takeover, expiry, correction, or conflict invalidates authority', async () => {
+    const { execute, executor } = delegate();
+    const revalidate = vi.fn().mockResolvedValue(false);
+    const scoped = new WorkStateToolExecutor(
+      executor,
+      state({
+        actionIntentId: '22222222-2222-4222-8222-222222222222',
+        intent: 'APPOINTMENT_CANCEL',
+      }),
+      revalidate,
+    );
+
+    const result = await scoped.execute(
+      { arguments: '{}', callId: 'cancel-stale', name: 'cancel_appointment' },
+      context,
+    );
+
+    expect(result.execution.status).toBe('rejected');
+    expect(result.execution.summary).toBe('Trusted mutation authority changed before execution.');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when authority revalidation itself is unavailable', async () => {
+    const { execute, executor } = delegate();
+    const revalidate = vi.fn().mockRejectedValue(new Error('database unavailable'));
+    const scoped = new WorkStateToolExecutor(
+      executor,
+      state({
+        actionIntentId: '22222222-2222-4222-8222-222222222222',
+        intent: 'APPOINTMENT_CANCEL',
+      }),
+      revalidate,
+    );
+
+    const result = await scoped.execute(
+      { arguments: '{}', callId: 'cancel-db-failure', name: 'cancel_appointment' },
+      context,
+    );
+
+    expect(result.execution.status).toBe('rejected');
+    expect(result.execution.summary).toBe(
+      'Trusted mutation authority could not be revalidated.',
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it('redacts prepared action authority ids before returning tool output to the model', async () => {
     const authorityId = '33333333-3333-4333-8333-333333333333';
     const execute = vi.fn().mockResolvedValue({
