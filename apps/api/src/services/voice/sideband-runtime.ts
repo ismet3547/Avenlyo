@@ -37,6 +37,17 @@ export interface VoiceSidebandRuntimeOptions {
 }
 
 const mutationReviewTools = new Set(['book_appointment', 'reschedule_appointment', 'cancel_appointment']);
+const terminalAcknowledgementMetadataKey = 'avenlyo_control';
+const terminalAcknowledgementMetadataValue = 'handoff_ack';
+
+const durableHandoffAcknowledgement =
+  "I've notified the team. I'll stop here so a person can follow up.";
+const failedHandoffAcknowledgement =
+  "I can't continue safely right now, and I couldn't notify the team automatically. Please contact the business directly.";
+const durableMutationReviewAcknowledgement =
+  "I can't reliably verify that appointment action, so I won't repeat it. I've notified the team to check it.";
+const failedMutationReviewAcknowledgement =
+  "I can't reliably verify that appointment action, so I won't repeat it, and I couldn't notify the team automatically. Please contact the business directly.";
 
 function unavailableCapability(): VoiceToolExecution {
   return {
@@ -67,6 +78,19 @@ function handoffUnavailableResult(): VoiceToolExecution {
   };
 }
 
+function urgentLeadHandoffUnavailableResult(): VoiceToolExecution {
+  return {
+    handoffRequested: false,
+    modelOutput: JSON.stringify({
+      ok: false,
+      message: 'The urgent request needs human review, but the team could not be notified automatically.',
+    }),
+    status: 'failed',
+    summary: 'Urgent lead requires human review, but handoff persistence failed.',
+    transferred: false,
+  };
+}
+
 /**
  * Handles only final transcript and function-call events. Audio data and partial deltas are never
  * retained or logged by this adapter.
@@ -80,6 +104,8 @@ export class VoiceSidebandRuntime {
   private latestCallerTranscript: string | null = null;
   private latestCallerTranscriptMessageId: string | null = null;
   private schedulingBlocked = false;
+  private handoffTerminal = false;
+  private terminalAcknowledgementResponseId: string | null = null;
 
   public constructor(private readonly options: VoiceSidebandRuntimeOptions) {
     this.authority = new VoiceToolAuthorityState(
@@ -172,7 +198,15 @@ export class VoiceSidebandRuntime {
       this.enqueue(() => this.handleToolCall(event));
       return;
     }
-    this.options.sessions.recordIdleTimeout(this.options.context.callId);
+    if (event.type === 'response.created') {
+      this.enqueue(() => this.handleResponseCreated(event));
+      return;
+    }
+    if (event.type === 'output_audio_buffer.stopped') {
+      this.enqueue(() => this.handleOutputAudioBufferStopped(event));
+      return;
+    }
+    if (!this.handoffTerminal) this.options.sessions.recordIdleTimeout(this.options.context.callId);
   }
 
   private async handleCallerTranscript(event: {
@@ -189,6 +223,7 @@ export class VoiceSidebandRuntime {
     this.latestCallerTranscript = event.transcript;
     this.latestCallerTranscriptMessageId = stored;
     this.options.sessions.recordActivity(this.options.context.callId);
+    if (this.handoffTerminal) return;
 
     // Interrupts are derived from the trusted final caller transcript, not from model tool intent.
     // Safety wins when the same utterance also asks for a person. Type and urgency are deliberately
@@ -198,19 +233,32 @@ export class VoiceSidebandRuntime {
     if (interrupt) {
       this.schedulingBlocked = true;
       this.authority.clearSchedulingAuthority();
-      await this.options.store.requestHandoff({
-        externalCallId: this.options.context.callId,
+      const persisted = await this.persistHandoffSafely({
         reason: interrupt.reason,
         toolCallId: `${safety ? 'safety' : 'human-request'}:${event.item_id}`,
         urgency: interrupt.urgency,
       });
+      this.enterTerminalHandoff(
+        persisted ? durableHandoffAcknowledgement : failedHandoffAcknowledgement,
+        true,
+      );
     }
   }
 
   private async handleAssistantTranscript(event: {
     readonly item_id: string;
+    readonly response_id?: string | undefined;
     readonly transcript: string;
   }): Promise<void> {
+    // After terminal handoff begins, canceled/racing model audio is not durable customer history.
+    // Only the one server-marked acknowledgement whose response ID we observed is persisted.
+    if (
+      this.handoffTerminal &&
+      (this.terminalAcknowledgementResponseId === null ||
+        event.response_id !== this.terminalAcknowledgementResponseId)
+    ) {
+      return;
+    }
     const stored = await this.options.store.recordTranscript({
       body: event.transcript,
       direction: 'outbound',
@@ -225,6 +273,9 @@ export class VoiceSidebandRuntime {
     readonly call_id: string;
     readonly name: string;
   }): Promise<void> {
+    // Once durable human attention owns this call, late function events from a canceled response
+    // have no authority and receive no new model turn; the bounded acknowledgement is already queued.
+    if (this.handoffTerminal) return;
     // Realtime may replay a completed function call after a reconnect. The provider call ID is
     // the authoritative idempotency key for the entire sideband response sequence.
     if (this.completedToolCallIds.has(event.call_id)) return;
@@ -244,6 +295,8 @@ export class VoiceSidebandRuntime {
       result = unavailableCapability();
     }
 
+    let terminalAcknowledgement: string | null = null;
+
     // Provider uncertainty / handoff-required scheduling outcomes are not merely model hints.
     // Before another realtime response is allowed, persist/coalesce durable human work using the
     // trusted call identity, then permanently close scheduling authority for this live call. This
@@ -251,13 +304,45 @@ export class VoiceSidebandRuntime {
     if (result.handoffRequested && mutationReviewTools.has(event.name)) {
       this.schedulingBlocked = true;
       this.authority.clearSchedulingAuthority();
-      const persisted = await this.options.store.requestHandoff({
-        externalCallId: this.options.context.callId,
+      const persisted = await this.persistHandoffSafely({
         reason: 'An appointment action requires human review before automated handling can continue.',
         toolCallId: mutationReviewCallId(event.call_id),
         urgency: 'normal',
       });
+      terminalAcknowledgement = persisted
+        ? durableMutationReviewAcknowledgement
+        : failedMutationReviewAcknowledgement;
       if (!persisted) result = handoffUnavailableResult();
+    } else if (event.name === 'request_human_help' && !result.transferred) {
+      // The executor only reports handoffRequested=true when the durable request succeeded.
+      // A failed request still ends normal AI ownership, but must not claim that staff was notified.
+      terminalAcknowledgement = result.handoffRequested
+        ? durableHandoffAcknowledgement
+        : failedHandoffAcknowledgement;
+    } else if (event.name === 'capture_lead' && result.handoffRequested && !result.transferred) {
+      // Urgent-lead policy already asked for this exact idempotent handoff inside the executor.
+      // Re-read/replay the same durable boundary here so terminal customer language never relies
+      // on a model-visible boolean alone.
+      const persisted = await this.persistHandoffSafely({
+        reason: 'An urgent lead needs a team follow-up.',
+        toolCallId: `${event.call_id}:urgent-lead`,
+        urgency: 'urgent',
+      });
+      terminalAcknowledgement = persisted
+        ? durableHandoffAcknowledgement
+        : failedHandoffAcknowledgement;
+      if (!persisted) result = urgentLeadHandoffUnavailableResult();
+    } else if (event.name === 'transfer_call' && result.status === 'failed' && !result.transferred) {
+      // The transfer adapter creates durable human work before SIP REFER. If REFER then fails, the
+      // Inbox work survives and the call becomes a truthful post-call handoff, never a fake transfer.
+      const persisted = await this.persistHandoffSafely({
+        reason: 'A live call transfer could not be completed; a team follow-up is required.',
+        toolCallId: event.call_id,
+        urgency: 'normal',
+      });
+      terminalAcknowledgement = persisted
+        ? durableHandoffAcknowledgement
+        : failedHandoffAcknowledgement;
     }
 
     if (!this.auditedToolCallIds.has(event.call_id)) {
@@ -279,7 +364,91 @@ export class VoiceSidebandRuntime {
     });
     this.completedToolCallIds.add(event.call_id);
     if (result.transferred) return;
+    if (terminalAcknowledgement) {
+      this.enterTerminalHandoff(terminalAcknowledgement, false);
+      return;
+    }
     this.options.socket.send({ type: 'response.create' });
+  }
+
+  private handleResponseCreated(event: {
+    readonly response: {
+      readonly id: string;
+      readonly metadata?: Record<string, unknown> | null | undefined;
+    };
+  }): Promise<void> {
+    if (
+      this.handoffTerminal &&
+      event.response.metadata?.[terminalAcknowledgementMetadataKey] ===
+        terminalAcknowledgementMetadataValue
+    ) {
+      this.terminalAcknowledgementResponseId = event.response.id;
+    }
+    return Promise.resolve();
+  }
+
+  private async handleOutputAudioBufferStopped(event: {
+    readonly response_id: string;
+  }): Promise<void> {
+    if (
+      !this.handoffTerminal ||
+      this.terminalAcknowledgementResponseId === null ||
+      event.response_id !== this.terminalAcknowledgementResponseId
+    ) {
+      return;
+    }
+    await this.options.sessions.finalizeHandoff(this.options.context.callId);
+  }
+
+  private enterTerminalHandoff(acknowledgement: string, cancelExistingResponse: boolean): void {
+    if (this.handoffTerminal) return;
+    this.handoffTerminal = true;
+    this.schedulingBlocked = true;
+    this.authority.clearSchedulingAuthority();
+
+    // Stop server-VAD from producing any more autonomous turns. Only the manually-created bounded
+    // acknowledgement below remains authorized. This is server-side control, not a prompt request.
+    this.options.socket.send({
+      session: {
+        audio: { input: { turn_detection: null } },
+        tools: [],
+        type: 'realtime',
+      },
+      type: 'session.update',
+    });
+
+    if (cancelExistingResponse) {
+      // A final caller transcript may race a server-VAD response. Cancel generated continuation
+      // and clear already-buffered SIP audio before issuing the one approved acknowledgement.
+      this.options.socket.send({ type: 'response.cancel' });
+      this.options.socket.send({ type: 'output_audio_buffer.clear' });
+    }
+
+    this.options.socket.send({
+      response: {
+        instructions: `Say exactly this sentence and nothing else: ${JSON.stringify(acknowledgement)}`,
+        metadata: {
+          [terminalAcknowledgementMetadataKey]: terminalAcknowledgementMetadataValue,
+        },
+        tools: [],
+      },
+      type: 'response.create',
+    });
+  }
+
+  private async persistHandoffSafely(input: {
+    readonly reason: string;
+    readonly toolCallId: string;
+    readonly urgency: 'normal' | 'urgent';
+  }): Promise<boolean> {
+    try {
+      return await this.options.store.requestHandoff({
+        externalCallId: this.options.context.callId,
+        ...input,
+      });
+    } catch {
+      return false;
+    }
   }
 
   private async searchKnowledge(query: string): Promise<readonly KnowledgeSource[]> {
@@ -303,8 +472,7 @@ export class VoiceSidebandRuntime {
     ) {
       return { transferred: false };
     }
-    const handoffPersisted = await this.options.store.requestHandoff({
-      externalCallId: this.options.context.callId,
+    const handoffPersisted = await this.persistHandoffSafely({
       reason,
       toolCallId,
       urgency: 'normal',
