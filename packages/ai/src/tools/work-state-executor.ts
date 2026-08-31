@@ -57,7 +57,6 @@ function allowedByWorkState(name: string, workState: AgentConversationWorkState)
   if (!isActiveToolName(name)) return false;
   const pending = workState.pendingMutation;
   if (!pending) return !executionTools.has(name);
-  if (prepareMutationTools.has(name)) return false;
   if (!executionTools.has(name)) return true;
   return executionToolForIntent[pending.intent] === name;
 }
@@ -122,8 +121,9 @@ function redactPreparedActionIntent(
  * Turn-scoped policy wrapper around the source-controlled executor.
  *
  * It serves three purposes that must remain application-owned rather than model-owned:
- * - a pending consequential mutation prevents preparing a competing mutation and exposes only the
- *   matching execution tool;
+ * - a pending consequential mutation exposes only its matching execution tool, while prepare tools
+ *   remain available so a material customer correction can atomically replace the stale pending
+ *   intent at the trusted persistence boundary;
  * - execution tool authority is bound to the opaque action-intent id from trusted work state, so
  *   the model never receives or chooses that identifier;
  * - a customer adapter may revalidate that exact authority immediately before consequential
