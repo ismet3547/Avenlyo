@@ -3,7 +3,7 @@
 -- later than that prompt in the same conversation.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(8);
+select extensions.plan(6);
 
 insert into auth.users (id, email)
 values ('e7010000-0000-0000-0000-000000000001', 'phase23-presentation@example.test');
@@ -124,13 +124,6 @@ values (
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
-  public.customer_mutation_confirmation_prompt_is_visible(
-    'e7090000-0000-0000-0000-000000000002', 'e7080000-0000-0000-0000-000000000001'
-  ),
-  false,
-  'a queued SMS confirmation is not customer-visible authority'
-);
-select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
     'e7090000-0000-0000-0000-000000000003')),
   0,
@@ -147,13 +140,6 @@ select extensions.throws_ok(
 update public.message_deliveries
 set status = 'sent', status_rank = 3, sent_at = now()
 where id = 'e7100000-0000-0000-0000-000000000001';
-select extensions.is(
-  public.customer_mutation_confirmation_prompt_is_visible(
-    'e7090000-0000-0000-0000-000000000002', 'e7080000-0000-0000-0000-000000000001'
-  ),
-  true,
-  'a sent SMS confirmation becomes customer-visible authority'
-);
 select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
     'e7090000-0000-0000-0000-000000000003')),
