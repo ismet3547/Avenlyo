@@ -1,5 +1,18 @@
 export { buildBoundedConversationContext, buildLiveContext } from './agent/context-builder';
 export {
+  customerIntentNames,
+  highestPrecedenceIntent,
+  intentOperatingInstructions,
+  intentPrecedenceTier,
+  isInterruptIntent,
+  isMutatingCustomerIntent,
+} from './agent/intent-contract';
+export type {
+  AgentIntentFrame,
+  CustomerIntent,
+  IntentPrecedenceTier,
+} from './agent/intent-contract';
+export {
   MAX_HISTORY_CHARACTERS,
   MAX_HISTORY_MESSAGES,
   MAX_OUTPUT_TOKENS,
