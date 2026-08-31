@@ -148,6 +148,7 @@ export class MessageProcessingWorker {
     }
     if (!this.input.agent) throw new Error('Message agent is not configured.');
     const reply = await this.input.agent.replyTo(messageId);
+    if (reply.suppressed) return;
     await this.persist(messageId, reply.text, reply.handoffRequested);
   }
 

@@ -1,18 +1,5 @@
 export { buildBoundedConversationContext, buildLiveContext } from './agent/context-builder';
 export {
-  customerIntentNames,
-  highestPrecedenceIntent,
-  intentOperatingInstructions,
-  intentPrecedenceTier,
-  isInterruptIntent,
-  isMutatingCustomerIntent,
-} from './agent/intent-contract';
-export type {
-  AgentIntentFrame,
-  CustomerIntent,
-  IntentPrecedenceTier,
-} from './agent/intent-contract';
-export {
   MAX_HISTORY_CHARACTERS,
   MAX_HISTORY_MESSAGES,
   MAX_OUTPUT_TOKENS,
@@ -49,6 +36,15 @@ export type {
   AgentTurnResult,
   KnowledgeSource,
 } from './agent/types';
+export {
+  customerIntentNames,
+  highestPrecedenceIntent,
+  intentOperatingInstructions,
+  intentPrecedenceTier,
+  isInterruptIntent,
+  isMutatingCustomerIntent,
+} from './agent/intent-contract';
+export type { AgentIntentFrame, CustomerIntent, IntentPrecedenceTier } from './agent/intent-contract';
 export { actionRiskByName, mayExposeHandoffTool } from './policy/action-policy';
 export { detectSafetyEscalation } from './policy/safety';
 export {
@@ -73,6 +69,7 @@ export {
   STRONG_AGENT_KNOWLEDGE_SIMILARITY,
 } from './agent/knowledge-reliability';
 export { ControlledToolExecutor, policyHandoffCallId } from './tools/executor';
+export { WorkStateToolExecutor } from './tools/work-state-executor';
 export { activeToolDefinitions, activeToolsForIndustry } from './tools/registry';
 export {
   availableAppointmentsSchema,
