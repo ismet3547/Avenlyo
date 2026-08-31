@@ -11,6 +11,13 @@ on conflict (id) do nothing;
 insert into public.organizations (id, name, slug, created_by, primary_industry_id)
 values ('d4020000-0000-0000-0000-000000000001', 'Phase 23 correction', 'phase23-correction',
   'd4010000-0000-0000-0000-000000000001', 'veterinary');
+insert into public.billing_accounts (organization_id, stripe_customer_id, livemode, billing_state)
+values ('d4020000-0000-0000-0000-000000000001', 'cus_phase23_correction', false, 'active');
+insert into public.billing_subscriptions
+  (organization_id, stripe_customer_id, stripe_subscription_id, stripe_product_id, stripe_price_id,
+   plan_key, is_supported, stripe_status, livemode)
+values ('d4020000-0000-0000-0000-000000000001', 'cus_phase23_correction',
+  'sub_phase23_correction', 'prod_core', 'price_core', 'core', true, 'active', false);
 insert into public.locations (id, organization_id, name, timezone)
 values ('d4030000-0000-0000-0000-000000000001', 'd4020000-0000-0000-0000-000000000001',
   'Phase 23 correction location', 'UTC');
