@@ -72,7 +72,6 @@ describe('readiness evaluation', () => {
 
     expect(result.ready).toBe(false);
     expect(result.reasons).toContain('database_not_configured');
-    // The database is not called at all when it was never configured, so it is not blamed either.
     expect(result.reasons).not.toContain('database_unavailable');
   });
 
@@ -100,30 +99,23 @@ describe('readiness evaluation', () => {
     expect(result.ready).toBe(true);
   });
 
-  /**
-   * Phase 19's contract, pinned to absolute numbers rather than to the constant.
-   *
-   * The relative assertions above would have passed unchanged while this build required 18 and its
-   * web-chat poll RPC needed a function only a 19 database has -- which is exactly the state the
-   * review caught. Naming the versions is what makes the bump provable rather than assumed.
-   */
-  describe('the Phase 19 schema contract', () => {
-    it('requires 19, because the poll RPC gained an argument that only 19 has', () => {
-      expect(REQUIRED_SCHEMA_VERSION).toBe(19);
+  describe('the Phase 23 schema contract', () => {
+    it('requires 20 because current customer mutation authority depends on Phase 23 RPCs', () => {
+      expect(REQUIRED_SCHEMA_VERSION).toBe(20);
     });
 
-    it('refuses an 18 database, where get_web_chat_messages has no rate-scope argument', () => {
-      const result = readinessFor({ probe: { ok: true, schemaVersion: 18 } });
+    it('refuses a 19 database that lacks durable confirmation presentation authority', () => {
+      const result = readinessFor({ probe: { ok: true, schemaVersion: 19 } });
 
       expect(result.ready).toBe(false);
       expect(result.reasons).toEqual(['schema_incompatible']);
-      expect(result.schemaVersion).toBe(18);
+      expect(result.schemaVersion).toBe(19);
     });
 
-    it('accepts a 19 database', () => {
-      expect(readinessFor({ probe: { ok: true, schemaVersion: 19 } })).toMatchObject({
+    it('accepts a 20 database', () => {
+      expect(readinessFor({ probe: { ok: true, schemaVersion: 20 } })).toMatchObject({
         ready: true,
-        schemaVersion: 19,
+        schemaVersion: 20,
       });
     });
   });
