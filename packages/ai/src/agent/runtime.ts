@@ -135,6 +135,26 @@ function interruptFirst(calls: readonly AgentToolCall[]): readonly AgentToolCall
   ];
 }
 
+function terminalReplayRejections(
+  calls: readonly AgentToolCall[],
+  terminalCall: AgentToolCall,
+): readonly AgentToolExecution[] {
+  const terminalIndex = calls.indexOf(terminalCall);
+  if (terminalIndex < 0) return [];
+  return calls.slice(terminalIndex + 1).flatMap((call) =>
+    call.callId === terminalCall.callId
+      ? [
+          {
+            callId: call.callId,
+            name: call.name,
+            status: 'rejected' as const,
+            summary: 'Duplicate tool call ignored after terminal action.',
+          },
+        ]
+      : [],
+  );
+}
+
 function trustedMutationCompletionReply(
   call: AgentToolCall,
   result: ToolExecutionResult,
@@ -384,7 +404,8 @@ export class AgentRuntime {
         });
       }
 
-      for (const call of interruptFirst(providerResult.toolCalls)) {
+      const orderedCalls = interruptFirst(providerResult.toolCalls);
+      for (const call of orderedCalls) {
         if (executedCallIds.has(call.callId)) {
           const duplicate: AgentToolExecution = {
             callId: call.callId,
@@ -435,10 +456,11 @@ export class AgentRuntime {
 
         // Handoff changes conversation ownership. Once it succeeds, this runtime must stop
         // competing for normal conversation work and must not execute any later call the same
-        // provider batch happened to return. The response is source-controlled so an unknown
-        // provider mutation cannot be paraphrased into accidental success or definite failure.
+        // provider batch happened to return. Exact provider call-id replays are still represented
+        // as rejected diagnostics, but they never reach an executor or provider side effect.
         const handoffReply = trustedHandoffReply(call, result);
         if (handoffReply) {
+          executions.push(...terminalReplayRejections(orderedCalls, call));
           return terminalToolTurn({
             executions,
             handoffRequested: true,
