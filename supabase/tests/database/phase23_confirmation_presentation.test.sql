@@ -85,13 +85,13 @@ values
    'e7030000-0000-0000-0000-000000000001', 'e7080000-0000-0000-0000-000000000001',
    'inbound', 'text', 'Yes after the prompt', 'sms', 'customer', now());
 insert into public.message_deliveries
-  (id, organization_id, location_id, message_id, provider, status, status_rank)
+  (id, organization_id, location_id, message_id, provider, status)
 values (
   'e7100000-0000-0000-0000-000000000001',
   'e7020000-0000-0000-0000-000000000001',
   'e7030000-0000-0000-0000-000000000001',
   'e7090000-0000-0000-0000-000000000002',
-  'twilio', 'queued', 0
+  'twilio', 'queued'
 );
 insert into public.booking_candidates
   (id, organization_id, location_id, conversation_id, integration_id, appointment_type_id,
@@ -138,7 +138,7 @@ select extensions.throws_ok(
 );
 
 update public.message_deliveries
-set status = 'sent', status_rank = 3, sent_at = now()
+set status = 'sent', sent_at = now()
 where id = 'e7100000-0000-0000-0000-000000000001';
 select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
