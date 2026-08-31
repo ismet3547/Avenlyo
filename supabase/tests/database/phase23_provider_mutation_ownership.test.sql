@@ -1,7 +1,7 @@
 -- Phase 23: fresh customer scheduling mutations serialize against human conversation ownership.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(14);
+select extensions.plan(16);
 
 insert into auth.users (id, email)
 values ('c3010000-0000-0000-0000-000000000001', 'phase23-ownership@example.test');
@@ -183,7 +183,7 @@ select extensions.is(
 );
 
 update public.conversations set ai_mode = 'ai'
-where id = 'c3090000-0000-0000-0000-000000000001';
+where id = 'c3090000-0000-0000-000000000001';
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
