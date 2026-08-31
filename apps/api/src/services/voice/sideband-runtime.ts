@@ -168,17 +168,17 @@ export class VoiceSidebandRuntime {
     this.options.sessions.recordActivity(this.options.context.callId);
 
     // Interrupts are derived from the trusted final caller transcript, not from model tool intent.
-    // Safety wins when the same utterance also asks for a person.
-    const interrupt =
-      detectSafetyEscalation(this.options.context.industry, event.transcript) ??
-      detectExplicitHumanRequest(event.transcript);
+    // Safety wins when the same utterance also asks for a person. Type and urgency are deliberately
+    // separate: some safety policies are normal urgency and must still retain a safety audit key.
+    const safety = detectSafetyEscalation(this.options.context.industry, event.transcript);
+    const interrupt = safety ?? detectExplicitHumanRequest(event.transcript);
     if (interrupt) {
       this.schedulingBlocked = true;
       this.authority.clearSchedulingAuthority();
       await this.options.store.requestHandoff({
         externalCallId: this.options.context.callId,
         reason: interrupt.reason,
-        toolCallId: `${interrupt.urgency === 'urgent' ? 'safety' : 'human-request'}:${event.item_id}`,
+        toolCallId: `${safety ? 'safety' : 'human-request'}:${event.item_id}`,
         urgency: interrupt.urgency,
       });
     }
