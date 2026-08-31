@@ -11,7 +11,10 @@ import {
   type VoiceToolExecution,
 } from '@avenlyo/voice';
 
-import type { CustomerSchedulingCapabilities } from '../scheduling/customer-scheduling-capabilities.js';
+import {
+  noCustomerSchedulingCapabilities,
+  type CustomerSchedulingCapabilities,
+} from '../scheduling/customer-scheduling-capabilities.js';
 import type { VoiceStore } from './store.js';
 import { VoiceToolAuthorityState } from './tool-authority.js';
 
@@ -20,7 +23,7 @@ export interface VoiceSidebandRuntimeOptions {
   readonly context: VoiceCallContext;
   readonly control: RealtimeCallControlProvider;
   readonly embed: (query: string) => Promise<readonly number[]>;
-  readonly schedulingCapabilities: CustomerSchedulingCapabilities;
+  readonly schedulingCapabilities?: CustomerSchedulingCapabilities;
   readonly sessions: VoiceSessionManager;
   readonly socket: VoiceRealtimeSocket;
   readonly scheduling?: VoiceSchedulingServices;
@@ -52,7 +55,9 @@ export class VoiceSidebandRuntime {
   private schedulingBlocked = false;
 
   public constructor(private readonly options: VoiceSidebandRuntimeOptions) {
-    this.authority = new VoiceToolAuthorityState(options.schedulingCapabilities);
+    this.authority = new VoiceToolAuthorityState(
+      options.schedulingCapabilities ?? noCustomerSchedulingCapabilities,
+    );
     const transferAllowed =
       options.configuration.transferEnabled &&
       options.configuration.providerTransferEnabled &&
@@ -199,12 +204,13 @@ export class VoiceSidebandRuntime {
       name: event.name,
       schedulingBlocked: this.schedulingBlocked,
     };
-    const result = this.authority.allows(event.name)
-      ? this.authority.observe(
-          this.authority.bind(rawCall),
-          await this.executor.execute(this.authority.bind(rawCall)),
-        )
-      : unavailableCapability();
+    let result: VoiceToolExecution;
+    if (this.authority.allows(event.name)) {
+      const trustedCall = this.authority.bind(rawCall);
+      result = this.authority.observe(trustedCall, await this.executor.execute(trustedCall));
+    } else {
+      result = unavailableCapability();
+    }
     if (!this.auditedToolCallIds.has(event.call_id)) {
       this.auditedToolCallIds.add(event.call_id);
       await this.options.store.recordToolExecution({
