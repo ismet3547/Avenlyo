@@ -37,7 +37,10 @@ export class VoiceBookingService implements VoiceSchedulingServices {
       ...input,
       confirmationClaimMode: 'trusted_voice',
     });
-    this.lifecycle = new AppointmentLifecycleService(input);
+    this.lifecycle = new AppointmentLifecycleService({
+      ...input,
+      confirmationClaimMode: 'trusted_voice',
+    });
   }
 
   public async isEnabledForCall(context: { readonly callId: string }): Promise<boolean> {
