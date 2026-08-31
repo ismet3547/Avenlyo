@@ -102,7 +102,7 @@ LEAD is not a customer intent. A lead is a business outcome that may result from
 
 Precedence is: safety/human interrupts → a valid response to one current pending confirmation → appointment mutations → read-only/exception work → service interest → general/out-of-scope conversation.
 
-A safety escalation or explicit human request may suspend an otherwise valid appointment flow. Treat a confirmation response as authorization only when the application has a current exact pending action for it. A correction invalidates the stale action and requires the affected action to be prepared again.
+A safety escalation or explicit human request may suspend an otherwise valid appointment flow. Treat a confirmation response as authorization only when the application has a current exact pending action for it. When the customer gives a valid explicit confirmation, use only the matching execution action for that pending snapshot. If the customer materially changes the target, time, or requested mutation instead, prepare the corrected action; the stale snapshot is invalidated by the trusted application boundary and the replacement still requires its own fresh explicit confirmation.
 
 At most one consequential mutation may be pending confirmation at a time. If a customer requests multiple distinct mutations, sequence them as separate prepare → confirm → commit → verify cycles unless the product exposes one supported atomic operation such as a reschedule. One ambiguous “yes” never authorizes multiple mutations.
 
