@@ -21,6 +21,10 @@ import type { SchedulingBookingService } from '../scheduling/scheduling-booking-
 import { LeadCaptureService } from '../leads/lead-capture-service.js';
 
 import { loadMessageAgentWorkState } from './agent-work-state.js';
+import {
+  buildMutationConfirmationText,
+  type MutationConfirmationAuthority,
+} from './mutation-confirmation.js';
 
 interface HistoryValue {
   readonly author_type?: unknown;
@@ -29,6 +33,7 @@ interface HistoryValue {
 
 export interface ConversationAgentReply {
   readonly handoffRequested: boolean;
+  readonly mutationConfirmation?: MutationConfirmationAuthority;
   readonly suppressed?: boolean;
   readonly text: string;
 }
@@ -272,6 +277,17 @@ export class ConversationAgentService {
     if (result.suppressedReason) {
       return { handoffRequested: false, suppressed: true, text: '' };
     }
+
+    const prepared = executor.preparedMutationAuthority();
+    if (prepared) {
+      const mutationConfirmation: MutationConfirmationAuthority = {
+        actionIntentId: prepared.actionIntentId,
+        intent: prepared.intent,
+      };
+      const text = await buildMutationConfirmationText(this.input.supabase, mutationConfirmation);
+      return { handoffRequested: false, mutationConfirmation, text };
+    }
+
     if (context.channel_type === 'sms' && result.text.length > 800 && !result.handoffRequested) {
       await this.input.supabase.rpc('request_message_handoff', {
         target_inbound_message_id: inboundMessageId,
