@@ -180,7 +180,7 @@ describe('scheduling under billing suppression', () => {
   it('takes no slot lease and writes to no provider when the booking claim declines', async () => {
     const spy = connectorSpy();
     const { client, rpc } = supabaseWith((name) =>
-      name === 'claim_conversation_scheduling_booking_intent'
+      name === 'claim_presented_conversation_scheduling_booking_intent'
         ? {
             data: [
               {
