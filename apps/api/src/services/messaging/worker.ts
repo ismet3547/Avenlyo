@@ -14,6 +14,8 @@ import type { TwilioOutboundClient } from './twilio.js';
 import type { ConversationAgentService } from './conversation-agent.js';
 
 const IDLE_POLL_MS = 1_000;
+const REQUIRED_HANDOFF_REASON =
+  'Avenlyo requires human review before automated handling can continue.';
 
 /** Small in-process worker backed by durable SQL claims; no timer spin occurs while work is running. */
 export class MessageProcessingWorker {
@@ -149,7 +151,27 @@ export class MessageProcessingWorker {
     if (!this.input.agent) throw new Error('Message agent is not configured.');
     const reply = await this.input.agent.replyTo(messageId);
     if (reply.suppressed) return;
+    if (reply.handoffRequested) await this.ensureDurableHandoff(messageId);
     await this.persist(messageId, reply.text, reply.handoffRequested);
+  }
+
+  /**
+   * `handoffRequested` is not enough authority to tell a customer that a team was notified.
+   * Before the acknowledgement crosses the transcript persistence boundary, coalesce/create the
+   * durable customer handoff through the same trusted SQL primitive used by explicit handoff tools.
+   * A replay that returns an existing handoff is success; an unavailable handoff fails closed and
+   * leaves the inbound job retryable instead of persisting a false acknowledgement.
+   */
+  private async ensureDurableHandoff(messageId: string): Promise<void> {
+    const { data, error } = await this.input.supabase.rpc('request_message_handoff', {
+      target_inbound_message_id: messageId,
+      target_reason: REQUIRED_HANDOFF_REASON,
+      target_tool_call_id: `runtime-review:${messageId}`,
+      target_urgency: 'normal',
+    });
+    if (error || !data?.[0]?.handoff_id) {
+      throw new Error('Required human handoff could not be persisted.');
+    }
   }
 
   private async persist(messageId: string, body: string, handoffRequested: boolean): Promise<void> {
