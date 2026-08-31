@@ -22,6 +22,25 @@ export interface ConversationSchedulingTurn {
   readonly trustedTransportPhoneE164?: string | null;
 }
 
+interface PresentedBookingClaimClient {
+  rpc(
+    name: 'claim_presented_conversation_scheduling_booking_intent',
+    args: {
+      readonly target_booking_intent_id: string;
+      readonly target_conversation_id: string;
+      readonly target_inbound_message_id: string;
+      readonly target_tool_call_id: string;
+    },
+  ): Promise<{
+    readonly data: readonly {
+      readonly booking_intent_id: string;
+      readonly confirmed_message_id: string | null;
+      readonly state: string;
+    }[] | null;
+    readonly error: unknown;
+  }>;
+}
+
 function utcDate(value: string): string | null {
   const parsed = new Date(`${value}T00:00:00.000Z`);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
@@ -208,8 +227,9 @@ export class SchedulingBookingService {
     turn: ConversationSchedulingTurn,
   ) {
     if (!turn.triggeringInboundMessageId) return { outcome: 'confirmation_required' as const };
-    const { data, error } = await this.input.supabase.rpc(
-      'claim_conversation_scheduling_booking_intent',
+    const presentedClaimClient = this.input.supabase as unknown as PresentedBookingClaimClient;
+    const { data, error } = await presentedClaimClient.rpc(
+      'claim_presented_conversation_scheduling_booking_intent',
       {
         target_booking_intent_id: input.bookingIntentId,
         target_conversation_id: turn.conversationId,
