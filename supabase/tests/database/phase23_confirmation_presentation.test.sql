@@ -121,6 +121,8 @@ values (
   'e7090000-0000-0000-0000-000000000002'
 );
 
+-- Public trusted reads execute as the backend role; fixture updates below deliberately return to
+-- postgres because service_role has no direct table DML privilege and must never gain one for tests.
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
@@ -129,6 +131,8 @@ select extensions.is(
   0,
   'a queued SMS confirmation does not expose a pending execution authority'
 );
+reset role;
+
 select extensions.throws_ok(
   $$update public.booking_intents
     set status = 'booking', confirmed_message_id = 'e7090000-0000-0000-0000-000000000003'
@@ -140,12 +144,17 @@ select extensions.throws_ok(
 update public.message_deliveries
 set status = 'sent', sent_at = now()
 where id = 'e7100000-0000-0000-0000-000000000001';
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
     'e7090000-0000-0000-0000-000000000003')),
   1,
   'a visible bound SMS confirmation exposes exactly one pending authority'
 );
+reset role;
+
 select extensions.throws_ok(
   $$update public.booking_intents
     set status = 'booking', confirmed_message_id = 'e7090000-0000-0000-0000-000000000001'
@@ -159,7 +168,6 @@ select extensions.lives_ok(
     where id = 'e7120000-0000-0000-0000-000000000001'$$,
   'a later customer confirmation may cross the guarded transition once the prompt is visible'
 );
-reset role;
 select extensions.is(
   (select status from public.booking_intents where id = 'e7120000-0000-0000-0000-000000000001'),
   'booking',
