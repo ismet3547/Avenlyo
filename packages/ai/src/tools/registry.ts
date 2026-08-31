@@ -93,12 +93,19 @@ const cancellationTool: ToolDefinition<typeof appointmentChangeExecutionSchema> 
   schema: appointmentChangeExecutionSchema,
 };
 
+export interface LifecycleToolCapabilities {
+  readonly cancel?: boolean;
+  readonly lookup?: boolean;
+  readonly reschedule?: boolean;
+}
+
 /** Source-controlled registry: no customer, website, or model input can add a tool. */
 export function activeToolDefinitions(
   industry: IndustryPack,
   schedulingEnabled = false,
   lifecycleEnabled = false,
   leadCaptureEnabled = false,
+  lifecycleCapabilities?: LifecycleToolCapabilities,
 ): readonly ToolDefinition<ZodType>[] {
   const base = mayExposeHandoffTool(industry) ? [searchTool, handoffTool] : [searchTool];
   const withLead =
@@ -108,17 +115,18 @@ export function activeToolDefinitions(
   const scheduling = schedulingEnabled
     ? [...withLead, availabilityTool, prepareTool, bookTool]
     : withLead;
-  return lifecycleEnabled
-    ? [
-        ...scheduling,
-        upcomingTool,
-        rescheduleOptionsTool,
-        prepareRescheduleTool,
-        prepareCancellationTool,
-        rescheduleTool,
-        cancellationTool,
-      ]
-    : scheduling;
+  if (!lifecycleEnabled) return scheduling;
+
+  const lookup = lifecycleCapabilities?.lookup ?? true;
+  const reschedule = lifecycleCapabilities?.reschedule ?? true;
+  const cancel = lifecycleCapabilities?.cancel ?? true;
+  const lifecycle: ToolDefinition<ZodType>[] = [];
+  if (lookup || reschedule || cancel) lifecycle.push(upcomingTool);
+  if (reschedule) {
+    lifecycle.push(rescheduleOptionsTool, prepareRescheduleTool, rescheduleTool);
+  }
+  if (cancel) lifecycle.push(prepareCancellationTool, cancellationTool);
+  return [...scheduling, ...lifecycle];
 }
 
 export function activeToolsForIndustry(industry: IndustryPack): readonly AgentFunctionTool[] {
