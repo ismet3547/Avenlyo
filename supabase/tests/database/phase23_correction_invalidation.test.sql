@@ -183,13 +183,13 @@ select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
     'd4100000-0000-0000-0000-000000000002')),
-  1, 'work state still sees a booking intent after the candidate becomes consumed'
+  0, 'work state does not expose a prepared booking before its confirmation prompt is presented'
 );
 select extensions.is(
   (select pending_mutation_intent_id from public.get_message_agent_work_state(
     'd4100000-0000-0000-0000-000000000002')),
-  current_setting('phase23.booking_a')::uuid,
-  'work state binds the consumed-candidate booking to its opaque pending authority'
+  null::uuid,
+  'work state exposes no opaque authority before the booking confirmation is presented'
 );
 select extensions.is(
   (select booking_intent_id from public.prepare_conversation_scheduling_booking_intent(
@@ -290,7 +290,7 @@ select extensions.is(
 select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
     'd4100000-0000-0000-0000-000000000004')),
-  1, 'cross-kind corrections finish with exactly one pending consequential mutation'
+  0, 'cross-kind correction remains non-actionable until its replacement prompt is presented'
 );
 reset role;
 
