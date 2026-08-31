@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   detectExplicitHumanRequest,
   detectSafetyEscalation,
@@ -34,12 +36,33 @@ export interface VoiceSidebandRuntimeOptions {
   readonly store: VoiceStore;
 }
 
+const mutationReviewTools = new Set(['book_appointment', 'reschedule_appointment', 'cancel_appointment']);
+
 function unavailableCapability(): VoiceToolExecution {
   return {
     handoffRequested: false,
     modelOutput: JSON.stringify({ ok: false, message: 'The requested action is unavailable.' }),
     status: 'rejected',
     summary: 'Tool is unavailable for the current trusted capability state.',
+    transferred: false,
+  };
+}
+
+function mutationReviewCallId(callId: string): string {
+  const digest = createHash('sha256').update(callId).digest('hex');
+  return `mutation-review-${digest.slice(0, 48)}`;
+}
+
+function handoffUnavailableResult(): VoiceToolExecution {
+  return {
+    handoffRequested: false,
+    modelOutput: JSON.stringify({
+      ok: false,
+      message:
+        'The appointment action cannot continue safely, and the team could not be notified automatically. Do not retry this appointment action.',
+    }),
+    status: 'failed',
+    summary: 'Appointment mutation requires human review, but handoff persistence failed.',
     transferred: false,
   };
 }
@@ -220,6 +243,23 @@ export class VoiceSidebandRuntime {
     } else {
       result = unavailableCapability();
     }
+
+    // Provider uncertainty / handoff-required scheduling outcomes are not merely model hints.
+    // Before another realtime response is allowed, persist/coalesce durable human work using the
+    // trusted call identity, then permanently close scheduling authority for this live call. This
+    // covers both provider_state_unknown and local completion failures after provider success.
+    if (result.handoffRequested && mutationReviewTools.has(event.name)) {
+      this.schedulingBlocked = true;
+      this.authority.clearSchedulingAuthority();
+      const persisted = await this.options.store.requestHandoff({
+        externalCallId: this.options.context.callId,
+        reason: 'An appointment action requires human review before automated handling can continue.',
+        toolCallId: mutationReviewCallId(event.call_id),
+        urgency: 'normal',
+      });
+      if (!persisted) result = handoffUnavailableResult();
+    }
+
     if (!this.auditedToolCallIds.has(event.call_id)) {
       this.auditedToolCallIds.add(event.call_id);
       await this.options.store.recordToolExecution({
