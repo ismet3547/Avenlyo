@@ -1,4 +1,8 @@
-import { detectSafetyEscalation, type KnowledgeSource } from '@avenlyo/ai';
+import {
+  detectExplicitHumanRequest,
+  detectSafetyEscalation,
+  type KnowledgeSource,
+} from '@avenlyo/ai';
 import {
   VoiceToolExecutor,
   sidebandEventSchema,
@@ -162,15 +166,20 @@ export class VoiceSidebandRuntime {
     this.latestCallerTranscript = event.transcript;
     this.latestCallerTranscriptMessageId = stored;
     this.options.sessions.recordActivity(this.options.context.callId);
-    const safety = detectSafetyEscalation(this.options.context.industry, event.transcript);
-    if (safety) {
+
+    // Interrupts are derived from the trusted final caller transcript, not from model tool intent.
+    // Safety wins when the same utterance also asks for a person.
+    const interrupt =
+      detectSafetyEscalation(this.options.context.industry, event.transcript) ??
+      detectExplicitHumanRequest(event.transcript);
+    if (interrupt) {
       this.schedulingBlocked = true;
       this.authority.clearSchedulingAuthority();
       await this.options.store.requestHandoff({
         externalCallId: this.options.context.callId,
-        reason: safety.reason,
-        toolCallId: `safety:${event.item_id}`,
-        urgency: safety.urgency,
+        reason: interrupt.reason,
+        toolCallId: `${interrupt.urgency === 'urgent' ? 'safety' : 'human-request'}:${event.item_id}`,
+        urgency: interrupt.urgency,
       });
     }
   }
