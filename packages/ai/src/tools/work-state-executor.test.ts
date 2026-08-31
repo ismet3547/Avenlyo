@@ -119,6 +119,53 @@ describe('WorkStateToolExecutor', () => {
     );
   });
 
+  it('redacts prepared action authority ids before returning tool output to the model', async () => {
+    const authorityId = '33333333-3333-4333-8333-333333333333';
+    const execute = vi.fn().mockResolvedValue({
+      execution: {
+        callId: 'prepare-1',
+        name: 'prepare_appointment_booking',
+        status: 'succeeded',
+        summary: 'ready',
+      },
+      handoffRequested: false,
+      modelOutput: JSON.stringify({
+        intent: {
+          bookingIntentId: authorityId,
+          startsAt: '2026-09-01T10:00:00Z',
+          timezone: 'UTC',
+          typeName: 'Consultation',
+        },
+        outcome: 'ready',
+      }),
+      sources: [],
+    } satisfies ToolExecutionResult);
+    const executor: ToolExecutor = {
+      execute,
+      tools: [tool('prepare_appointment_booking', { candidate_id: { type: 'string' } })],
+    };
+    const scoped = new WorkStateToolExecutor(executor, state(null));
+
+    const result = await scoped.execute(
+      {
+        arguments: JSON.stringify({ candidate_id: '44444444-4444-4444-8444-444444444444' }),
+        callId: 'prepare-1',
+        name: 'prepare_appointment_booking',
+      },
+      context,
+    );
+
+    expect(result.modelOutput).not.toContain(authorityId);
+    expect(JSON.parse(result.modelOutput)).toEqual({
+      intent: {
+        startsAt: '2026-09-01T10:00:00Z',
+        timezone: 'UTC',
+        typeName: 'Consultation',
+      },
+      outcome: 'ready',
+    });
+  });
+
   it('rejects a mismatched execution tool without reaching the delegate', async () => {
     const { execute, executor } = delegate();
     const scoped = new WorkStateToolExecutor(
