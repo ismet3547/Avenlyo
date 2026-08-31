@@ -23,8 +23,12 @@ function testStore() {
   const recordToolExecution = vi.fn().mockResolvedValue(undefined);
   const recordTranscript = vi
     .fn()
-    .mockImplementation(async ({ externalItemId }: { readonly externalItemId: string }) =>
-      externalItemId === 'item_missing' ? null : '00000000-0000-4000-8000-000000000014',
+    .mockImplementation(({ externalItemId }: { readonly externalItemId: string }) =>
+      Promise.resolve(
+        externalItemId === 'item_missing'
+          ? null
+          : '00000000-0000-4000-8000-000000000014',
+      ),
     );
   const requestHandoff = vi.fn().mockResolvedValue(true);
   return {
