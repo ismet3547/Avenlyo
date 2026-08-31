@@ -12,11 +12,15 @@
 --                          truth.
 --
 -- Existing recovery states deliberately bypass the human-control veto. They may already have crossed
--- the external boundary and therefore stay reconciliation-only. The wrappers below delegate all
--- confirmation, billing, capability, freshness, and recovery semantics to the existing authoritative
--- claim functions instead of copying them.
+-- the external boundary and therefore stay reconciliation-only. We preserve every existing claim
+-- rule (confirmation, billing, capability, freshness, idempotency, recovery) by renaming the current
+-- authoritative functions and wrapping them under their original names. Existing Web/SMS/Voice code
+-- therefore receives the ownership boundary without a second implementation of scheduling policy.
 
-create function public.claim_customer_conversation_scheduling_booking_intent(
+alter function public.claim_conversation_scheduling_booking_intent(uuid, uuid, uuid, text)
+  rename to claim_conversation_scheduling_booking_intent_without_ownership;
+
+create function public.claim_conversation_scheduling_booking_intent(
   target_conversation_id uuid,
   target_inbound_message_id uuid,
   target_booking_intent_id uuid,
@@ -36,6 +40,7 @@ begin
     raise exception using errcode = '22023', message = 'Customer booking claim is invalid';
   end if;
 
+  -- Same transaction lock as human ownership. The state read below cannot race a takeover.
   perform public.lock_conversation_ownership(target_conversation_id);
 
   select * into conversation_row
@@ -75,7 +80,7 @@ begin
 
   return query
   select claim.state, claim.booking_intent_id, claim.confirmed_message_id
-  from public.claim_conversation_scheduling_booking_intent(
+  from public.claim_conversation_scheduling_booking_intent_without_ownership(
     target_conversation_id,
     target_inbound_message_id,
     target_booking_intent_id,
@@ -84,7 +89,10 @@ begin
 end;
 $$;
 
-create function public.claim_customer_appointment_change_intent(
+alter function public.claim_appointment_change_intent(uuid, uuid, uuid, text)
+  rename to claim_appointment_change_intent_without_ownership;
+
+create function public.claim_appointment_change_intent(
   target_conversation_id uuid,
   target_inbound_message_id uuid,
   target_change_intent_id uuid,
@@ -140,7 +148,7 @@ begin
 
   return query
   select claim.state, claim.change_intent_id, claim.confirmed_message_id
-  from public.claim_appointment_change_intent(
+  from public.claim_appointment_change_intent_without_ownership(
     target_conversation_id,
     target_inbound_message_id,
     target_change_intent_id,
@@ -149,11 +157,17 @@ begin
 end;
 $$;
 
-revoke all on function public.claim_customer_conversation_scheduling_booking_intent(uuid, uuid, uuid, text)
+-- The renamed implementations are implementation details. Only the ownership-aware original names
+-- remain executable by the scheduling service role.
+revoke all on function public.claim_conversation_scheduling_booking_intent_without_ownership(uuid, uuid, uuid, text)
+  from public, anon, authenticated, service_role;
+revoke all on function public.claim_appointment_change_intent_without_ownership(uuid, uuid, uuid, text)
+  from public, anon, authenticated, service_role;
+revoke all on function public.claim_conversation_scheduling_booking_intent(uuid, uuid, uuid, text)
   from public, anon, authenticated;
-revoke all on function public.claim_customer_appointment_change_intent(uuid, uuid, uuid, text)
+revoke all on function public.claim_appointment_change_intent(uuid, uuid, uuid, text)
   from public, anon, authenticated;
-grant execute on function public.claim_customer_conversation_scheduling_booking_intent(uuid, uuid, uuid, text)
+grant execute on function public.claim_conversation_scheduling_booking_intent(uuid, uuid, uuid, text)
   to service_role;
-grant execute on function public.claim_customer_appointment_change_intent(uuid, uuid, uuid, text)
+grant execute on function public.claim_appointment_change_intent(uuid, uuid, uuid, text)
   to service_role;
