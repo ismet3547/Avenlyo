@@ -71,6 +71,8 @@ export {
   STRONG_AGENT_KNOWLEDGE_SIMILARITY,
 } from './agent/knowledge-reliability';
 export { ControlledToolExecutor, policyHandoffCallId } from './tools/executor';
+export { CustomerCapabilityToolExecutor } from './tools/customer-capability-executor';
+export type { CustomerSchedulingToolCapabilities } from './tools/customer-capability-executor';
 export { WorkStateToolExecutor } from './tools/work-state-executor';
 export { activeToolDefinitions, activeToolsForIndustry } from './tools/registry';
 export {
