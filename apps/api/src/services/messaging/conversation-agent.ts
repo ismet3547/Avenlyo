@@ -215,7 +215,16 @@ export class ConversationAgentService {
           }
         : {}),
     });
-    const executor = new WorkStateToolExecutor(baseExecutor, workState);
+    const executor = new WorkStateToolExecutor(baseExecutor, workState, async (pending) => {
+      const current = await loadMessageAgentWorkState(this.input.supabase, inboundMessageId);
+      if (current.kind !== 'ready' || current.workState.control !== 'ai_active') return false;
+      const currentPending = current.workState.pendingMutation;
+      return (
+        currentPending !== null &&
+        currentPending.actionIntentId === pending.actionIntentId &&
+        currentPending.intent === pending.intent
+      );
+    });
     const runtime = new AgentRuntime(this.provider, executor, this.input.model);
     const locationAddress = toRecord(context.location_address);
     const result = await runtime.runTurn({
