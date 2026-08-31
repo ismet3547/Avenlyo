@@ -62,19 +62,42 @@ begin
     raise exception using errcode = '42501', message = 'Booking intent is not available';
   end if;
 
-  -- A takeover-vetoed intent never comes back to life after Resume AI.
-  if intent.status = 'failed' and intent.failure_category = 'human_control' then
-    return query select 'human_control'::text, intent.id, intent.confirmed_message_id;
+  -- Recovery truth outranks both current ownership and current entitlement. These states may already
+  -- have crossed the provider boundary and must remain reconciliation/persistence-only.
+  if intent.status in ('completed', 'provider_success_pending_persistence', 'provider_state_unknown', 'booking') then
+    return query
+    select claim.state, claim.booking_intent_id, claim.confirmed_message_id
+    from public.claim_conversation_scheduling_booking_intent_without_ownership(
+      target_conversation_id,
+      target_inbound_message_id,
+      target_booking_intent_id,
+      target_tool_call_id
+    ) claim;
     return;
   end if;
 
-  -- Only a fresh, not-yet-claimed mutation loses to current human control. Recovery/completed states
-  -- are delegated below because they may already represent external provider truth.
+  -- A takeover-vetoed intent never comes back to life after Resume AI. `configuration_changed` is
+  -- the existing application-visible unavailable state; the durable failure_category retains the
+  -- precise internal reason without adding a new runtime state contract.
+  if intent.status = 'failed' and intent.failure_category = 'human_control' then
+    return query select 'configuration_changed'::text, intent.id, intent.confirmed_message_id;
+    return;
+  end if;
+
   if conversation_row.ai_mode <> 'ai' and intent.status = 'awaiting_confirmation' then
     update public.booking_intents
     set status = 'failed', failure_category = 'human_control', updated_at = now()
     where id = intent.id and status = 'awaiting_confirmation';
-    return query select 'human_control'::text, intent.id, null::uuid;
+    return query select 'configuration_changed'::text, intent.id, null::uuid;
+    return;
+  end if;
+
+  -- Keep the public provider-write claim independently entitlement-safe. The delegated Phase 17
+  -- implementation repeats this check before the actual transition; the duplicate stable read is
+  -- intentional defence in depth and preserves the recovery-before-billing contract at this name.
+  if intent.status = 'awaiting_confirmation'
+    and not public.billing_feature_available(intent.organization_id, 'appointments') then
+    return query select 'billing_unavailable'::text, intent.id, null::uuid;
     return;
   end if;
 
@@ -133,8 +156,22 @@ begin
     raise exception using errcode = '42501', message = 'Customer appointment-change intent is not available';
   end if;
 
+  -- Completed/unknown/executing states may already represent provider truth; delegate them even if a
+  -- human took conversation ownership after the operation claim.
+  if intent.status in ('completed', 'provider_success_pending_persistence', 'provider_state_unknown', 'executing', 'handoff_required') then
+    return query
+    select claim.state, claim.change_intent_id, claim.confirmed_message_id
+    from public.claim_appointment_change_intent_without_ownership(
+      target_conversation_id,
+      target_inbound_message_id,
+      target_change_intent_id,
+      target_tool_call_id
+    ) claim;
+    return;
+  end if;
+
   if intent.status = 'failed' and intent.failure_category = 'human_control' then
-    return query select 'human_control'::text, intent.id, intent.confirmed_message_id;
+    return query select 'configuration_changed'::text, intent.id, intent.confirmed_message_id;
     return;
   end if;
 
@@ -142,7 +179,7 @@ begin
     update public.appointment_change_intents
     set status = 'failed', failure_category = 'human_control', updated_at = now()
     where id = intent.id and status = 'awaiting_confirmation';
-    return query select 'human_control'::text, intent.id, null::uuid;
+    return query select 'configuration_changed'::text, intent.id, null::uuid;
     return;
   end if;
 
