@@ -31,6 +31,15 @@ const prepareMutationTools = new Set<ActiveToolName>([
 
 type PendingMutation = NonNullable<AgentConversationWorkState['pendingMutation']>;
 
+/**
+ * Application-only authority captured from a trusted prepare result before the model-visible payload
+ * is redacted. Never serialize this object into provider input or customer output.
+ */
+export interface PreparedMutationAuthority {
+  readonly actionIntentId: string;
+  readonly intent: PendingMutation['intent'];
+}
+
 export type MutationAuthorityRevalidator = (
   pending: PendingMutation,
   context: AgentExecutionContext,
@@ -86,6 +95,39 @@ function rejected(
   };
 }
 
+function preparedAuthority(
+  call: AgentToolCall,
+  result: ToolExecutionResult,
+): PreparedMutationAuthority | null {
+  if (!isActiveToolName(call.name) || !prepareMutationTools.has(call.name)) return null;
+  if (result.execution.status !== 'succeeded') return null;
+  try {
+    const parsed = JSON.parse(result.modelOutput) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const record = parsed as Record<string, unknown>;
+    if (record.outcome !== 'ready') return null;
+    const intent = record.intent;
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent)) return null;
+    const fields = intent as Record<string, unknown>;
+    if (call.name === 'prepare_appointment_booking') {
+      return typeof fields.bookingIntentId === 'string' && fields.bookingIntentId
+        ? { actionIntentId: fields.bookingIntentId, intent: 'APPOINTMENT_BOOK' }
+        : null;
+    }
+    const changeIntentId = fields.changeIntentId;
+    if (typeof changeIntentId !== 'string' || !changeIntentId) return null;
+    return {
+      actionIntentId: changeIntentId,
+      intent:
+        call.name === 'prepare_appointment_cancellation'
+          ? 'APPOINTMENT_CANCEL'
+          : 'APPOINTMENT_RESCHEDULE',
+    };
+  } catch {
+    return null;
+  }
+}
+
 function redactPreparedActionIntent(
   call: AgentToolCall,
   result: ToolExecutionResult,
@@ -120,18 +162,21 @@ function redactPreparedActionIntent(
 /**
  * Turn-scoped policy wrapper around the source-controlled executor.
  *
- * It serves three purposes that must remain application-owned rather than model-owned:
+ * It serves four purposes that must remain application-owned rather than model-owned:
  * - a pending consequential mutation exposes only its matching execution tool, while prepare tools
  *   remain available so a material customer correction can atomically replace the stale pending
  *   intent at the trusted persistence boundary;
  * - execution tool authority is bound to the opaque action-intent id from trusted work state, so
  *   the model never receives or chooses that identifier;
+ * - a successful prepare retains the opaque authority only for the application adapter while its
+ *   model-visible payload is redacted, allowing the adapter to persist/bind the exact confirmation;
  * - a customer adapter may revalidate that exact authority immediately before consequential
  *   execution, closing takeover, expiry, correction, and conflict races without teaching this
  *   package anything about the database.
  */
 export class WorkStateToolExecutor implements ToolExecutor {
   public readonly tools: readonly AgentFunctionTool[];
+  private preparedMutation: PreparedMutationAuthority | null = null;
 
   public constructor(
     private readonly delegate: ToolExecutor,
@@ -141,6 +186,11 @@ export class WorkStateToolExecutor implements ToolExecutor {
     this.tools = delegate.tools
       .filter((tool) => allowedByWorkState(tool.name, workState))
       .map(publicTool);
+  }
+
+  /** Server-side only. Callers must never serialize the returned opaque identifier to a model/UI. */
+  public preparedMutationAuthority(): PreparedMutationAuthority | null {
+    return this.preparedMutation;
   }
 
   public searchKnowledgeForRuntime(
@@ -193,6 +243,9 @@ export class WorkStateToolExecutor implements ToolExecutor {
       );
     }
 
-    return redactPreparedActionIntent(call, await this.delegate.execute(call, context));
+    const result = await this.delegate.execute(call, context);
+    const authority = preparedAuthority(call, result);
+    if (authority) this.preparedMutation = authority;
+    return redactPreparedActionIntent(call, result);
   }
 }
