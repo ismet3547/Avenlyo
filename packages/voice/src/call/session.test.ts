@@ -69,6 +69,29 @@ describe('VoiceSessionManager', () => {
     });
   });
 
+  it('hangs up once after a durable handoff acknowledgement finishes', async () => {
+    const control = new FakeRealtimeCallControlProvider();
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const manager = new VoiceSessionManager({ control, finalizer: { finalize } });
+    const socket = new FakeRealtimeSocket();
+    manager.start('rtc_handoff', socket);
+
+    await manager.finalizeHandoff('rtc_handoff');
+    await manager.finalizeHandoff('rtc_handoff');
+    socket.emitClose();
+    socket.emitError();
+
+    expect(control.hungUp).toEqual(['rtc_handoff']);
+    expect(socket.closed).toBe(true);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(finalize).toHaveBeenCalledWith({
+      callId: 'rtc_handoff',
+      endReason: 'handoff',
+      status: 'completed',
+    });
+    expect(manager.has('rtc_handoff')).toBe(false);
+  });
+
   it('does not hang up after an intentional transfer', async () => {
     const control = new FakeRealtimeCallControlProvider();
     const finalize = vi.fn().mockResolvedValue(undefined);
