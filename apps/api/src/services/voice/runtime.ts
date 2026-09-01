@@ -6,6 +6,7 @@ import { createVoiceServiceSupabaseClient } from '../../lib/supabase.js';
 import { VoiceInboundCallService } from './inbound-service.js';
 import { OpenAIRealtimeCallControlProvider } from './openai-realtime-control.js';
 import { SupabaseVoiceStore } from './store.js';
+import { CustomerSchedulingCapabilityService } from '../scheduling/customer-scheduling-capabilities.js';
 import { EzyVetIntegrationService } from '../scheduling/ezyvet-service.js';
 import { ApiSchedulingConnectorRegistry } from '../scheduling/connector-registry.js';
 import { GoogleCalendarIntegrationService } from '../scheduling/google-calendar-service.js';
@@ -42,17 +43,28 @@ export function createVoiceRuntime(): VoiceRuntime | null {
   const ezyVet = env.EZYVET_PARTNER_ID
     ? new EzyVetIntegrationService({ partnerId: env.EZYVET_PARTNER_ID, supabase })
     : undefined;
-  const googleCalendar = isGoogleCalendarRuntimeConfigured && env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_OAUTH_REDIRECT_URI
-    ? new GoogleCalendarIntegrationService({ clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, oauthRedirectUri: env.GOOGLE_OAUTH_REDIRECT_URI, supabase })
+  const googleCalendar =
+    isGoogleCalendarRuntimeConfigured &&
+    env.GOOGLE_CLIENT_ID &&
+    env.GOOGLE_CLIENT_SECRET &&
+    env.GOOGLE_OAUTH_REDIRECT_URI
+      ? new GoogleCalendarIntegrationService({
+          clientId: env.GOOGLE_CLIENT_ID,
+          clientSecret: env.GOOGLE_CLIENT_SECRET,
+          oauthRedirectUri: env.GOOGLE_OAUTH_REDIRECT_URI,
+          supabase,
+        })
+      : undefined;
+  const hasSchedulingProvider = ezyVet !== undefined || googleCalendar !== undefined;
+  const connectors = new ApiSchedulingConnectorRegistry({
+    ...(ezyVet ? { ezyVet } : {}),
+    ...(googleCalendar ? { googleCalendar } : {}),
+  });
+  const scheduling = hasSchedulingProvider
+    ? new VoiceBookingService({ connectors, supabase })
     : undefined;
-  const scheduling = ezyVet || googleCalendar
-    ? new VoiceBookingService({
-        connectors: new ApiSchedulingConnectorRegistry({
-          ...(ezyVet ? { ezyVet } : {}),
-          ...(googleCalendar ? { googleCalendar } : {}),
-        }),
-        supabase,
-      })
+  const schedulingCapabilities = hasSchedulingProvider
+    ? new CustomerSchedulingCapabilityService({ connectors, supabase })
     : undefined;
   return {
     inbound: new VoiceInboundCallService({
@@ -65,6 +77,7 @@ export function createVoiceRuntime(): VoiceRuntime | null {
       model: env.OPENAI_REALTIME_MODEL,
       sessions,
       ...(scheduling ? { scheduling } : {}),
+      ...(schedulingCapabilities ? { schedulingCapabilities } : {}),
       store,
     }),
     shutdown: () => sessions.shutdown(),

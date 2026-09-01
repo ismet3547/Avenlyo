@@ -15,8 +15,17 @@ import {
   type VoiceSchedulingServices,
 } from '@avenlyo/voice';
 
+import {
+  noCustomerSchedulingCapabilities,
+  type CustomerSchedulingCapabilities,
+} from '../scheduling/customer-scheduling-capabilities.js';
 import { VoiceSidebandRuntime } from './sideband-runtime.js';
 import type { VoiceStore } from './store.js';
+import { customerVisibleVoiceTools } from './tool-authority.js';
+
+interface VoiceSchedulingCapabilityResolver {
+  forConversation(conversationId: string): Promise<CustomerSchedulingCapabilities>;
+}
 
 export interface VoiceInboundCallServiceOptions {
   readonly control: RealtimeCallControlProvider;
@@ -24,6 +33,7 @@ export interface VoiceInboundCallServiceOptions {
   readonly model: string;
   readonly sessions: VoiceSessionManager;
   readonly scheduling?: VoiceSchedulingServices;
+  readonly schedulingCapabilities?: VoiceSchedulingCapabilityResolver;
   readonly store: VoiceStore;
 }
 
@@ -88,6 +98,15 @@ function requireBootstrapContext(
   };
 }
 
+function hasAnySchedulingCapability(capabilities: CustomerSchedulingCapabilities): boolean {
+  return (
+    capabilities.booking ||
+    capabilities.lookup ||
+    capabilities.reschedule ||
+    capabilities.cancel
+  );
+}
+
 /** Coordinates a verified incoming webhook. It accepts no routing identity from JSON/model input. */
 export class VoiceInboundCallService {
   private readonly embed: (query: string) => Promise<readonly number[]>;
@@ -119,7 +138,9 @@ export class VoiceInboundCallService {
       resolved.configuration.transferEnabled &&
       resolved.configuration.providerTransferEnabled &&
       resolved.configuration.transferTargetE164 !== null;
-    const schedulingEnabled = await this.schedulingEnabled(context);
+    const schedulingCapabilities = await this.resolveSchedulingCapabilities(context);
+    const schedulingEnabled =
+      this.options.scheduling !== undefined && hasAnySchedulingCapability(schedulingCapabilities);
     const greeting = initialVoiceGreeting(resolved.business.name);
     try {
       await this.options.control.acceptCall(event.data.call_id, {
@@ -127,11 +148,14 @@ export class VoiceInboundCallService {
         greeting,
         instructions: buildVoiceInstructions(context, resolved.business),
         model: this.options.model,
-        tools: activeVoiceTools({
-          industry: context.industry,
-          schedulingEnabled,
-          transferEnabled: transferAvailable,
-        }),
+        tools: customerVisibleVoiceTools(
+          activeVoiceTools({
+            industry: context.industry,
+            schedulingEnabled,
+            transferEnabled: transferAvailable,
+          }),
+          schedulingCapabilities,
+        ),
         voice: resolved.configuration.voice,
       });
       const socket = await this.options.control.connectSideband(event.data.call_id);
@@ -144,6 +168,7 @@ export class VoiceInboundCallService {
         context,
         control: this.options.control,
         embed: this.embed,
+        schedulingCapabilities,
         sessions: this.options.sessions,
         ...(schedulingEnabled && this.options.scheduling
           ? { scheduling: this.options.scheduling }
@@ -182,12 +207,16 @@ export class VoiceInboundCallService {
     }
   }
 
-  private async schedulingEnabled(context: VoiceCallContext): Promise<boolean> {
-    if (!this.options.scheduling) return false;
+  private async resolveSchedulingCapabilities(
+    context: VoiceCallContext,
+  ): Promise<CustomerSchedulingCapabilities> {
+    if (!this.options.scheduling || !this.options.schedulingCapabilities) {
+      return noCustomerSchedulingCapabilities;
+    }
     try {
-      return await this.options.scheduling.isEnabledForCall(context);
+      return await this.options.schedulingCapabilities.forConversation(context.conversationId);
     } catch {
-      return false;
+      return noCustomerSchedulingCapabilities;
     }
   }
 }

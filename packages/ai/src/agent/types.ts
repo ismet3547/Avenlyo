@@ -1,9 +1,23 @@
 import type { IndustryId, IndustryPack } from '@avenlyo/industries';
 
+import type { CustomerIntent } from './intent-contract';
 import type { KnowledgeSearchDiagnostic } from './knowledge-reliability';
 
 export type AgentConversationRole = 'assistant' | 'customer';
 export type AgentMode = 'customer' | 'test';
+export type AgentConversationControlState = 'ai_active' | 'human_paused';
+
+export interface AgentConversationWorkState {
+  readonly control: AgentConversationControlState;
+  /** Trusted application reference only; never accepted from model tool arguments. */
+  readonly pendingMutation: {
+    readonly actionIntentId: string;
+    readonly intent: Extract<
+      CustomerIntent,
+      'APPOINTMENT_BOOK' | 'APPOINTMENT_CANCEL' | 'APPOINTMENT_RESCHEDULE'
+    >;
+  } | null;
+}
 
 /** Trusted routing identity supplied by an application adapter, never by a model tool call. */
 export interface AgentExecutionContext {
@@ -147,6 +161,11 @@ export interface AgentTurnInput {
   readonly history: readonly AgentConversationMessage[];
   readonly industry: IndustryPack;
   readonly userMessage: string;
+  /**
+   * Application-owned conversation state. Customer-mode callers must supply it; test mode may omit
+   * it and receives a deterministic AI-active/no-pending-mutation default.
+   */
+  readonly workState?: AgentConversationWorkState | undefined;
 }
 
 export interface AgentTurnResult {
@@ -158,6 +177,7 @@ export interface AgentTurnResult {
   readonly text: string;
   readonly toolCalls: readonly AgentToolExecution[];
   readonly usage?: AgentProviderUsage | undefined;
+  readonly suppressedReason?: 'human_control' | 'missing_work_state' | undefined;
   /**
    * Bounded, identity-free record of every knowledge search this turn performed.
    *

@@ -42,4 +42,44 @@ describe('SchedulingBookingService transport identity', () => {
       expect.anything(),
     );
   });
+
+  it('routes customer booking execution through the presented-confirmation claim boundary', async () => {
+    const rpc = vi.fn((name: string) => {
+      if (name === 'claim_presented_conversation_scheduling_booking_intent') {
+        return Promise.resolve({
+          data: [
+            {
+              booking_intent_id: 'booking-intent-1',
+              confirmed_message_id: null,
+              state: 'confirmation_required',
+            },
+          ],
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: [], error: null });
+    });
+    const service = new SchedulingBookingService({
+      connectors: { forIntegration: vi.fn() } as unknown as ApiSchedulingConnectorRegistry,
+      supabase: { rpc } as unknown as SupabaseClient<Database>,
+    });
+
+    await expect(
+      service.bookAppointment(
+        { bookingIntentId: 'booking-intent-1', toolCallId: 'tool-1' },
+        { conversationId: 'conversation-1', triggeringInboundMessageId: 'message-1' },
+      ),
+    ).resolves.toEqual({ outcome: 'confirmation_required' });
+
+    expect(rpc).toHaveBeenCalledWith('claim_presented_conversation_scheduling_booking_intent', {
+      target_booking_intent_id: 'booking-intent-1',
+      target_conversation_id: 'conversation-1',
+      target_inbound_message_id: 'message-1',
+      target_tool_call_id: 'tool-1',
+    });
+    expect(rpc).not.toHaveBeenCalledWith(
+      'claim_conversation_scheduling_booking_intent',
+      expect.anything(),
+    );
+  });
 });

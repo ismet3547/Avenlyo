@@ -9,6 +9,7 @@ import type { RuntimeComponent } from '../../observability/runtime-state.js';
 import type { WorkerObserver } from '../../observability/worker-observer.js';
 
 import { ApiSchedulingConnectorRegistry } from '../scheduling/connector-registry.js';
+import { CustomerSchedulingCapabilityService } from '../scheduling/customer-scheduling-capabilities.js';
 import { EzyVetIntegrationService } from '../scheduling/ezyvet-service.js';
 import { GoogleCalendarIntegrationService } from '../scheduling/google-calendar-service.js';
 import { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
@@ -55,18 +56,23 @@ export function createMessagingRuntime(input: MessagingRuntimeInput = {}): Messa
     ...(ezyVet ? { ezyVet } : {}),
     ...(googleCalendar ? { googleCalendar } : {}),
   });
-  const scheduling =
-    ezyVet || googleCalendar ? new SchedulingBookingService({ connectors, supabase }) : undefined;
-  const appointmentLifecycle =
-    ezyVet || googleCalendar
-      ? new AppointmentLifecycleService({ connectors, supabase })
-      : undefined;
+  const hasSchedulingProvider = ezyVet !== undefined || googleCalendar !== undefined;
+  const scheduling = hasSchedulingProvider
+    ? new SchedulingBookingService({ connectors, supabase })
+    : undefined;
+  const appointmentLifecycle = hasSchedulingProvider
+    ? new AppointmentLifecycleService({ connectors, supabase })
+    : undefined;
+  const schedulingCapabilities = hasSchedulingProvider
+    ? new CustomerSchedulingCapabilityService({ connectors, supabase })
+    : undefined;
   const agent = env.OPENAI_API_KEY
     ? new ConversationAgentService({
         apiKey: env.OPENAI_API_KEY,
         model: env.OPENAI_AGENT_MODEL,
         ...(appointmentLifecycle ? { appointmentLifecycle } : {}),
         ...(scheduling ? { scheduling } : {}),
+        ...(schedulingCapabilities ? { schedulingCapabilities } : {}),
         supabase,
       })
     : undefined;

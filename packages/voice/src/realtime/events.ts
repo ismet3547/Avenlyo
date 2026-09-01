@@ -35,6 +35,7 @@ const finalAssistantTranscriptSchema = z
   .object({
     event_id: z.string().min(1).max(256),
     item_id: z.string().min(1).max(256),
+    response_id: z.string().min(1).max(256).optional(),
     transcript: z.string().max(16_000),
     type: z.literal('response.output_audio_transcript.done'),
   })
@@ -50,6 +51,27 @@ const functionCallSchema = z
   })
   .passthrough();
 
+const responseCreatedSchema = z
+  .object({
+    event_id: z.string().min(1).max(256),
+    response: z
+      .object({
+        id: z.string().min(1).max(256),
+        metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+      })
+      .passthrough(),
+    type: z.literal('response.created'),
+  })
+  .passthrough();
+
+const outputAudioBufferStoppedSchema = z
+  .object({
+    event_id: z.string().min(1).max(256),
+    response_id: z.string().min(1).max(256),
+    type: z.literal('output_audio_buffer.stopped'),
+  })
+  .passthrough();
+
 const idleTimeoutSchema = z
   .object({ type: z.literal('input_audio_buffer.timeout_triggered') })
   .passthrough();
@@ -58,6 +80,8 @@ export const sidebandEventSchema = z.discriminatedUnion('type', [
   finalCallerTranscriptSchema,
   finalAssistantTranscriptSchema,
   functionCallSchema,
+  responseCreatedSchema,
+  outputAudioBufferStoppedSchema,
   idleTimeoutSchema,
 ]);
 

@@ -12,6 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ApiSchedulingConnectorRegistry } from './connector-registry.js';
 
 type Row = Readonly<Record<string, unknown>>;
+type ConfirmationClaimMode = 'presented_text' | 'trusted_voice';
 interface LifecycleRpc {
   rpc(
     name: string,
@@ -71,7 +72,9 @@ function bool(row: Row, key: string): boolean {
 
 /**
  * Provider-neutral lifecycle state machine. Customer tools supply opaque durable references only;
- * every provider identity and every mutation decision comes back from SECURITY DEFINER RPCs.
+ * every provider identity and every mutation decision comes back from SECURITY DEFINER RPCs. Text
+ * execution requires a customer-visible bound prompt; realtime Voice keeps its separate trusted
+ * final-transcript confirmation boundary and uses the ownership-aware legacy claim shape.
  */
 export class AppointmentLifecycleService {
   private readonly rpc: LifecycleRpc;
@@ -80,6 +83,7 @@ export class AppointmentLifecycleService {
     private readonly input: {
       readonly connectors: ApiSchedulingConnectorRegistry;
       readonly supabase: SupabaseClient<Database>;
+      readonly confirmationClaimMode?: ConfirmationClaimMode;
     },
   ) {
     this.rpc = input.supabase as unknown as LifecycleRpc;
@@ -179,7 +183,6 @@ export class AppointmentLifecycleService {
       .filter(
         (slot) =>
           resources.some((resource) => resource.key === slot.resourceKey) &&
-          // We never ask a provider to move an appointment into an overlapping copy of itself.
           (!originalStartAt ||
             !originalEndAt ||
             slot.endAt <= originalStartAt ||
@@ -228,7 +231,11 @@ export class AppointmentLifecycleService {
     turn: { readonly conversationId: string; readonly triggeringInboundMessageId: string | null },
   ) {
     if (!turn.triggeringInboundMessageId) return { outcome: 'confirmation_required' as const };
-    const claimResult = await this.rpc.rpc('claim_appointment_change_intent', {
+    const claimName =
+      this.input.confirmationClaimMode === 'trusted_voice'
+        ? 'claim_appointment_change_intent'
+        : 'claim_presented_appointment_change_intent';
+    const claimResult = await this.rpc.rpc(claimName, {
       target_change_intent_id: input.changeIntentId,
       target_conversation_id: turn.conversationId,
       target_inbound_message_id: turn.triggeringInboundMessageId,
@@ -377,20 +384,14 @@ export class AppointmentLifecycleService {
     }
   }
 
-  /** Owner/admin path after the API has created a staff-attributed durable cancellation intent. */
   public async executeStaffCancellation(changeIntentId: string) {
     return this.executeStaffIntent(changeIntentId, 'cancel');
   }
 
-  /** Staff chooses a UTC time explicitly; the provider availability read still has final authority. */
   public async executeStaffReschedule(changeIntentId: string) {
     return this.executeStaffIntent(changeIntentId, 'reschedule');
   }
 
-  /**
-   * The staff API retries one durable intent. Once a mutation target exists, the provider may
-   * already have observed a write, so recovery is read-only and can never fall back to a write.
-   */
   private async executeStaffIntent(
     changeIntentId: string,
     expectedOperation: 'cancel' | 'reschedule',

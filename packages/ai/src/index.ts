@@ -20,7 +20,9 @@ export type {
 } from './agent/knowledge-reliability';
 export type {
   AgentBusinessContext,
+  AgentConversationControlState,
   AgentConversationMessage,
+  AgentConversationWorkState,
   AgentExecutionContext,
   AgentFunctionTool,
   AgentMode,
@@ -34,7 +36,18 @@ export type {
   AgentTurnResult,
   KnowledgeSource,
 } from './agent/types';
+export {
+  customerIntentNames,
+  highestPrecedenceIntent,
+  intentOperatingInstructions,
+  intentPrecedenceTier,
+  isInterruptIntent,
+  isMutatingCustomerIntent,
+} from './agent/intent-contract';
+export type { AgentIntentFrame, CustomerIntent, IntentPrecedenceTier } from './agent/intent-contract';
 export { actionRiskByName, mayExposeHandoffTool } from './policy/action-policy';
+export { detectExplicitHumanRequest } from './policy/human-request';
+export type { HumanRequestInterrupt } from './policy/human-request';
 export { detectSafetyEscalation } from './policy/safety';
 export {
   buildResponsesRequest,
@@ -58,6 +71,9 @@ export {
   STRONG_AGENT_KNOWLEDGE_SIMILARITY,
 } from './agent/knowledge-reliability';
 export { ControlledToolExecutor, policyHandoffCallId } from './tools/executor';
+export { CustomerCapabilityToolExecutor } from './tools/customer-capability-executor';
+export type { CustomerSchedulingToolCapabilities } from './tools/customer-capability-executor';
+export { WorkStateToolExecutor } from './tools/work-state-executor';
 export { activeToolDefinitions, activeToolsForIndustry } from './tools/registry';
 export {
   availableAppointmentsSchema,

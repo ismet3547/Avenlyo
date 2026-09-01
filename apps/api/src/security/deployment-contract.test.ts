@@ -49,8 +49,6 @@ describe('public hostnames are configurable; trusted upstreams are not', () => {
   });
 
   it('defaults to exactly today’s staging behaviour when nothing is set', async () => {
-    // Phase 20 must not change the running deployment. An operator who sets no new variable gets
-    // the same two hostnames the staging host is serving right now.
     const text = await caddyfile();
 
     expect(text).toContain(':staging.avenlyo.com}');
@@ -61,8 +59,6 @@ describe('public hostnames are configurable; trusted upstreams are not', () => {
     const text = withoutComments(await caddyfile());
     const upstreams = [...text.matchAll(/reverse_proxy\s+(\S+)/g)].map((m) => m[1]);
 
-    // Three upstreams, all literals. If an environment variable could reach this list, a deployment
-    // could redirect Caddy -- the one process allowed to talk to the API -- somewhere else.
     expect(upstreams).toEqual(['web:3000', 'api:4000', 'api:4000']);
     for (const upstream of upstreams) {
       expect(upstream).not.toContain('$');
@@ -144,7 +140,6 @@ describe('the Phase 19 network boundary survives Phase 20', () => {
 });
 
 describe('deployment profiles render safely for both targets', () => {
-  /** Public values, exactly as deploy/env/staging.public.env.example declares them. */
   const stagingProfile = {
     apiCorsOrigin: 'https://staging.avenlyo.com',
     caddyApiHost: 'api-staging.avenlyo.com',
@@ -182,8 +177,6 @@ describe('deployment profiles render safely for both targets', () => {
   });
 
   it('rejects a production profile the moment a staging hostname is injected', () => {
-    // The negative case is the one worth having: it proves the guard catches the defect rather than
-    // merely existing.
     const injected = { ...productionProfile, publicApiUrl: 'https://api-staging.avenlyo.com' };
 
     expect(errorsFor(injected).map((f) => f.check)).toContain('no_staging_host_in_production');
@@ -205,16 +198,6 @@ describe('deployment profiles render safely for both targets', () => {
 describe('the CI profile assertion cannot drift from the shared policy', () => {
   const script = () => readFile('.github/scripts/assert-deployment-profile.mjs', 'utf8');
 
-  /**
-   * The assertion script mirrors DEPLOYED_ENVIRONMENTS as a literal, because `@avenlyo/shared`
-   * exports raw TypeScript and the script runs under plain `node` in CI -- running the deployment
-   * gate through a source loader would make it depend on the toolchain it exists to check.
-   *
-   * Duplication is acceptable only while it is guarded, which is what this does. If someone adds a
-   * deployed environment to the shared policy and not to the script, the script would silently
-   * reject a legitimate profile; if they add it only to the script, it would accept one the policy
-   * does not recognise. Either way this fails first.
-   */
   it('mirrors DEPLOYED_ENVIRONMENTS exactly', async () => {
     const source = await script();
     const declared = /const DEPLOYED_ENVIRONMENTS = \[([^\]]*)\]/.exec(source);
@@ -227,25 +210,15 @@ describe('the CI profile assertion cannot drift from the shared policy', () => {
   it('reads the deployment identity from the profile rather than trusting the caller', async () => {
     const source = await script();
 
-    // The identity must come from the file being validated. If the CLI argument were the authority,
-    // a profile could declare staging -- or declare nothing -- and still be checked under
-    // production rules because the caller said "production".
     expect(source).toContain('profile.AVENLYO_DEPLOYMENT_ENV');
     expect(source).toMatch(/declared !== expectedTarget/);
   });
 });
 
 describe('one deployment-profile contract, shared by the templates, Compose and CI', () => {
-  /**
-   * The defect this suite exists for: CI used to carry its own hand-written profiles, richer than
-   * `deploy/env/build.env.example` -- the template an operator is told to copy. A green deployment
-   * contract therefore proved a file no human would ever deploy from. The templates are now the
-   * profile, CI generates its fixtures from them, and these assertions are what keep that true.
-   */
   const profileTemplate = (target: 'staging' | 'production') =>
     readFile(`deploy/env/${target}.public.env.example`, 'utf8');
 
-  /** Assignments only, so a key mentioned in this file's own prose does not count as declared. */
   function declaredKeys(text: string): Set<string> {
     return new Set(
       text
@@ -269,8 +242,6 @@ describe('one deployment-profile contract, shared by the templates, Compose and 
     });
 
     it(`the source ${target} profile contains no secret-shaped assignment`, async () => {
-      // These files are committed, rendered in CI, and printed in terminals. Nothing in them may
-      // ever become a credential.
       const text = await profileTemplate(target);
 
       for (const forbidden of [
@@ -289,8 +260,6 @@ describe('one deployment-profile contract, shared by the templates, Compose and 
   }
 
   it('both targets declare exactly the same set of keys', async () => {
-    // A value present in one environment and absent from the other is a difference nobody chose,
-    // and it is always found in the environment where finding it is expensive.
     const staging = [...declaredKeys(await profileTemplate('staging'))].sort();
     const production = [...declaredKeys(await profileTemplate('production'))].sort();
 
@@ -304,9 +273,6 @@ describe('one deployment-profile contract, shared by the templates, Compose and 
   });
 
   it('build.env.example no longer carries a second copy of the profile', async () => {
-    // It used to declare its own NEXT_PUBLIC_APP_URL, NEXT_PUBLIC_AVENLYO_API_URL, AVENLYO_WEB_HOST
-    // and AVENLYO_API_HOST. That made it a second, independently maintained profile -- the thing
-    // that drifted. It now declares only what genuinely cannot be committed.
     const declared = declaredKeys(await readFile('deploy/env/build.env.example', 'utf8'));
 
     expect([...declared].sort()).toEqual([
@@ -316,8 +282,6 @@ describe('one deployment-profile contract, shared by the templates, Compose and 
   });
 
   it('web.env.example no longer declares AVENLYO_API_URL', async () => {
-    // Two authorities for one setting meant preflight could certify the Caddy boundary while the
-    // running web container reached api:4000 directly.
     const declared = declaredKeys(await readFile('deploy/env/web.env.example', 'utf8'));
 
     expect(declared).not.toContain('AVENLYO_API_URL');
@@ -328,7 +292,6 @@ describe('one deployment-profile contract, shared by the templates, Compose and 
 
     expect(workflow).toContain('deploy/env/${target}.public.env.example');
     expect(workflow).toContain('cat deploy/env/staging.public.env.example');
-    // And the old hand-written fixture shape must not come back.
     expect(workflow).not.toContain('AVENLYO_WEB_HOST=avenlyo.com');
   });
 
@@ -344,8 +307,6 @@ describe('one deployment-profile contract, shared by the templates, Compose and 
 
 describe('the running containers read the profile that preflight validates', () => {
   it('wires the web service’s runtime AVENLYO_API_URL from the profile', async () => {
-    // Not from /etc/avenlyo/web.env. The value preflight checks and the value the container runs
-    // with have to be the same value, or preflight certifies something nobody deployed.
     const web = serviceBlock(withoutComments(await compose()), 'web');
 
     expect(web).toMatch(/AVENLYO_API_URL: \$\{AVENLYO_API_URL:\?/);
@@ -358,19 +319,12 @@ describe('the running containers read the profile that preflight validates', () 
   });
 
   it('never lets the profile overwrite the API’s own runtime deployment identity', async () => {
-    // Compose's `environment:` overrides `env_file:`. Listing AVENLYO_DEPLOYMENT_ENV here would let
-    // the profile silently replace the identity /etc/avenlyo/api.env supplies -- including with an
-    // empty string, which stops the container booting at all.
     const api = serviceBlock(withoutComments(await compose()), 'api');
 
     expect(api).not.toMatch(/^ {6}AVENLYO_DEPLOYMENT_ENV:/m);
   });
 
   it('passes no secret into the compose environment to make a check possible', async () => {
-    // Scoped to `environment:`, not the whole file: NEXT_PUBLIC_SUPABASE_ANON_KEY legitimately
-    // appears under the web service's `build.args`, because Next inlines it at build time. The rule
-    // being asserted is that no secret was added to a runtime environment block so that preflight
-    // could see something.
     const api = serviceBlock(withoutComments(await compose()), 'api');
     const environment = api.slice(api.indexOf('    environment:'), api.indexOf('    expose:'));
 
@@ -385,14 +339,11 @@ describe('the running containers read the profile that preflight validates', () 
     ]) {
       expect(environment).not.toContain(forbidden);
     }
-    // And every value it does carry is one of the declared, non-secret profile settings.
     const passed = [...environment.matchAll(/^ {6}([A-Z0-9_]+):/gm)].map((match) => match[1]);
     expect(passed.sort()).toEqual([
       'AVENLYO_PROFILE_API_HOST',
       'AVENLYO_PROFILE_APP_URL',
       'AVENLYO_PROFILE_DEPLOYMENT_ENV',
-      // Non-secret: a project ref, not a key. It is the EXPECTED half of the Supabase identity
-      // comparison; the ACTUAL half stays in api.env as SUPABASE_URL.
       'AVENLYO_PROFILE_EXPECTED_SUPABASE_PROJECT_REF',
       'AVENLYO_PROFILE_PUBLIC_API_URL',
       'AVENLYO_PROFILE_WEB_API_URL',
@@ -405,13 +356,6 @@ describe('the running containers read the profile that preflight validates', () 
 describe('the documented operator preflight command is the one that exists', () => {
   const runbook = () => readFile('docs/production-runbook.md', 'utf8');
 
-  /**
-   * The runbook used to say `pnpm ops:preflight` on the host. That was not an executable contract:
-   * a host shell receives neither /etc/avenlyo/api.env nor the AVENLYO_PROFILE_* values Compose
-   * injects, and a deployment host is not guaranteed to hold a built dist/ at all. The gate that
-   * "must exit 0 before anything is applied" was therefore either impossible to run or validating a
-   * profile the deployment does not use.
-   */
   it('documents the one-off container invocation, not a host pnpm script', async () => {
     const text = await runbook();
 
@@ -420,8 +364,6 @@ describe('the documented operator preflight command is the one that exists', () 
   });
 
   it('requires the exact image to exist before the one-off runs', async () => {
-    // `docker compose run` has no --no-build flag and builds a missing image. Proving the SHA tag
-    // exists first is what makes "this cannot silently build something else" true.
     expect(await runbook()).toMatch(/docker image inspect ["']?avenlyo-api:/);
   });
 
@@ -440,23 +382,11 @@ describe('the documented operator preflight command is the one that exists', () 
 });
 
 describe('provenance is read from the compose source, never from the render', () => {
-  /**
-   * The Phase 21A staging failure, pinned.
-   *
-   * `docker compose config` resolves `env_file:` into the rendered service `environment:` map. A
-   * check that asked the RENDER whether `deploy/compose.yaml` declares a key therefore answered
-   * "yes" on any host whose `/etc/avenlyo/api.env` declares it -- which is every correctly
-   * configured host, because Phase 20 requires api.env to declare the deployment identity.
-   *
-   * The gate failed closed on a good deployment. CI missed it because its fixture wrote an empty
-   * api.env, so there was nothing to merge and the check passed vacuously.
-   */
   const script = () => readFile('.github/scripts/assert-deployment-profile.mjs', 'utf8');
 
   it('no longer decides provenance from the rendered environment', async () => {
     const source = await script();
 
-    // The exact defective expression must not come back.
     expect(source).not.toMatch(/envOf\(\s*'api'\s*,\s*'AVENLYO_DEPLOYMENT_ENV'\s*\)/);
   });
 
@@ -465,16 +395,12 @@ describe('provenance is read from the compose source, never from the render', ()
 
     expect(source).toContain("readFileSync('deploy/compose.yaml', 'utf8')");
     expect(source).toContain('sourceEnvironment');
-    // Normalised newlines, or a CRLF checkout leaves a trailing \r on every key and the parser
-    // silently matches nothing -- which would make every absence check pass while proving nothing.
     expect(source).toMatch(/replace\(\/\\r\\n\/g, '\\n'\)/);
   });
 
   it('guards its own source parser against silently matching nothing', async () => {
     const source = await script();
 
-    // An absence assertion over a mis-parsed empty block is not a check. The script asserts the
-    // block parsed to a plausible size before trusting any absence conclusion drawn from it.
     expect(source).toMatch(/the api source environment block parsed as/);
     expect(source).toMatch(/the web source environment block parsed as/);
   });
@@ -488,9 +414,6 @@ describe('provenance is read from the compose source, never from the render', ()
   });
 
   it('no longer scans the whole render for a staging hostname', async () => {
-    // Same defect class: api.env legitimately carries API_CORS_ORIGIN=https://staging.avenlyo.com,
-    // so a whole-document scan made the PRODUCTION profile look cross-wired on a real host. The
-    // check now reads only the rendered keys Compose fills from the profile.
     const source = await script();
 
     expect(source).not.toContain('rendered production compose still contains');
@@ -511,14 +434,12 @@ describe('CI exercises the assertion against the real host shape', () => {
   it('writes a non-empty /etc/avenlyo/api.env in the deployment contract job', async () => {
     const text = await workflow();
 
-    // The empty fixture is what hid the defect for a release.
     expect(text).not.toMatch(/sudo touch \/etc\/avenlyo\/web\.env \/etc\/avenlyo\/api\.env/);
     expect(text).toContain('AVENLYO_DEPLOYMENT_ENV=staging');
     expect(text).toContain('WEB_CHAT_IFRAME_ORIGIN=https://staging.avenlyo.com');
   });
 
   it('fails if the fixture stops reproducing env_file merging', async () => {
-    // A fixture that no longer merges would make every provenance guard vacuous again, silently.
     const text = await workflow();
 
     expect(text).toContain('Prove the fixture reproduces env_file merging');
@@ -539,11 +460,6 @@ describe('the host-side validation command needs no Node runtime', () => {
   const runbook = () => readFile('docs/production-runbook.md', 'utf8');
   const hetzner = () => readFile('docs/deployment/hetzner-staging.md', 'utf8');
 
-  /**
-   * The staging host builds everything in Docker and has no Node installed, so a documented host
-   * step of `node .github/scripts/...` was not executable there. The source/topology assertion is a
-   * CI gate; the host gate is the Compose one, which needs only what the host already runs.
-   */
   it('documents `config --quiet` as the host step', async () => {
     const text = await runbook();
 
@@ -555,8 +471,6 @@ describe('the host-side validation command needs no Node runtime', () => {
     const order = text.slice(text.indexOf('## Deployment order'), text.indexOf('## Rollback'));
 
     expect(order).not.toMatch(/^\s*node \.github\/scripts\/assert-deployment-profile\.mjs/m);
-    // Whitespace-normalised: the sentence wraps across lines, and a CRLF checkout would otherwise
-    // make this assertion depend on the line ending rather than on the prose.
     expect(order.replace(/\s+/g, ' ')).toContain('not on the deployment host');
   });
 
@@ -576,10 +490,6 @@ describe('the host-side validation command needs no Node runtime', () => {
 describe('the documented operator path never renders secrets', () => {
   const runbook = () => readFile('docs/production-runbook.md', 'utf8');
 
-  /**
-   * `docker compose config` merges env_file contents, so on a real host it prints the service-role
-   * key and every provider credential as ordinary YAML. The documented path must never do that.
-   */
   it('warns that a plain config render prints secrets', async () => {
     const text = await runbook();
 
@@ -595,7 +505,6 @@ describe('the documented operator path never renders secrets', () => {
   });
 
   it('every documented `docker compose ... config` invocation is quiet or redirected', async () => {
-    // The one deliberate exception is the UNSAFE example, which exists to be labelled unsafe.
     const text = await runbook();
     const lines = text.split('\n');
 
@@ -603,8 +512,6 @@ describe('the documented operator path never renders secrets', () => {
     lines.forEach((line, index) => {
       if (!/^\s*docker compose .*\bconfig\b/.test(line)) return;
       seen += 1;
-      // The one deliberate exception is the worked example that exists to be labelled unsafe; its
-      // marker sits on the preceding comment line, the way it reads inside the code block.
       const labelledUnsafe = /#\s*UNSAFE/.test(lines[index - 1] ?? '');
       const safe = line.includes('--quiet') || line.includes('>') || labelledUnsafe;
       expect(safe, `unguarded config render: ${line.trim()}`).toBe(true);
@@ -614,8 +521,6 @@ describe('the documented operator path never renders secrets', () => {
 
   it('the assertion script never prints its own render', async () => {
     const source = await readFile('.github/scripts/assert-deployment-profile.mjs', 'utf8');
-    // The render holds every value merged from /etc/avenlyo/api.env on a real host, so it must
-    // never reach an output stream -- neither passed directly nor interpolated into a message.
     expect(source).toContain('let rendered;');
     expect(source).not.toMatch(/write\(\s*rendered/);
     expect(source).not.toMatch(/\$\{rendered/);
@@ -632,32 +537,23 @@ describe('the host migration off the pre-Phase-20 env layout is documented', () 
     expect(text).toContain('Migrating a host off the pre-Phase-20 env layout');
     expect(text).toContain("grep -c '^AVENLYO_DEPLOYMENT_ENV=' /etc/avenlyo/api.env");
     expect(text).toContain("sed '/^AVENLYO_API_URL=/d' /etc/avenlyo/web.env");
-    // Verification is by silent comparison, not by diffing two secret-bearing files. The previous
-    // wording asked for a diff that "must show exactly one removed line" -- which is exactly the
-    // disclosure this now forbids: an unintended second change would have printed a secret.
-    // Verification is the shipped verifier, whose exit code is executed in
-    // env-migration-verification.test.ts rather than merely described here.
     expect(text).toContain('deploy/scripts/verify-env-migration.sh');
     expect(text).toContain('verified: only the AVENLYO_API_URL assignment changed');
     expect(text).not.toContain('must show exactly one removed line');
-    // The fail-open shape must never come back.
     expect(text).not.toContain('|| echo "REFUSED');
   });
 
   it('keeps the source contract that made the host key obsolete', async () => {
-    // Unchanged by this hotfix, re-pinned because the migration doc depends on it being true.
     const webExample = await readFile('deploy/env/web.env.example', 'utf8');
-    const compose = await readFile('deploy/compose.yaml', 'utf8');
+    const composeText = await readFile('deploy/compose.yaml', 'utf8');
 
     expect(webExample).not.toMatch(/^AVENLYO_API_URL=/m);
-    expect(compose).toMatch(/AVENLYO_API_URL: \$\{AVENLYO_API_URL:\?/);
+    expect(composeText).toMatch(/AVENLYO_API_URL: \$\{AVENLYO_API_URL:\?/);
   });
 });
 
 describe('fetching the authoritative release is executable on the real host', () => {
   it('documents an explicit fetch rather than relying on origin/main', async () => {
-    // The staging host's remote.origin.fetch is narrowed to an old infra branch, so origin/main is
-    // never updated and `git pull` would deploy nothing new while appearing to succeed.
     const runbook = await readFile('docs/production-runbook.md', 'utf8');
 
     expect(runbook).toContain('git fetch origin main');
@@ -674,15 +570,8 @@ describe('fetching the authoritative release is executable on the real host', ()
 });
 
 describe('the documented deployment order needs only git, Docker and Compose', () => {
-  /**
-   * The Hetzner staging host has no Node runtime and no pnpm; it builds everything inside Docker.
-   * A documented step an operator cannot run is not a procedure, so the whole deployment order has
-   * to be executable with what the host actually has. Step 3 was fixed first; steps 10 and 11 still
-   * said `pnpm smoke:production` and `pnpm ops:status`, which left the sequence non-executable.
-   */
   const runbook = () => readFile('docs/production-runbook.md', 'utf8');
 
-  /** The numbered deployment order only -- prose elsewhere may legitimately mention local tooling. */
   const deploymentOrder = async () => {
     const text = (await runbook()).replace(/\r\n/g, '\n');
     return text.slice(text.indexOf('## Deployment order'), text.indexOf('## Rollback'));
@@ -708,8 +597,6 @@ describe('the documented deployment order needs only git, Docker and Compose', (
   });
 
   it('explains why the smoke uses run and ops-status uses exec', async () => {
-    // The distinction is load-bearing, not stylistic: under `exec` the post-deploy release check
-    // would compare a process against itself and could never fail.
     const order = (await deploymentOrder()).replace(/\s+/g, ' ');
 
     expect(order).toContain('`run`, not `exec`, and that is load-bearing');
@@ -744,9 +631,6 @@ describe('the documented deployment order needs only git, Docker and Compose', (
 
 describe('every documented operator command ships in the production artifact', () => {
   it('bundles all four operator entry points', async () => {
-    // smoke-production was the one that was not: its package script ran the source through tsx,
-    // which the production image does not ship, so the documented post-deploy check could not run
-    // where it was documented to run.
     const config = await readFile('apps/api/esbuild.config.mjs', 'utf8');
 
     for (const entry of ['ops-status', 'ops-preflight', 'smoke-production', 'chromium-sandbox-smoke']) {
@@ -777,19 +661,14 @@ describe('every documented operator command ships in the production artifact', (
 
     expect(workflow).toContain('ops-status runs inside the running api container (no host Node)');
     expect(workflow).toContain('smoke-production runs from the exact release image (no host Node)');
-    // And that the release assertion can actually fail, or it is decoration.
     expect(workflow).toContain('smoke-production rejects a deployment serving a different release');
     expect(workflow).toContain('FAIL  api_release');
   });
 });
 
 describe('env-file migration is verified without printing any value', () => {
-  /**
-   * A full `diff` of two secret-bearing env files is not a verification, it is a disclosure: if an
-   * unintended second change slipped in, diff prints the changed secret to the terminal, the
-   * scrollback, and whatever it gets pasted into.
-   */
-  const runbook = async () => (await readFile('docs/production-runbook.md', 'utf8')).replace(/\r\n/g, '\n');
+  const runbook = async () =>
+    (await readFile('docs/production-runbook.md', 'utf8')).replace(/\r\n/g, '\n');
 
   it('never diffs a secret-bearing env file', async () => {
     const text = await runbook();
@@ -803,9 +682,6 @@ describe('env-file migration is verified without printing any value', () => {
   });
 
   it('compares filtered copies silently, in the shipped verifier', async () => {
-    // The comparison moved out of the runbook and into deploy/scripts/verify-env-migration.sh, so
-    // that the documented behaviour and the verified behaviour are the same code. The runbook
-    // invokes it; the script performs the filtered, silent comparison.
     const script = await readFile('deploy/scripts/verify-env-migration.sh', 'utf8');
 
     expect(script).toContain('cmp -s');
@@ -815,7 +691,6 @@ describe('env-file migration is verified without printing any value', () => {
   });
 
   it('proves the key count moved exactly 1 -> 0', async () => {
-    // Expressed as the verifier's own arguments now: <expected-before> <expected-after>.
     const text = (await runbook()).replace(/\\\n\s*/g, '').replace(/[ \t]+/g, ' ');
 
     expect(text).toContain('/etc/avenlyo/web.env AVENLYO_API_URL 1 0');
@@ -826,8 +701,6 @@ describe('env-file migration is verified without printing any value', () => {
   });
 
   it('creates the backup directory first, 0700, with 0600 backup files', async () => {
-    // Runnable from a fresh shell, and the backup of a 0640 secret-bearing file must not inherit
-    // that looser mode.
     const text = await runbook();
 
     expect(text).toContain('mkdir -p "$BK" && chmod 700 "$BK"');
@@ -854,7 +727,6 @@ describe('env-file migration is verified without printing any value', () => {
     const text = await runbook();
 
     expect(text).toContain('### Adding the deployment identity to api.env');
-    // Same verifier, same guarantees, expressed as its arguments: 0 assignments before, 1 after.
     expect(text.replace(/\\\n\s*/g, '').replace(/[ \t]+/g, ' ')).toContain(
       '/etc/avenlyo/api.env AVENLYO_DEPLOYMENT_ENV 0 1',
     );
@@ -862,7 +734,6 @@ describe('env-file migration is verified without printing any value', () => {
 
   it('never cats an env file anywhere in the runbook', async () => {
     const text = await runbook();
-    // `sudo cat FILE > backup` is a redirect into a 0600 file, not a display; a bare cat is not.
     const displays = [...text.matchAll(/^\s*(sudo )?cat [^\n]*\/etc\/avenlyo\/[^\n]*$/gm)]
       .map((match) => match[0])
       .filter((line) => !line.includes('>'));
@@ -872,11 +743,6 @@ describe('env-file migration is verified without printing any value', () => {
 });
 
 describe('the expected Supabase project ref is a profile declaration, mirrored in', () => {
-  /**
-   * Provenance, not just presence. The profile declares which project this deployment is FOR;
-   * /etc/avenlyo/api.env declares which project it is POINTED AT. Preflight compares them, which is
-   * only meaningful while they come from different files.
-   */
   it('compose mirrors the profile value under a distinct name', async () => {
     const api = serviceBlock(withoutComments(await compose()), 'api');
 
@@ -886,8 +752,6 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
   });
 
   it('compose never supplies the runtime name from the profile', async () => {
-    // That would put the expectation back into the same precedence chain as api.env and recreate
-    // the single-authority problem this change exists to remove.
     const api = serviceBlock(withoutComments(await compose()), 'api');
 
     expect(api).not.toMatch(/^ {6}AVENLYO_EXPECTED_SUPABASE_PROJECT_REF:/m);
@@ -906,8 +770,6 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
   });
 
   it('the ACTUAL identity still comes only from api.env', async () => {
-    // SUPABASE_URL must not migrate into the public profile: it is the value being checked, and it
-    // belongs with the credentials that reach the same project.
     const preflight = await readFile('apps/api/src/scripts/ops-preflight.ts', 'utf8');
     expect(preflight).toContain('supabaseUrl: env.SUPABASE_URL');
 
@@ -933,7 +795,6 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
       .map((line) => line.slice(0, line.indexOf('=')).trim());
 
     expect(assignments).not.toContain('AVENLYO_EXPECTED_SUPABASE_PROJECT_REF');
-    // Still documented, as an explicit "do not set this here" with the reason.
     expect(template).toContain('IS NOT SET HERE');
     expect(template).toContain('SUPABASE_URL');
   });
@@ -970,10 +831,30 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
     expect(await keysOf('staging')).toEqual(await keysOf('production'));
   });
 
-  it('adds no migration', async () => {
-    // This hotfix is configuration wiring only; the schema contract stays where Phase 19 left it.
+  it('recognizes the final Phase 23 schema contract and its additive hardening migrations', async () => {
     const readiness = await readFile('apps/api/src/observability/readiness.ts', 'utf8');
+    const confirmation = await readFile(
+      'supabase/migrations/20260901070000_phase_23_confirmation_presentation.sql',
+      'utf8',
+    );
+    const guard = await readFile(
+      'supabase/migrations/20260901080000_phase_23_confirmation_transition_guard.sql',
+      'utf8',
+    );
+    const ordering = await readFile(
+      'supabase/migrations/20260901100000_phase_23_confirmation_visibility_ordering.sql',
+      'utf8',
+    );
+    const providerRetry = await readFile(
+      'supabase/migrations/20260901110000_phase_23_provider_outcome_retry_hardening.sql',
+      'utf8',
+    );
 
-    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*19/);
+    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*22/);
+    expect(confirmation).toContain('confirmation_prompt_message_id');
+    expect(guard).toContain('Presented booking confirmation is required');
+    expect(ordering).toContain('customer_mutation_confirmation_prompt_visible_at');
+    expect(providerRetry).toContain('get_message_agent_work_state_v2');
+    expect(providerRetry).toContain("guarded_status := 'provider_state_unknown'");
   });
 });

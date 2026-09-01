@@ -1,7 +1,9 @@
 import {
   AgentRuntime,
   ControlledToolExecutor,
+  CustomerCapabilityToolExecutor,
   OpenAIResponsesProvider,
+  WorkStateToolExecutor,
   type AgentConversationMessage,
   type KnowledgeSource,
 } from '@avenlyo/ai';
@@ -10,13 +12,30 @@ import { resolveIndustryPack } from '@avenlyo/industries';
 import { OpenAIEmbeddingProvider } from '@avenlyo/knowledge';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import type { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
 import type { AppointmentLifecycleService } from '../scheduling/appointment-lifecycle-service.js';
+import {
+  noCustomerSchedulingCapabilities,
+  type CustomerSchedulingCapabilityService,
+} from '../scheduling/customer-scheduling-capabilities.js';
+import type { SchedulingBookingService } from '../scheduling/scheduling-booking-service.js';
 import { LeadCaptureService } from '../leads/lead-capture-service.js';
+
+import { loadMessageAgentWorkState } from './agent-work-state.js';
+import {
+  buildMutationConfirmationText,
+  type MutationConfirmationAuthority,
+} from './mutation-confirmation.js';
 
 interface HistoryValue {
   readonly author_type?: unknown;
   readonly body?: unknown;
+}
+
+export interface ConversationAgentReply {
+  readonly handoffRequested: boolean;
+  readonly mutationConfirmation?: MutationConfirmationAuthority;
+  readonly suppressed?: boolean;
+  readonly text: string;
 }
 
 function toRecord(value: Json): Record<string, unknown> | null {
@@ -50,6 +69,7 @@ export class ConversationAgentService {
       readonly model: string;
       readonly appointmentLifecycle?: AppointmentLifecycleService;
       readonly scheduling?: SchedulingBookingService;
+      readonly schedulingCapabilities?: CustomerSchedulingCapabilityService;
       readonly supabase: SupabaseClient<Database>;
     },
   ) {
@@ -58,9 +78,27 @@ export class ConversationAgentService {
     this.leadCapture = new LeadCaptureService(input.supabase);
   }
 
-  public async replyTo(
-    inboundMessageId: string,
-  ): Promise<{ readonly handoffRequested: boolean; readonly text: string }> {
+  public async replyTo(inboundMessageId: string): Promise<ConversationAgentReply> {
+    const loadedWorkState = await loadMessageAgentWorkState(this.input.supabase, inboundMessageId);
+    if (loadedWorkState.kind === 'conflict') {
+      const { error: handoffError } = await this.input.supabase.rpc('request_message_handoff', {
+        target_inbound_message_id: inboundMessageId,
+        target_reason:
+          'Multiple consequential actions are awaiting confirmation for this conversation.',
+        target_tool_call_id: `work-state-conflict-${inboundMessageId}`,
+        target_urgency: 'normal',
+      });
+      if (handoffError) throw new Error('Conflicting message work state could not be handed off.');
+      return {
+        handoffRequested: true,
+        text: 'I need the team to review the pending changes before anything else is updated.',
+      };
+    }
+    const workState = loadedWorkState.workState;
+    if (workState.control === 'human_paused') {
+      return { handoffRequested: false, suppressed: true, text: '' };
+    }
+
     const { data, error } = await this.input.supabase.rpc('get_message_agent_context', {
       target_message_id: inboundMessageId,
     });
@@ -71,7 +109,18 @@ export class ConversationAgentService {
     const history = historyFromJson(context.history);
     const userMessage = history.at(-1)?.content;
     if (!userMessage) throw new Error('Inbound message body is unavailable.');
-    const executor = new ControlledToolExecutor(industry, {
+
+    const resolvedCapabilities = this.input.schedulingCapabilities
+      ? await this.input.schedulingCapabilities.forConversation(context.conversation_id)
+      : noCustomerSchedulingCapabilities;
+    const toolCapabilities = {
+      booking: this.input.scheduling !== undefined && resolvedCapabilities.booking,
+      cancel: this.input.appointmentLifecycle !== undefined && resolvedCapabilities.cancel,
+      lookup: this.input.appointmentLifecycle !== undefined && resolvedCapabilities.lookup,
+      reschedule: this.input.appointmentLifecycle !== undefined && resolvedCapabilities.reschedule,
+    };
+
+    const baseExecutor = new ControlledToolExecutor(industry, {
       leadCapture: {
         capture: (tool, executionContext) =>
           this.leadCapture.capture({
@@ -188,6 +237,17 @@ export class ConversationAgentService {
           }
         : {}),
     });
+    const capabilityExecutor = new CustomerCapabilityToolExecutor(baseExecutor, toolCapabilities);
+    const executor = new WorkStateToolExecutor(capabilityExecutor, workState, async (pending) => {
+      const current = await loadMessageAgentWorkState(this.input.supabase, inboundMessageId);
+      if (current.kind !== 'ready' || current.workState.control !== 'ai_active') return false;
+      const currentPending = current.workState.pendingMutation;
+      return (
+        currentPending !== null &&
+        currentPending.actionIntentId === pending.actionIntentId &&
+        currentPending.intent === pending.intent
+      );
+    });
     const runtime = new AgentRuntime(this.provider, executor, this.input.model);
     const locationAddress = toRecord(context.location_address);
     const result = await runtime.runTurn({
@@ -212,7 +272,22 @@ export class ConversationAgentService {
       history: history.slice(0, -1),
       industry,
       userMessage,
+      workState,
     });
+    if (result.suppressedReason) {
+      return { handoffRequested: false, suppressed: true, text: '' };
+    }
+
+    const prepared = executor.preparedMutationAuthority();
+    if (prepared) {
+      const mutationConfirmation: MutationConfirmationAuthority = {
+        actionIntentId: prepared.actionIntentId,
+        intent: prepared.intent,
+      };
+      const text = await buildMutationConfirmationText(this.input.supabase, mutationConfirmation);
+      return { handoffRequested: false, mutationConfirmation, text };
+    }
+
     if (context.channel_type === 'sms' && result.text.length > 800 && !result.handoffRequested) {
       await this.input.supabase.rpc('request_message_handoff', {
         target_inbound_message_id: inboundMessageId,
@@ -222,7 +297,7 @@ export class ConversationAgentService {
       });
       return {
         handoffRequested: true,
-        text: 'Thanks for your message. Iâ€™m asking the team to follow up with the details.',
+        text: 'Thanks for your message. I’m asking the team to follow up with the details.',
       };
     }
     return { handoffRequested: result.handoffRequested, text: result.text };

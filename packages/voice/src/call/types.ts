@@ -5,6 +5,7 @@ export type VoiceCallStatus =
 
 export type VoiceEndReason =
   | 'caller_hangup'
+  | 'handoff'
   | 'hard_duration_limit'
   | 'idle_timeout'
   | 'provider_error'

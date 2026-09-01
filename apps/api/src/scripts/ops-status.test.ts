@@ -9,11 +9,6 @@ vi.mock('../lib/supabase.js', () => ({
 const { OPS_EXIT_DATABASE_UNAVAILABLE, runOpsStatus } = await import('./ops-status.js');
 const { REQUIRED_SCHEMA_VERSION } = await import('../observability/readiness.js');
 
-/**
- * The operator CLI runs with the service-role key, so anything it prints is printed by someone
- * holding the most privileged credential Avenlyo has. A rejected RPC used to reach Node's default
- * handler, which prints the error message and stack verbatim.
- */
 const LEAKY_MESSAGE =
   'FetchError: request to https://secret-db-host.example.internal/rest/v1/rpc failed, ' +
   'apikey=eyJhbGciOiJIUzI1NiJ9.service-role-secret';
@@ -55,7 +50,7 @@ describe('ops:status database failure handling', () => {
   it('handles a rejected runtime or snapshot call the same way', async () => {
     const rpc = vi.fn((name: string) => {
       if (name === 'platform_readiness_probe') {
-        return Promise.resolve({ data: [{ checked_at: 'now', schema_version: 14 }], error: null });
+        return Promise.resolve({ data: [{ checked_at: 'now', schema_version: 22 }], error: null });
       }
       return Promise.reject(leakyError());
     });
@@ -89,14 +84,6 @@ describe('ops:status database failure handling', () => {
   });
 });
 
-/**
- * The operator's view of the schema contract.
- *
- * ops:status is where a human checks whether the deployed database matches what this build needs,
- * so the required version it prints has to be this build's real requirement. Phase 19 raised it to
- * 19 when the web-chat poll RPC gained an argument; a stale number here would tell an operator a
- * mismatched database was fine.
- */
 describe('ops:status reports the schema contract this build requires', () => {
   function clientReporting(schemaVersion: number) {
     return {
@@ -112,24 +99,24 @@ describe('ops:status reports the schema contract this build requires', () => {
     };
   }
 
-  it('prints 19 as the required version, and the deployed one beside it', async () => {
-    expect(REQUIRED_SCHEMA_VERSION).toBe(19);
-    createServiceSupabaseClient.mockReturnValue(clientReporting(19));
+  it('prints 22 as the required version, and the deployed one beside it', async () => {
+    expect(REQUIRED_SCHEMA_VERSION).toBe(22);
+    createServiceSupabaseClient.mockReturnValue(clientReporting(22));
     const stdout: string[] = [];
 
     const code = await runOpsStatus({ argv: [], stderr: () => {}, stdout: (t) => stdout.push(t) });
     const output = stdout.join('');
 
     expect(code).toBe(0);
-    expect(output).toContain('19 (requires >= 19)');
+    expect(output).toContain('22 (requires >= 22)');
   });
 
   it('still prints the requirement when the deployed schema is behind it', async () => {
-    createServiceSupabaseClient.mockReturnValue(clientReporting(18));
+    createServiceSupabaseClient.mockReturnValue(clientReporting(21));
     const stdout: string[] = [];
 
     await runOpsStatus({ argv: [], stderr: () => {}, stdout: (t) => stdout.push(t) });
 
-    expect(stdout.join('')).toContain('18 (requires >= 19)');
+    expect(stdout.join('')).toContain('21 (requires >= 22)');
   });
 });

@@ -15,11 +15,32 @@ import type { ApiSchedulingConnectorRegistry } from './connector-registry.js';
 const MAX_DATES = 14;
 const MAX_SLOTS = 5;
 
+type ConfirmationClaimMode = 'presented_text' | 'trusted_voice';
+
 export interface ConversationSchedulingTurn {
   readonly conversationId: string;
   readonly triggeringInboundMessageId: string | null;
   /** Trusted voice adapters preserve the caller value obtained from their call context. */
   readonly trustedTransportPhoneE164?: string | null;
+}
+
+interface PresentedBookingClaimClient {
+  rpc(
+    name: 'claim_presented_conversation_scheduling_booking_intent',
+    args: {
+      readonly target_booking_intent_id: string;
+      readonly target_conversation_id: string;
+      readonly target_inbound_message_id: string;
+      readonly target_tool_call_id: string;
+    },
+  ): Promise<{
+    readonly data: readonly {
+      readonly booking_intent_id: string;
+      readonly confirmed_message_id: string | null;
+      readonly state: string;
+    }[] | null;
+    readonly error: unknown;
+  }>;
 }
 
 function utcDate(value: string): string | null {
@@ -60,13 +81,16 @@ function localDate(instant: string, timezone: string): string {
 /**
  * Channel-neutral provider-write state machine. The caller supplies only a conversation and the
  * exact persisted customer turn; provider identity, transport phone, candidates, leases, and
- * all mutation authorization are loaded from trusted SQL configuration.
+ * all mutation authorization are loaded from trusted SQL configuration. Text execution additionally
+ * requires a customer-visible bound prompt; realtime Voice retains its separate trusted transcript
+ * confirmation boundary and therefore uses the ownership-aware legacy claim shape.
  */
 export class SchedulingBookingService {
   public constructor(
     private readonly input: {
       readonly connectors: ApiSchedulingConnectorRegistry;
       readonly supabase: SupabaseClient<Database>;
+      readonly confirmationClaimMode?: ConfirmationClaimMode;
     },
   ) {}
 
@@ -208,15 +232,18 @@ export class SchedulingBookingService {
     turn: ConversationSchedulingTurn,
   ) {
     if (!turn.triggeringInboundMessageId) return { outcome: 'confirmation_required' as const };
-    const { data, error } = await this.input.supabase.rpc(
-      'claim_conversation_scheduling_booking_intent',
-      {
-        target_booking_intent_id: input.bookingIntentId,
-        target_conversation_id: turn.conversationId,
-        target_inbound_message_id: turn.triggeringInboundMessageId,
-        target_tool_call_id: input.toolCallId,
-      },
-    );
+    const claimArgs = {
+      target_booking_intent_id: input.bookingIntentId,
+      target_conversation_id: turn.conversationId,
+      target_inbound_message_id: turn.triggeringInboundMessageId,
+      target_tool_call_id: input.toolCallId,
+    };
+    const { data, error } =
+      this.input.confirmationClaimMode === 'trusted_voice'
+        ? await this.input.supabase.rpc('claim_conversation_scheduling_booking_intent', claimArgs)
+        : await (
+            this.input.supabase as unknown as PresentedBookingClaimClient
+          ).rpc('claim_presented_conversation_scheduling_booking_intent', claimArgs);
     const claim = data?.[0];
     if (error || !claim || claim.state === 'confirmation_required')
       return { outcome: 'confirmation_required' as const };

@@ -33,8 +33,14 @@ export class VoiceBookingService implements VoiceSchedulingServices {
       readonly supabase: SupabaseClient<Database>;
     },
   ) {
-    this.scheduling = new SchedulingBookingService(input);
-    this.lifecycle = new AppointmentLifecycleService(input);
+    this.scheduling = new SchedulingBookingService({
+      ...input,
+      confirmationClaimMode: 'trusted_voice',
+    });
+    this.lifecycle = new AppointmentLifecycleService({
+      ...input,
+      confirmationClaimMode: 'trusted_voice',
+    });
   }
 
   public async isEnabledForCall(context: { readonly callId: string }): Promise<boolean> {
