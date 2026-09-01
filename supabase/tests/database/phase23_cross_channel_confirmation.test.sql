@@ -79,17 +79,21 @@ values
    'customer', 'ai');
 insert into public.messages
   (id, organization_id, location_id, conversation_id, direction, message_type, body,
-   source_channel, author_type)
+   source_channel, author_type, created_at)
 values
   ('d6100000-0000-0000-0000-000000000001', 'd6020000-0000-0000-0000-000000000001',
    'd6030000-0000-0000-0000-000000000001', 'd6090000-0000-0000-0000-000000000001',
-   'inbound', 'text', 'Book Friday at 2pm', 'web', 'customer'),
+   'inbound', 'text', 'Book Friday at 2pm', 'web', 'customer', now() - interval '2 minutes'),
   ('d6100000-0000-0000-0000-000000000002', 'd6020000-0000-0000-0000-000000000001',
    'd6030000-0000-0000-0000-000000000001', 'd6090000-0000-0000-0000-000000000002',
-   'inbound', 'text', 'Yes', 'sms', 'customer'),
+   'inbound', 'text', 'Yes', 'sms', 'customer', now() - interval '10 seconds'),
   ('d6100000-0000-0000-0000-000000000003', 'd6020000-0000-0000-0000-000000000001',
    'd6030000-0000-0000-0000-000000000001', 'd6090000-0000-0000-0000-000000000001',
-   'outbound', 'text', 'Please confirm the exact Web booking. Reply YES to confirm.', 'web', 'ai');
+   'outbound', 'text', 'Please confirm the exact Web booking. Reply YES to confirm.', 'web', 'ai',
+   now() - interval '1 minute'),
+  ('d6100000-0000-0000-0000-000000000004', 'd6020000-0000-0000-0000-000000000001',
+   'd6030000-0000-0000-0000-000000000001', 'd6090000-0000-0000-0000-000000000001',
+   'inbound', 'text', 'Yes', 'web', 'customer', now());
 insert into public.message_deliveries
   (id, organization_id, location_id, message_id, provider, status, sent_at)
 values (
@@ -97,7 +101,7 @@ values (
   'd6020000-0000-0000-0000-000000000001',
   'd6030000-0000-0000-0000-000000000001',
   'd6100000-0000-0000-0000-000000000003',
-  'web_chat', 'sent', now()
+  'web_chat', 'sent', now() - interval '30 seconds'
 );
 
 insert into public.booking_candidates
@@ -132,15 +136,15 @@ set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
 select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
-    'd6100000-0000-0000-0000-000000000001')),
+    'd6100000-0000-0000-0000-000000000004')),
   1,
-  'the originating Web conversation sees its one presented pending booking authority'
+  'a same-Web confirmation after presentation sees its one pending booking authority'
 );
 select extensions.is(
   (select pending_mutation_intent_id from public.get_message_agent_work_state(
-    'd6100000-0000-0000-0000-000000000001')),
+    'd6100000-0000-0000-0000-000000000004')),
   'd6120000-0000-0000-0000-000000000001'::uuid,
-  'the originating Web work-state binds the exact opaque booking intent'
+  'the same-Web post-presentation work-state binds the exact opaque booking intent'
 );
 select extensions.is(
   (select pending_mutation_count from public.get_message_agent_work_state(
