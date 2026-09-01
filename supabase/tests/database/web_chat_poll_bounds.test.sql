@@ -93,11 +93,11 @@ select extensions.ok(
 );
 
 -- This suite originated in Phase 19, but the repository-level schema contract is global. Phase 23
--- now requires the confirmation-presentation migrations as well, so the current database must be 20.
+-- now includes the final provider-uncertainty retry boundary, so the current database must be 22.
 select extensions.is(
   (select schema_version from public.platform_schema_contract where id),
-  20,
-  'the current schema contract is 20 after the Phase 23 migrations'
+  22,
+  'the current schema contract is 22 after the final Phase 23 migrations'
 );
 
 -- ---------------------------------------------------------------------------------------
