@@ -57,7 +57,7 @@ values (
   'f1070000-0000-0000-0000-000000000001',
   'f1020000-0000-0000-0000-000000000001',
   'f1030000-0000-0000-0000-000000000001',
-  'phone', 'Retry phone'
+  'sms', 'Retry SMS'
 );
 insert into public.conversations
   (id, organization_id, location_id, channel_id, mode, ai_mode)
@@ -76,7 +76,7 @@ values (
   'f1020000-0000-0000-0000-000000000001',
   'f1030000-0000-0000-0000-000000000001',
   'f1080000-0000-0000-0000-000000000001',
-  'inbound', 'text', 'Yes, do it.', 'phone', 'customer'
+  'inbound', 'text', 'Yes, do it.', 'sms', 'customer'
 );
 
 insert into public.booking_candidates
