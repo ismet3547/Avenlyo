@@ -2,7 +2,7 @@
 -- never evidence that the provider mutation did not happen. Retries must surface durable review.
 begin;
 create extension if not exists pgtap with schema extensions;
-select extensions.plan(7);
+select extensions.plan(10);
 
 insert into auth.users (id, email)
 values ('f1010000-0000-0000-0000-000000000001', 'phase23-provider-retry@example.test');
@@ -196,15 +196,40 @@ select extensions.is(
   false,
   'service_role cannot bypass the lifecycle uncertainty guard'
 );
+select extensions.is(
+  has_function_privilege(
+    'service_role',
+    'public.get_message_agent_work_state_without_provider_review(uuid)',
+    'EXECUTE'
+  ),
+  false,
+  'service_role cannot bypass rollback-safe provider review through the renamed v1 work-state body'
+);
+select extensions.is(
+  has_function_privilege(
+    'service_role',
+    'public.customer_message_provider_review_required(uuid)',
+    'EXECUTE'
+  ),
+  false,
+  'service_role cannot call the internal provider-review predicate directly'
+);
 
 set local role service_role;
 select set_config('request.jwt.claim.role', 'service_role', true);
+select extensions.is(
+  (select pending_mutation_count from public.get_message_agent_work_state(
+    'f1090000-0000-0000-0000-000000000001'
+  )),
+  2,
+  'the stable v1 work-state makes unresolved provider work a fail-closed conflict for rollback binaries'
+);
 select extensions.is(
   (select review_required from public.get_message_agent_work_state_v2(
     'f1090000-0000-0000-0000-000000000001'
   )),
   true,
-  'the original inbound retry surfaces unresolved provider work as mandatory human review'
+  'the current v2 work-state surfaces unresolved provider work as mandatory human review'
 );
 reset role;
 
