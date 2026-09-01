@@ -5,7 +5,8 @@
 -- This migration also exposes unresolved provider-crossed work as a trusted message-runtime fact.
 -- If the first attempt cannot persist its human handoff (for example during the same DB outage), a
 -- retry of the original inbound turn must re-enter human review instead of looking like normal AI
--- work with zero pending confirmations.
+-- work with zero pending confirmations. The stable v1 work-state shape is hardened too so a rollback
+-- binary on the newer additive schema fails closed rather than losing that review requirement.
 
 alter function public.fail_scheduling_booking_intent(uuid, text, text)
   rename to fail_scheduling_booking_intent_without_uncertainty_guard;
@@ -75,6 +76,98 @@ begin
 end;
 $$;
 
+-- Internal predicate shared by the stable rollback work-state shape and the richer current-runtime
+-- shape. It is exact-message scoped only to derive the durable conversation identity; no model or
+-- caller-provided action identifier participates in this decision.
+create function public.customer_message_provider_review_required(target_message_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.messages inbound
+    where inbound.id = target_message_id
+      and inbound.direction = 'inbound'
+      and inbound.author_type = 'customer'
+      and (
+        exists (
+          select 1
+          from public.booking_intents booking
+          where booking.organization_id = inbound.organization_id
+            and booking.location_id = inbound.location_id
+            and booking.conversation_id = inbound.conversation_id
+            and booking.status in (
+              'booking', 'provider_success_pending_persistence', 'provider_state_unknown'
+            )
+        )
+        or exists (
+          select 1
+          from public.appointment_change_intents change_intent
+          where change_intent.organization_id = inbound.organization_id
+            and change_intent.location_id = inbound.location_id
+            and change_intent.conversation_id = inbound.conversation_id
+            and change_intent.actor_category = 'customer'
+            and change_intent.status in (
+              'executing', 'provider_success_pending_persistence',
+              'provider_state_unknown', 'handoff_required'
+            )
+        )
+      )
+  );
+$$;
+
+-- Keep the stable v1 RPC safe for rollback binaries. Its return shape cannot grow, so an unresolved
+-- provider-crossed action is encoded as a conflict (`pending_mutation_count >= 2`). The historical
+-- loader already treats that as fail-closed and requests durable human review. The current binary
+-- uses v2 below so it can distinguish the exact reason without overloading the count semantically.
+alter function public.get_message_agent_work_state(uuid)
+  rename to get_message_agent_work_state_without_provider_review;
+
+create function public.get_message_agent_work_state(target_message_id uuid)
+returns table (
+  control_state text,
+  pending_mutation_intent_id uuid,
+  pending_mutation_intent_type text,
+  pending_mutation_count integer
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  state record;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception using errcode = '42501', message = 'Trusted messaging backend access is required';
+  end if;
+
+  select * into state
+  from public.get_message_agent_work_state_without_provider_review(target_message_id);
+  if state.control_state is null then
+    raise exception using errcode = '42501', message = 'Trusted customer message is required';
+  end if;
+
+  if public.customer_message_provider_review_required(target_message_id) then
+    return query select
+      state.control_state::text,
+      null::uuid,
+      null::text,
+      greatest(coalesce(state.pending_mutation_count, 0), 2)::integer;
+    return;
+  end if;
+
+  return query select
+    state.control_state::text,
+    state.pending_mutation_intent_id::uuid,
+    state.pending_mutation_intent_type::text,
+    state.pending_mutation_count::integer;
+end;
+$$;
+
 create function public.get_message_agent_work_state_v2(target_message_id uuid)
 returns table (
   control_state text,
@@ -88,20 +181,9 @@ stable
 security definer
 set search_path = ''
 as $$
-declare
-  inbound public.messages%rowtype;
 begin
   if auth.role() <> 'service_role' then
     raise exception using errcode = '42501', message = 'Trusted messaging backend access is required';
-  end if;
-
-  select * into inbound
-  from public.messages
-  where id = target_message_id
-    and direction = 'inbound'
-    and author_type = 'customer';
-  if inbound.id is null then
-    raise exception using errcode = '42501', message = 'Trusted customer message is required';
   end if;
 
   return query
@@ -109,36 +191,13 @@ begin
     state.pending_mutation_intent_id,
     state.pending_mutation_intent_type,
     state.pending_mutation_count,
-    (
-      exists (
-        select 1
-        from public.booking_intents booking
-        where booking.organization_id = inbound.organization_id
-          and booking.location_id = inbound.location_id
-          and booking.conversation_id = inbound.conversation_id
-          and booking.status in (
-            'booking', 'provider_success_pending_persistence', 'provider_state_unknown'
-          )
-      )
-      or exists (
-        select 1
-        from public.appointment_change_intents change_intent
-        where change_intent.organization_id = inbound.organization_id
-          and change_intent.location_id = inbound.location_id
-          and change_intent.conversation_id = inbound.conversation_id
-          and change_intent.actor_category = 'customer'
-          and change_intent.status in (
-            'executing', 'provider_success_pending_persistence',
-            'provider_state_unknown', 'handoff_required'
-          )
-      )
-    ) as review_required
+    public.customer_message_provider_review_required(target_message_id)
   from public.get_message_agent_work_state(target_message_id) state;
 end;
 $$;
 
--- Renamed implementations are internal only. The stable public names preserve rollback call shapes
--- while enforcing the uncertainty guard for every service caller.
+-- Renamed implementations/helpers are internal only. Stable public names preserve rollback call
+-- shapes while enforcing the uncertainty/review guards for every service caller.
 revoke all on function public.fail_scheduling_booking_intent_without_uncertainty_guard(uuid, text, text)
   from public, anon, authenticated, service_role;
 revoke all on function public.fail_appointment_change_intent_without_uncertainty_guard(uuid, text, text)
@@ -152,13 +211,22 @@ grant execute on function public.fail_scheduling_booking_intent(uuid, text, text
 grant execute on function public.fail_appointment_change_intent(uuid, text, text)
   to service_role;
 
+revoke all on function public.customer_message_provider_review_required(uuid)
+  from public, anon, authenticated, service_role;
+revoke all on function public.get_message_agent_work_state_without_provider_review(uuid)
+  from public, anon, authenticated, service_role;
+revoke all on function public.get_message_agent_work_state(uuid)
+  from public, anon, authenticated;
+grant execute on function public.get_message_agent_work_state(uuid)
+  to service_role;
 revoke all on function public.get_message_agent_work_state_v2(uuid)
   from public, anon, authenticated;
 grant execute on function public.get_message_agent_work_state_v2(uuid)
   to service_role;
 
 -- Schema 22 is declared only after the provider-uncertainty downgrade guard and retry-visible
--- human-review fact exist. A current binary must never report ready against schema 21 without them.
+-- human-review facts exist for both current and rollback binaries. A current binary must never
+-- report ready against schema 21 without them.
 update public.platform_schema_contract
 set schema_version = 22, updated_at = now()
 where id;
