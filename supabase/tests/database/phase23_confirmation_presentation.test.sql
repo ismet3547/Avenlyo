@@ -203,8 +203,8 @@ select extensions.is(
 );
 select extensions.is(
   (select schema_version from public.platform_schema_contract where id),
-  21,
-  'the current binary schema contract advances only after final Phase 23 closure hardening'
+  22,
+  'the final Phase 23 schema contract includes provider outcome retry hardening'
 );
 
 select extensions.finish();
