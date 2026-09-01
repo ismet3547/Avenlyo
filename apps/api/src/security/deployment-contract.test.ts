@@ -831,7 +831,7 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
     expect(await keysOf('staging')).toEqual(await keysOf('production'));
   });
 
-  it('recognizes the Phase 23 schema contract and its additive migrations', async () => {
+  it('recognizes the final Phase 23 schema contract and its additive hardening migrations', async () => {
     const readiness = await readFile('apps/api/src/observability/readiness.ts', 'utf8');
     const confirmation = await readFile(
       'supabase/migrations/20260901070000_phase_23_confirmation_presentation.sql',
@@ -841,9 +841,20 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
       'supabase/migrations/20260901080000_phase_23_confirmation_transition_guard.sql',
       'utf8',
     );
+    const ordering = await readFile(
+      'supabase/migrations/20260901100000_phase_23_confirmation_visibility_ordering.sql',
+      'utf8',
+    );
+    const providerRetry = await readFile(
+      'supabase/migrations/20260901110000_phase_23_provider_outcome_retry_hardening.sql',
+      'utf8',
+    );
 
-    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*20/);
+    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*22/);
     expect(confirmation).toContain('confirmation_prompt_message_id');
     expect(guard).toContain('Presented booking confirmation is required');
+    expect(ordering).toContain('customer_mutation_confirmation_prompt_visible_at');
+    expect(providerRetry).toContain('get_message_agent_work_state_v2');
+    expect(providerRetry).toContain("guarded_status := 'provider_state_unknown'");
   });
 });
