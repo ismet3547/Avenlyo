@@ -100,11 +100,19 @@ describe('readiness evaluation', () => {
   });
 
   describe('the Phase 23 schema contract', () => {
-    it('requires 21 because current mutation authority depends on final Phase 23 ordering guards', () => {
-      expect(REQUIRED_SCHEMA_VERSION).toBe(21);
+    it('requires 22 because current runtime depends on provider uncertainty retry hardening', () => {
+      expect(REQUIRED_SCHEMA_VERSION).toBe(22);
     });
 
-    it('refuses schema 20 because it is an intermediate Phase 23 state missing final closure', () => {
+    it('refuses schema 21 because it lacks the final provider retry boundary', () => {
+      const result = readinessFor({ probe: { ok: true, schemaVersion: 21 } });
+
+      expect(result.ready).toBe(false);
+      expect(result.reasons).toEqual(['schema_incompatible']);
+      expect(result.schemaVersion).toBe(21);
+    });
+
+    it('refuses schema 20 because it is an intermediate Phase 23 presentation state', () => {
       const result = readinessFor({ probe: { ok: true, schemaVersion: 20 } });
 
       expect(result.ready).toBe(false);
@@ -120,10 +128,10 @@ describe('readiness evaluation', () => {
       expect(result.schemaVersion).toBe(19);
     });
 
-    it('accepts a 21 database', () => {
-      expect(readinessFor({ probe: { ok: true, schemaVersion: 21 } })).toMatchObject({
+    it('accepts a 22 database', () => {
+      expect(readinessFor({ probe: { ok: true, schemaVersion: 22 } })).toMatchObject({
         ready: true,
-        schemaVersion: 21,
+        schemaVersion: 22,
       });
     });
   });
