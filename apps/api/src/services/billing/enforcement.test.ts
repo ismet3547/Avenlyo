@@ -221,9 +221,10 @@ describe('scheduling under billing suppression', () => {
       connectors: { forIntegration: vi.fn().mockResolvedValue(spy.connector) } as never,
       supabase: client,
     });
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 
     const slots = await service.getAvailableAppointments(
-      { appointmentType: 'Checkup', dates: ['2026-09-01'], toolCallId: 'call-1' },
+      { appointmentType: 'Checkup', dates: [tomorrow], toolCallId: 'call-1' },
       turn,
     );
 
