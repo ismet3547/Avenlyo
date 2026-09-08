@@ -10,11 +10,11 @@ export default async function IndustryPage() {
   return (
     <OnboardingShell activeStep="industry" persistedStep={getPersistedActiveStep(context)}>
       <PageHeading
-        description="Choose the pack that best matches how your front desk works today. This sets a maintainable starting configuration; it does not activate an AI agent."
+        description="Avenlyo V1 is built for private dental clinics: patient questions, implant and cosmetic leads, appointments, follow-up and safe handoff to your team."
         eyebrow="Step 1 of 5"
-        title="What kind of business are you setting up?"
+        title="Set up your dental clinic"
       />
-      <IndustryForm selectedIndustryId={context.primaryIndustryId} />
+      <IndustryForm />
     </OnboardingShell>
   );
 }

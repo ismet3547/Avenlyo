@@ -99,39 +99,32 @@ describe('readiness evaluation', () => {
     expect(result.ready).toBe(true);
   });
 
-  describe('the Phase 23 schema contract', () => {
-    it('requires 22 because current runtime depends on provider uncertainty retry hardening', () => {
-      expect(REQUIRED_SCHEMA_VERSION).toBe(22);
+  describe('the dental V1 schema contract', () => {
+    it('requires 23 because new dental onboarding depends on the dental system template and RPC contract', () => {
+      expect(REQUIRED_SCHEMA_VERSION).toBe(23);
     });
 
-    it('refuses schema 21 because it lacks the final provider retry boundary', () => {
-      const result = readinessFor({ probe: { ok: true, schemaVersion: 21 } });
+    it('refuses schema 22 because it cannot persist a dental onboarding selection', () => {
+      const result = readinessFor({ probe: { ok: true, schemaVersion: 22 } });
 
       expect(result.ready).toBe(false);
       expect(result.reasons).toEqual(['schema_incompatible']);
-      expect(result.schemaVersion).toBe(21);
+      expect(result.schemaVersion).toBe(22);
     });
 
-    it('refuses schema 20 because it is an intermediate Phase 23 presentation state', () => {
-      const result = readinessFor({ probe: { ok: true, schemaVersion: 20 } });
-
-      expect(result.ready).toBe(false);
-      expect(result.reasons).toEqual(['schema_incompatible']);
-      expect(result.schemaVersion).toBe(20);
+    it('still refuses older intermediate Phase 23 schemas', () => {
+      for (const schemaVersion of [21, 20, 19]) {
+        const result = readinessFor({ probe: { ok: true, schemaVersion } });
+        expect(result.ready).toBe(false);
+        expect(result.reasons).toEqual(['schema_incompatible']);
+        expect(result.schemaVersion).toBe(schemaVersion);
+      }
     });
 
-    it('refuses a 19 database that lacks durable confirmation presentation authority', () => {
-      const result = readinessFor({ probe: { ok: true, schemaVersion: 19 } });
-
-      expect(result.ready).toBe(false);
-      expect(result.reasons).toEqual(['schema_incompatible']);
-      expect(result.schemaVersion).toBe(19);
-    });
-
-    it('accepts a 22 database', () => {
-      expect(readinessFor({ probe: { ok: true, schemaVersion: 22 } })).toMatchObject({
+    it('accepts a 23 database', () => {
+      expect(readinessFor({ probe: { ok: true, schemaVersion: 23 } })).toMatchObject({
         ready: true,
-        schemaVersion: 22,
+        schemaVersion: 23,
       });
     });
   });
