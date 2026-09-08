@@ -92,12 +92,13 @@ select extensions.ok(
   'both overloads pin an empty search_path'
 );
 
--- This suite originated in Phase 19, but the repository-level schema contract is global. Phase 23
--- now includes the final provider-uncertainty retry boundary, so the current database must be 22.
-select extensions.is(
+-- This suite originated in Phase 19, but the repository-level schema contract is global. Later
+-- additive migrations may advance it; this historical suite only requires the Phase 23 closure.
+select extensions.cmp_ok(
   (select schema_version from public.platform_schema_contract where id),
+  '>=',
   22,
-  'the current schema contract is 22 after the final Phase 23 migrations'
+  'the current schema contract remains compatible with the final Phase 23 migrations'
 );
 
 -- ---------------------------------------------------------------------------------------

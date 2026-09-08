@@ -1,5 +1,6 @@
 export {
   autoRepairPack,
+  dentalPack,
   getIndustryPack,
   industryPacks,
   medspaPack,

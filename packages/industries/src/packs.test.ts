@@ -4,16 +4,23 @@ import { getIndustryPack, industryPacks, resolveIndustryPack } from './packs';
 import { industrySelectionSchema } from './validation';
 
 describe('industry packs', () => {
-  it('contains the three initial industries with unique IDs', () => {
-    expect(industryPacks.map((pack) => pack.id)).toEqual(['veterinary', 'auto-repair', 'medspa']);
+  it('keeps legacy packs available and adds the dental V1 pack with a unique ID', () => {
+    expect(industryPacks.map((pack) => pack.id)).toEqual([
+      'veterinary',
+      'auto-repair',
+      'medspa',
+      'dental',
+    ]);
   });
 
-  it('retrieves a pack by ID', () => {
-    expect(getIndustryPack('veterinary').name).toBe('Veterinary Clinic');
+  it('retrieves the dental pack by ID', () => {
+    expect(getIndustryPack('dental').name).toBe('Dental Clinic');
+    expect(getIndustryPack('dental').leadQualification.serviceCategories).toContain('implant');
   });
 
-  it('rejects unsupported industry identifiers at the shared boundary', () => {
-    expect(industrySelectionSchema.safeParse({ industryId: 'dentistry' }).success).toBe(false);
-    expect(resolveIndustryPack('dentistry')).toBeNull();
+  it('accepts dental and still rejects unsupported industry identifiers', () => {
+    expect(industrySelectionSchema.safeParse({ industryId: 'dental' }).success).toBe(true);
+    expect(industrySelectionSchema.safeParse({ industryId: 'hospital' }).success).toBe(false);
+    expect(resolveIndustryPack('hospital')).toBeNull();
   });
 });

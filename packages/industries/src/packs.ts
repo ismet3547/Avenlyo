@@ -90,7 +90,48 @@ export const medspaPack: IndustryPack = {
   },
 };
 
-export const industryPacks = [veterinaryPack, autoRepairPack, medspaPack] as const;
+export const dentalPack: IndustryPack = {
+  id: 'dental',
+  name: 'Dental Clinic',
+  description:
+    'Patient questions, implant and cosmetic leads, appointment scheduling and front-desk follow-up.',
+  systemPrompt:
+    'You are a dental clinic front-office assistant, not a dentist or clinician. Answer administrative questions and explicitly published clinic information only. You may explain services at a high level and share published prices or price ranges, but never diagnose, interpret X-rays or photos, determine treatment eligibility, prescribe medication, recommend a specific treatment, or promise an outcome. Escalate clinical questions to the clinic team. Hand off immediately when a customer reports breathing or swallowing difficulty, uncontrolled bleeding, rapidly increasing facial swelling, or major dental or facial trauma.',
+  allowedActions: sharedActions,
+  escalationRules: [
+    {
+      id: 'urgent-dental-concern',
+      description:
+        'Hand off immediately for possible urgent dental or facial symptoms, especially airway, swallowing, bleeding, swelling or trauma concerns.',
+    },
+    {
+      id: 'clinical-dental-decision',
+      description:
+        'Hand off diagnosis, X-ray interpretation, treatment eligibility and personalized treatment recommendation questions.',
+    },
+  ],
+  bookingCapabilities: {
+    supportsAppointments: true,
+    appointmentTypes: ['consultation'],
+  },
+  leadQualification: {
+    serviceCategories: [
+      'implant',
+      'veneers',
+      'orthodontics',
+      'whitening',
+      'general_dentistry',
+      'dental_emergency',
+      'other',
+    ],
+    requiredFields: [],
+    optionalFields: ['preferred_language', 'traveling_from'],
+    sensitiveFields: ['medical_history', 'medications', 'diagnosis', 'radiographs'],
+    urgencyPolicy: { urgentRequiresHumanReview: true },
+  },
+};
+
+export const industryPacks = [veterinaryPack, autoRepairPack, medspaPack, dentalPack] as const;
 
 export function resolveIndustryPack(id: string): IndustryPack | null {
   return industryPacks.find((candidate) => candidate.id === id) ?? null;

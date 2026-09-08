@@ -300,7 +300,9 @@ describe('one deployment-profile contract, shared by the templates, Compose and 
     const declared = /const REQUIRED_PROFILE_KEYS = \[([^\]]*)\]/.exec(source);
 
     expect(declared).not.toBeNull();
-    const mirrored = [...(declared?.[1] ?? '').matchAll(/'([A-Z0-9_]+)'/g)].map((match) => match[1]);
+    const mirrored = [...(declared?.[1] ?? '').matchAll(/'([A-Z0-9_]+)'/g)].map(
+      (match) => match[1],
+    );
     expect(mirrored).toEqual([...REQUIRED_DEPLOYED_PROFILE_SETTINGS]);
   });
 });
@@ -633,7 +635,12 @@ describe('every documented operator command ships in the production artifact', (
   it('bundles all four operator entry points', async () => {
     const config = await readFile('apps/api/esbuild.config.mjs', 'utf8');
 
-    for (const entry of ['ops-status', 'ops-preflight', 'smoke-production', 'chromium-sandbox-smoke']) {
+    for (const entry of [
+      'ops-status',
+      'ops-preflight',
+      'smoke-production',
+      'chromium-sandbox-smoke',
+    ]) {
       expect(config).toContain(`'scripts/${entry}'`);
     }
   });
@@ -712,7 +719,8 @@ describe('env-file migration is verified without printing any value', () => {
     const text = await runbook();
 
     expect(
-      (text.match(/sudo install -o avenlyo -g avenlyo -m 640 "\$T" \/etc\/avenlyo\//g) ?? []).length,
+      (text.match(/sudo install -o avenlyo -g avenlyo -m 640 "\$T" \/etc\/avenlyo\//g) ?? [])
+        .length,
     ).toBeGreaterThanOrEqual(2);
   });
 
@@ -831,7 +839,7 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
     expect(await keysOf('staging')).toEqual(await keysOf('production'));
   });
 
-  it('recognizes the final Phase 23 schema contract and its additive hardening migrations', async () => {
+  it('recognizes the Phase 23 hardening plus the dental V1 schema closure', async () => {
     const readiness = await readFile('apps/api/src/observability/readiness.ts', 'utf8');
     const confirmation = await readFile(
       'supabase/migrations/20260901070000_phase_23_confirmation_presentation.sql',
@@ -849,12 +857,20 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
       'supabase/migrations/20260901110000_phase_23_provider_outcome_retry_hardening.sql',
       'utf8',
     );
+    const dental = await readFile(
+      'supabase/migrations/20260908000000_phase_24_dental_vertical.sql',
+      'utf8',
+    );
 
-    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*22/);
+    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*23/);
     expect(confirmation).toContain('confirmation_prompt_message_id');
     expect(guard).toContain('Presented booking confirmation is required');
     expect(ordering).toContain('customer_mutation_confirmation_prompt_visible_at');
     expect(providerRetry).toContain('get_message_agent_work_state_v2');
     expect(providerRetry).toContain("guarded_status := 'provider_state_unknown'");
+    expect(dental).toContain(
+      "primary_industry_id in ('veterinary', 'auto-repair', 'medspa', 'dental')",
+    );
+    expect(dental).toContain('set schema_version = 23');
   });
 });

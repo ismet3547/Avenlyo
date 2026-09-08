@@ -1,4 +1,4 @@
-export const industryIds = ['veterinary', 'auto-repair', 'medspa'] as const;
+export const industryIds = ['veterinary', 'auto-repair', 'medspa', 'dental'] as const;
 
 export type IndustryId = (typeof industryIds)[number];
 

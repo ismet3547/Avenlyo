@@ -18,7 +18,83 @@ export function detectSafetyEscalation(
   industry: IndustryPack,
   userMessage: string,
 ): SafetyEscalation | null {
-  const message = userMessage.toLocaleLowerCase('en-US');
+  const message = userMessage
+    .toLocaleLowerCase('en-US')
+    .normalize('NFKC')
+    .replace(/\u0307/g, '');
+  if (industry.id === 'dental') {
+    const turkish =
+      /[çğıöşü]/i.test(userMessage) ||
+      hasAny(message, ['diş', 'implant bana', 'implant için', 'röntgen', 'kanama', 'yüzüm']);
+    if (
+      hasAny(message, [
+        'difficulty breathing',
+        'cannot breathe',
+        "can't breathe",
+        'difficulty swallowing',
+        'cannot swallow',
+        "can't swallow",
+        'uncontrolled bleeding',
+        'bleeding will not stop',
+        "bleeding won't stop",
+        'rapid facial swelling',
+        'face is swelling',
+        'major facial trauma',
+        'knocked out tooth',
+        'tooth knocked out',
+        'nefes alamıyorum',
+        'nefes almakta zorlanıyorum',
+        'yutkunamıyorum',
+        'yutmakta zorlanıyorum',
+        'kanama durmuyor',
+        'şiddetli kanama',
+        'yüzüm hızla şişiyor',
+        'yüzüm çok şişti',
+        'dişim yerinden çıktı',
+      ])
+    ) {
+      return {
+        reason: 'Potential urgent dental or facial safety concern.',
+        reply: turkish
+          ? 'Bu durum acil değerlendirme gerektirebilir. Klinik ekibine hemen yönlendiriyorum. Nefes alma veya yutma güçlüğü varsa yerel acil sağlık hizmetlerine başvurun.'
+          : 'This may need urgent clinical attention. I’m escalating this to the clinic team now. If breathing or swallowing is affected, contact local emergency services.',
+        urgency: 'urgent',
+      };
+    }
+    if (
+      hasAny(message, [
+        'toothache',
+        'severe tooth pain',
+        'my tooth hurts',
+        'what treatment do i need',
+        'do i need a root canal',
+        'do i need a filling',
+        'am i suitable for an implant',
+        'implant suitable for me',
+        'should i get an implant',
+        'diagnose',
+        'x-ray',
+        'radiograph',
+        'dişim ağrıyor',
+        'dişim çok ağrıyor',
+        'hangi tedaviye ihtiyacım var',
+        'kanal tedavisi gerekir mi',
+        'dolgu gerekir mi',
+        'implant bana uygun mu',
+        'implant için uygun muyum',
+        'röntgen',
+        'teşhis',
+      ])
+    ) {
+      return {
+        reason: 'Dental diagnosis, treatment eligibility or clinical advice question.',
+        reply: turkish
+          ? 'Bunu güvenli şekilde değerlendirmek için klinik ekibinin yardımcı olması gerekiyor. Sizi şimdi ekibe yönlendiriyorum.'
+          : 'The clinic team needs to help with that clinical question. I’m handing this over to them now.',
+        urgency: 'normal',
+      };
+    }
+  }
   if (industry.id === 'veterinary') {
     if (
       hasAny(message, [

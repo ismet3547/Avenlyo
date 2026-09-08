@@ -233,10 +233,11 @@ select extensions.is(
 );
 reset role;
 
-select extensions.is(
+select extensions.cmp_ok(
   (select schema_version from public.platform_schema_contract where id),
+  '>=',
   22,
-  'schema 22 is declared only after provider retry hardening exists'
+  'the current database remains at or beyond the Phase 23 provider retry hardening closure'
 );
 select extensions.ok(
   has_function_privilege('service_role', 'public.get_message_agent_work_state_v2(uuid)', 'EXECUTE'),

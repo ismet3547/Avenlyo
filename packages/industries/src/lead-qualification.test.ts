@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { autoRepairPack, medspaPack, veterinaryPack } from './packs';
+import { autoRepairPack, dentalPack, medspaPack, veterinaryPack } from './packs';
 import { requiresUrgentLeadHandoff, validateLeadCapture } from './lead-qualification';
 
 describe('industry lead qualification', () => {
@@ -34,6 +34,28 @@ describe('industry lead qualification', () => {
         urgency: 'urgent',
       }),
     ).toMatchObject({ facts: { details: {} }, qualification: 'needs_human' });
+  });
+
+  it('qualifies a dental implant lead without retaining clinical details', () => {
+    expect(
+      validateLeadCapture(dentalPack, {
+        customerGoal: 'appointment',
+        details: {
+          medical_history: 'private',
+          preferred_language: 'English',
+          traveling_from: 'London',
+        },
+        serviceCategory: 'implant',
+        urgency: 'routine',
+      }),
+    ).toMatchObject({
+      facts: {
+        details: { preferred_language: 'English', traveling_from: 'London' },
+        serviceCategory: 'implant',
+      },
+      missingFields: [],
+      qualification: 'qualified',
+    });
   });
 
   it('derives urgent human review only from the industry pack policy', () => {

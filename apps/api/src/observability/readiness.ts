@@ -16,17 +16,15 @@ import type { RuntimeComponent } from './runtime-state.js';
 /**
  * Raised when this application build needs migrations the deployed database does not have yet.
  *
- * 22 as of Phase 23 closure: the customer agent depends on trusted work-state RPCs, durable mutation
- * confirmation presentation/binding, event-time presentation ordering, transition guards, and the
- * final provider-uncertainty retry boundary. Schema 21 is intentionally rejected because it predates
- * the guard that prevents an unclassified post-provider persistence failure from being downgraded to
- * an ordinary failed action and predates retry-visible human-review state.
+ * 23 as of the dental-first V1 vertical: the application now accepts and persists the source-controlled
+ * `dental` industry and depends on the matching system template plus onboarding constraint/RPC update.
+ * Schema 22 remains Phase 23-compatible for older binaries but must be rejected by this build because
+ * a new dental workspace cannot complete its first onboarding step against it.
  *
  * The comparison stays `>=`, so a *newer* schema remains compatible with an older build and a
- * rollback needs no down-migration. Phase 23 retains the legacy claim/failure call shapes and applies
- * safer semantics behind those stable names.
+ * rollback needs no down-migration. The dental migration is additive: legacy industries remain valid.
  */
-export const REQUIRED_SCHEMA_VERSION = 22;
+export const REQUIRED_SCHEMA_VERSION = 23;
 
 export type ReadinessReason =
   | 'shutting_down'

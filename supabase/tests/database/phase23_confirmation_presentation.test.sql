@@ -201,10 +201,11 @@ select extensions.is(
   'booking',
   'the accepted transition records the consequential action as committing'
 );
-select extensions.is(
+select extensions.cmp_ok(
   (select schema_version from public.platform_schema_contract where id),
+  '>=',
   22,
-  'the final Phase 23 schema contract includes provider outcome retry hardening'
+  'the current database still includes the final Phase 23 provider retry hardening'
 );
 
 select extensions.finish();

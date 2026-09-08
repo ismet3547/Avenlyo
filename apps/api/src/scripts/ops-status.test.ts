@@ -50,7 +50,7 @@ describe('ops:status database failure handling', () => {
   it('handles a rejected runtime or snapshot call the same way', async () => {
     const rpc = vi.fn((name: string) => {
       if (name === 'platform_readiness_probe') {
-        return Promise.resolve({ data: [{ checked_at: 'now', schema_version: 22 }], error: null });
+        return Promise.resolve({ data: [{ checked_at: 'now', schema_version: 23 }], error: null });
       }
       return Promise.reject(leakyError());
     });
@@ -99,24 +99,24 @@ describe('ops:status reports the schema contract this build requires', () => {
     };
   }
 
-  it('prints 22 as the required version, and the deployed one beside it', async () => {
-    expect(REQUIRED_SCHEMA_VERSION).toBe(22);
-    createServiceSupabaseClient.mockReturnValue(clientReporting(22));
+  it('prints 23 as the required version, and the deployed one beside it', async () => {
+    expect(REQUIRED_SCHEMA_VERSION).toBe(23);
+    createServiceSupabaseClient.mockReturnValue(clientReporting(23));
     const stdout: string[] = [];
 
     const code = await runOpsStatus({ argv: [], stderr: () => {}, stdout: (t) => stdout.push(t) });
     const output = stdout.join('');
 
     expect(code).toBe(0);
-    expect(output).toContain('22 (requires >= 22)');
+    expect(output).toContain('23 (requires >= 23)');
   });
 
   it('still prints the requirement when the deployed schema is behind it', async () => {
-    createServiceSupabaseClient.mockReturnValue(clientReporting(21));
+    createServiceSupabaseClient.mockReturnValue(clientReporting(22));
     const stdout: string[] = [];
 
     await runOpsStatus({ argv: [], stderr: () => {}, stdout: (t) => stdout.push(t) });
 
-    expect(stdout.join('')).toContain('21 (requires >= 22)');
+    expect(stdout.join('')).toContain('22 (requires >= 23)');
   });
 });

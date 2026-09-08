@@ -96,10 +96,11 @@ select extensions.ok(
   ),
   'internal confirmation visibility predicate is not directly exposed to service_role'
 );
-select extensions.is(
+select extensions.cmp_ok(
   (select schema_version from public.platform_schema_contract where id),
+  '>=',
   22,
-  'Phase 23 final database contract advertises schema version 22'
+  'the current database still satisfies the Phase 23 schema closure'
 );
 
 select * from finish();
