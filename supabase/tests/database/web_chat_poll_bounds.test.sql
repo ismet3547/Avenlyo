@@ -200,56 +200,159 @@ select extensions.lives_ok(
 --
 -- A rolled-back Phase 18 binary has no edge limiter and accepts any syntactically valid token, so
 -- the scope the wrapper derives comes from a caller-supplied value. Delegating straight through
--- would let an unknown token reach consume_messaging_rate_limit and execute its INSERT‹‹ˆÓ‚‹KHÓÓ‘“PÕKHÚXÚHÝXœÙ\]Y[LH[ˆ›ÛÈ˜XÚË[ˆHØ[YH˜[œØXÝ[Û‹ˆ›ÈÛÛ[Z]Y›ÝÂ‹KHÝ\š]™\ÈZ]\ˆØ^KÛÈ\ÈØ\È™]™\ˆ\˜X›HØ\™[˜[]HÜ›ÝÝˆHØ]IÜÈ˜[YH\È][‚‹KH[šÛ›ÝÛˆÚÙ[ˆÙ\È›Ý™XXÚH[Z]\ˆ][ˆ›ÈX›ÜYS”ÑT•›ÈÐS›ÈXY\K[™›Â‹KH\[™[˜ÙHÛˆH]\™HØ[\ˆ›ÜYØ][™ÈH\œ›Üˆ˜]\ˆ[ˆÝØ[ÝÚ[™È]‚‹KB‹KHÛÈÙ\\˜]H[™ÜÈ\™H\ÜÙ\Y™[ÝË[™]\ÈÛÜ™Z[™È^XÝX›Ý]ÚXÚ\ÈÚXÚ‹KH™XØ]\ÙH^H\™H›Ý\]X[HÝ›Û™Ë‚‹KB‹KHH›ÝËXÛÝ[\ÜÙ\[ÛœÈ[ˆH
-š[˜\šX[
-Žˆ›Ý][™È[šÛ›ÝÛˆÚÙ[œÈ]\Ý›ÝÜ›ÝÈ\˜X›B‹KH[Z]\ˆÝ]Kˆ^HÛ›ÝÚ][™Ú]Ý]HÜ˜\\‰ÜÈØ]K™XØ]\ÙHHLHX›ÜÈB‹KH˜[œØXÝ[Ûˆ[™›ÛÈ˜XÚÈHS”ÑT•‹‹ˆÓˆÓÓ‘“PÕH[Z]\ˆXYH[ÛY[ÈX\›Y\‹ˆ™\šYšYY‹KH\™XÝHYØZ[œÝH™X[]X˜\ÙKÝ]ÚYH[žH\Ý\›™\ÜËÚ]HØ]H™[[Ý™YˆÛÈ\ÙH\™B‹KHHÝX\™ÛˆH›Ü\K›ÝH[[ÛœÝ˜][Ûˆ]HØ]H\ÈÚ]›ÝšY\È]‚‹KB‹KHHÝXÝ\˜[\ÜÙ\[Ûˆ™[ÝÈ[œÈH
-™Ø]J‹ˆ]\ÈÚ]˜Z[ÈYˆÛÛY[Û™H[]\ÈHÚXÚË‹KH[™]^\ÝÈ™XØ]\ÙHH[˜\šX[Ý\œ™[H™\ÝÈÛˆ˜[œØXÝ[Û˜[›Û˜XÚÈKHÚXÚ\ÈYB‹KHÙ^H[™ÛÝ[ÝÜ™Z[™ÈYHH[ÛY[[žHØ[\ˆÜ˜\Y\È”È[ˆ[ˆ^Ù\[Ûˆ[™\‹‹KHHÝX˜[œØXÝ[Û‹ÜˆH™]žHÛÜ]ÝØ[ÝÙYH\œ›Ü‹ˆHØ]HXZÙ\ÈH›Ü\B‹KH[™\[™[Ùˆ]‚‹KB‹KHH™Y\Ø[\ÜÙ\[ÛœÈ\ÙHÛÜœ™XÝH›Ü›X]YZ^\Ú\È]X\È›ÈÙ\ÜÚ[Û‹ÚXÚ\ÈB‹KHÚ\H]X]\œÎÈHX[›Ü›YY\Ú\ÈØ]YÚžHH›Ü›X]ÚXÚÈ[™›Ý™\È›Ý[™È\™K‚‹KHKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKB‚œÙ[XÝ^[œÚ[ÛœË›ÚÊˆ
-Ù[XÝÜÚ][ÛŠ	ÝÙX—ØÚ]ÜÙ\ÜÚ[ÛœÉÈ[ˆœ›ÜÜ˜ÊHˆˆ[™ÜÚ][ÛŠ	ÝÙX—ØÚ]ÜÙ\ÜÚ[ÛœÉÈ[ˆœ›ÜÜ˜ÊBˆÜÚ][ÛŠ	ÙÙ]ÝÙX—ØÚ]ÛY\ÜØYÙ\ÉÈ[ˆœ›ÜÜ˜ÊBˆœ›ÛH×Ü›ØÈ›Ú[ˆ×Û˜[Y\ÜXÙHˆÛˆ‹›ÚYHœ›Û˜[Y\ÜXÙBˆÚ\™H‹›œÜ˜[YHH	ÜX›XÉÈ[™œ›Û˜[YHH	ÙÙ]ÝÙX—ØÚ]ÛY\ÜØYÙ\ÉÂˆ[™×ÙÙ]Ù[˜Ý[Û—ÚY[]WØ\™Ý[Y[Ê›ÚY
-H›ÝZÙH	É\˜]WÜØÛÜIIÊKˆ	ÝH›Û˜XÚÈÝ™\›ØY›Ý™\ÈH]™HÙ\ÜÚ[Ûˆ‘Q“Ô‘H][YØ]\È[™\š]™\ÈH[Z]\ˆØÛÜIÂŠNÂ‚œ™\Ù]›ÛNÂ˜Ü™X]H[\X›H[Z]\—Ø™Y›Ü™H\ÂˆÙ[XÝÛÝ[
+-- would let an unknown token reach consume_messaging_rate_limit and execute its INSERT ... ON
+-- CONFLICT -- which the subsequent 42501 then rolls back, in the same transaction. No committed row
+-- survives either way, so this was never durable cardinality growth. The gate's value is that an
+-- unknown token does not reach the limiter at all: no aborted INSERT, no WAL, no dead tuple, and no
+-- dependence on a future caller propagating the error rather than swallowing it.
+--
+-- Two separate things are asserted below, and it is worth being exact about which is which,
+-- because they are not equally strong.
+--
+-- The row-count assertions pin the *invariant*: rotating unknown tokens must not grow durable
+-- limiter state. They hold both with and without the wrapper's gate, because the 42501 aborts the
+-- transaction and rolls back the INSERT ... ON CONFLICT the limiter made moments earlier. Verified
+-- directly against a real database, outside any test harness, with the gate removed. So these are
+-- a guard on the property, not a demonstration that the gate is what provides it.
+--
+-- The structural assertion below pins the *gate*. It is what fails if someone deletes the check,
+-- and it exists because the invariant currently rests on transactional rollback -- which is true
+-- today and would stop being true the moment any caller wrapped this RPC in an exception handler,
+-- a subtransaction, or a retry loop that swallowed the error. The gate makes the property
+-- independent of that.
+--
+-- The refusal assertions use correctly formatted 64-hex hashes that map to no session, which is the
+-- shape that matters; a malformed hash is caught by the format check and proves nothing here.
+-- ---------------------------------------------------------------------------------------
 
-ŠNŽš[YÙ\ˆ\È›ÝÜÈœ›ÛHX›XË›Y\ÜØYÚ[™×Ü˜]WÛ[Z]ÎÂ‚œÙ]ØØ[›ÛHÙ\šXÙWÜ›ÛNÂœÙ[XÝÙ]ØÛÛ™šYÊ	Ü™\]Y\ÝšÝ˜ÛZ[Kœ›ÛIË	ÜÙ\šXÙWÜ›ÛIËYJNÂ‚œÙ[XÝ^[œÚ[ÛœË›ÝÜ×ÛÚÊˆ		Ù[XÝ
-ˆœ›ÛHX›XË™Ù]ÝÙX—ØÚ]ÛY\ÜØYÙ\Êˆ\™Ù]ÝÚÙ[—Ú\ÚOˆ™\X]
-	Ù	Ë
-K\™Ù]ØY\ˆOˆ[
-H		ˆ	ÍLIËˆ	ÕÙXˆÚ]Ù\ÜÚ[Ûˆ\È[˜]˜Z[X›IËˆ	ØHÙ[Y›Ü›YY][šÛ›ÝÛˆYØXÞHÚÙ[ˆ\È™Y\ÙY	ÂŠNÂ‚œÙ[XÝ^[œÚ[ÛœË›ÝÜ×ÛÚÊˆ		Ù[XÝ
-ˆœ›ÛHX›XË™Ù]ÝÙX—ØÚ]ÛY\ÜØYÙ\Êˆ\™Ù]ÝÚÙ[—Ú\ÚOˆ™\X]
-	ÙIË
-K\™Ù]ØY\ˆOˆ[
-H		ˆ	ÍLIËˆ	ÕÙXˆÚ]Ù\ÜÚ[Ûˆ\È[˜]˜Z[X›IËˆ	Ø[™ÛÈ\ÈH™^Û™K[™H™^	ÂŠNÂ‚™È		™XÛ\™H[™^[YÙ\ŽÂ˜™YÚ[‚ˆKH›Ý]HH˜]ÚHØ^H[ˆ]XÚÙ\ˆÛÝ[‚ˆ›Üˆ[™^[ˆK‹ŒHÛÜˆ™YÚ[‚ˆ\™›Ü›H
-ˆœ›ÛHX›XË™Ù]ÝÙX—ØÚ]ÛY\ÜØYÙ\Êˆ\™Ù]ÝÚÙ[—Ú\ÚOˆ×ØØ][ÙË™[˜ÛÙJˆ×ØØ][ÙËœÚLMŠ×ØØ][ÙË˜ÛÛ™\ÝÊ	Ü›Ý]YIÈ[™^Ž^	ÕUŽ	ÊJK	Ú^	ÊKˆ\™Ù]ØY\ˆOˆ[
-NÂˆ^Ù\[ÛˆÚ[ˆÝ\œÈ[ˆ[Âˆ[™Âˆ[™ÛÜÂ™[™		Â‚œ™\Ù]›ÛNÂ‚œÙ[XÝ^[œÚ[ÛœËš\Êˆ
-Ù[XÝÛÝ[
+select extensions.ok(
+  (select position('web_chat_sessions' in p.prosrc) > 0
+            and position('web_chat_sessions' in p.prosrc)
+                < position('get_web_chat_messages' in p.prosrc)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'get_web_chat_messages'
+      and pg_get_function_identity_arguments(p.oid) not like '%rate_scope%'),
+  'the rollback overload proves a live session BEFORE it delegates and derives a limiter scope'
+);
 
-ŠNŽš[YÙ\ˆœ›ÛHX›XË›Y\ÜØYÚ[™×Ü˜]WÛ[Z]ÊKˆ
-Ù[XÝ›ÝÜÈœ›ÛH[Z]\—Ø™Y›Ü™JKˆ	Ü›Ý][™ÈÈ[šÛ›ÝÛˆYØXÞHÚÙ[œÈÜ™]È\˜X›H[Z]\ˆÝ]HžH›Ý[™ÉÂŠNÂ‚‹KH˜[YY™XÚ\Ù[H˜]\ˆ[ˆžH]\›Žˆ›ÈØÛÜH\š]™Yœ›ÛH[žH›Ý]YÚÙ[ˆ^\ÝË‚œÙ[XÝ^[œÚ[ÛœËš\×Ù[\Jˆ	IÙ[XÝ[Z]ËœØÛÜWÚÙ^Bˆœ›ÛHX›XË›Y\ÜØYÚ[™×Ü˜]WÛ[Z]È[Z]Âˆ›Ú[ˆÙ[™\˜]WÜÙ\šY\ÊKJH\È›Ý]Y
-[™^
-BˆÛˆ[Z]ËœØÛÜWÚÙ^HH	ÝÙX‹\Û‰È[˜ÛÙJˆÚLMŠÛÛ™\ÝÊ	ÛYØXÞK\Û‰È[˜ÛÙJˆÚLMŠÛÛ™\ÝÊ	Ü›Ý]YIÈ›Ý]Yš[™^Ž^	ÕUŽ	ÊJK	Ú^	ÊK	ÕUŽ	ÊJKˆ	Ú^	ÊH	Iˆ	Û›ÝÛ™H›Ý]YÚÙ[ˆZ[YH\˜X›H[Z]\ˆØÛÜIÂŠNÂ‚‹KHHÛÛ\]Xš[]H]\ÈH[YØ]K›ÝH™\ÝÜ˜][ÛŽˆ]ÛÛœÝ[Y\ÈHØ[YH\˜X›H][ÝKˆ]Â‹KHØÛÜH\È\š]™Yœ›ÛHHÚÙ[ˆ\ÚÛÈÜ[™[™È]XÚÙ]\™XÝH]\Ý™Y\ÙH]ˆÜ[\Â‹KHÜÝÜ™\ÎˆH[Z]\ˆ[\ˆ\È[\›˜[[™^XÝ]X›HžH›ÈÛY[Üˆ˜XÚÙ[™›ÛK‚œ™\Ù]›ÛNÂ™È		™XÛ\™H[™^[YÙ\ŽÂˆYØXÞWÜØÛÜH^H[˜ÛÙJÚLMŠÛÛ™\ÝÊ	ÛYØXÞK\Û‰È™\X]
-	ØIË
-K	ÕUŽ	ÊJK	Ú^	ÊNÂ˜™YÚ[‚ˆ›Üˆ[™^[ˆK‹ŒÛÜˆ\™›Ü›HX›XË˜ÛÛœÝ[YWÛY\ÜØYÚ[™×Ü˜]WÛ[Z]
-	ÝÙX‹\Û‰ÈYØXÞWÜØÛÜKŒ
-NÂˆ[™ÛÜÂ™[™		Â‚œÙ]ØØ[›ÛHÙ\šXÙWÜ›ÛNÂœÙ[XÝÙ]ØÛÛ™šYÊ	Ü™\]Y\ÝšÝ˜ÛZ[Kœ›ÛIË	ÜÙ\šXÙWÜ›ÛIËYJNÂ‚œÙ[XÝ^[œÚ[ÛœË›ÝÜ×ÛÚÊˆ		Ù[XÝ
-ˆœ›ÛHX›XË™Ù]ÝÙX—ØÚ]ÛY\ÜØYÙ\Êˆ\™Ù]ÝÚÙ[—Ú\ÚOˆ™\X]
-	ØIË
-K\™Ù]ØY\ˆOˆ[
-H		ˆ	ÍŽLIËˆ	ÕÛÈX[žHÙXˆÚ]ÛÉËˆ	ÝH›Û˜XÚÈÝ™\›ØY\È\˜X›H›Ý[™Y›ÝHÛ[›[Z]Y]	ÂŠNÂ‚œÙ[XÝ^[œÚ[ÛœË›ÝÜ×ÛÚÊˆ		Ù[XÝ
-ˆœ›ÛHX›XË™Ù]ÝÙX—ØÚ]ÛY\ÜØYÙ\Ê™\X]
-	ØIË
-K	Û›ÝXK\ØÛÜIË[
-H		ˆ	ÌŒŒŒÉËˆ	ÕÙXˆÚ]Ù\ÜÚ[Ûˆ\È[˜[Y	Ëˆ	ØHX[›Ü›YY˜]HØÛÜH\È™Y\ÙY˜]\ˆ[ˆ\ÙY\È[ˆ[˜›Ý[™YÙ^IÂŠNÂ‚œÙ[XÝ^[œÚ[ÛœË›ÝÜ×ÛÚÊˆ		Ù[XÝ
-ˆœ›ÛHX›XË™Ù]ÝÙX—ØÚ]ÛY\ÜØYÙ\Ê	ÜÚÜ	Ë™\X]
-	Ø‰Ë
-K[
-H		ˆ	ÌŒŒŒÉËˆ	ÕÙXˆÚ]Ù\ÜÚ[Ûˆ\È[˜[Y	Ëˆ	ØHX[›Ü›YYÚÙ[ˆ\ÈÝ[™Y\ÙY	ÂŠNÂ‚‹KHÜ[™H\˜X›HÛ[ÝØ[˜ÙH[™›Ý™HHÙZ[[™È^\ÝËˆHØÛÜH\È\Ý[˜Ýœ›ÛHHÛ™B‹KH\ÙYX›Ý™HÛÈHX\›Y\ˆ\ÜÙ\[ÛœÈÙY\Z\ˆÝÛˆYÙ]ˆ[ˆ\ÈÜÝÜ™\ÎˆH[Z]\ˆ[\‚‹KH\È[\›˜[[™ÛÜœ™XÝK^XÝ]X›HžH›ÈÛY[Üˆ˜XÚÙ[™›ÛK‚œ™\Ù]›ÛNÂ™È		™XÛ\™H[™^[YÙ\ŽÂ˜™YÚ[‚ˆ›Üˆ[™^[ˆK‹ŒÛÜˆ\™›Ü›HX›XË˜ÛÛœÝ[YWÛY\ÜØYÚ[™×Ü˜]WÛ[Z]
-	ÝÙX‹\Û‰È™\X]
-	ØÉË
-KŒ
-NÂˆ[™ÛÜÂ™[™		Â‚œÙ]ØØ[›ÛHÙ\šXÙWÜ›ÛNÂœÙ[XÝÙ]ØÛÛ™šYÊ	Ü™\]Y\ÝšÝ˜ÛZ[Kœ›ÛIË	ÜÙ\šXÙWÜ›ÛIËYJNÂ‚œÙ[XÝ^[œÚ[ÛœË›ÝÜ×ÛÚÊˆ		Ù[XÝ
-ˆœ›ÛHX›XË™Ù]ÝÙX—ØÚ]ÛY\ÜØYÙ\Ê™\X]
-	ØIË
-K™\X]
-	ØÉË
-K[
-H		ˆ	ÍŽLIËˆ	ÕÛÈX[žHÙXˆÚ]ÛÉËˆ	ÝH\˜X›HÛ][ÝH™Y\Ù\ÈHÛY[]\È^]\ÝY]	ÂŠNÂ‚œ™\Ù]›ÛNÂœÙ[XÝ
-ˆœ›ÛH^[œÚ[ÛœË™š[š\Ú
+reset role;
+create temp table limiter_before as
+  select count(*)::integer as rows from public.messaging_rate_limits;
 
-NÂœ›Û˜XÚÎ
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('d', 64), target_after => null) $$,
+  '42501',
+  'Web chat session is unavailable',
+  'a well-formed but unknown legacy token is refused'
+);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('e', 64), target_after => null) $$,
+  '42501',
+  'Web chat session is unavailable',
+  'and so is the next one, and the next'
+);
+
+do $$
+declare index integer;
+begin
+  -- Rotate a batch, the way an attacker would.
+  for index in 1..25 loop
+    begin
+      perform * from public.get_web_chat_messages(
+        target_token_hash => pg_catalog.encode(
+          pg_catalog.sha256(pg_catalog.convert_to('rotated-' || index::text, 'UTF8')), 'hex'),
+        target_after => null);
+    exception when others then null;
+    end;
+  end loop;
+end $$;
+
+reset role;
+
+select extensions.is(
+  (select count(*)::integer from public.messaging_rate_limits),
+  (select rows from limiter_before),
+  'rotating 27 unknown legacy tokens grew durable limiter state by nothing'
+);
+
+-- Named precisely rather than by pattern: no scope derived from any rotated token exists.
+select extensions.is_empty(
+  $q$ select limits.scope_key
+        from public.messaging_rate_limits limits
+        join generate_series(1, 25) as rotated(index)
+          on limits.scope_key = 'web-poll:' || encode(
+               sha256(convert_to('legacy-poll:' || encode(
+                 sha256(convert_to('rotated-' || rotated.index::text, 'UTF8')), 'hex'), 'UTF8')),
+               'hex') $q$,
+  'not one rotated token minted a durable limiter scope'
+);
+
+-- The compatibility path is a delegate, not a restoration: it consumes the same durable quota. Its
+-- scope is derived from the token hash, so spending that bucket directly must refuse it. Spent as
+-- postgres: the limiter helper is internal and executable by no client or backend role.
+reset role;
+do $$
+declare index integer;
+  legacy_scope text := encode(sha256(convert_to('legacy-poll:' || repeat('a', 64), 'UTF8')), 'hex');
+begin
+  for index in 1..240 loop
+    perform public.consume_messaging_rate_limit('web-poll:' || legacy_scope, 240, 60);
+  end loop;
+end $$;
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(
+       target_token_hash => repeat('a', 64), target_after => null) $$,
+  '42901',
+  'Too many web chat polls',
+  'the rollback overload is durably bounded, not the old unlimited path'
+);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(repeat('a', 64), 'not-a-scope', null) $$,
+  '22023',
+  'Web chat session is invalid',
+  'a malformed rate scope is refused rather than used as an unbounded key'
+);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages('short', repeat('b', 64), null) $$,
+  '22023',
+  'Web chat session is invalid',
+  'a malformed token is still refused'
+);
+
+-- Spend the durable poll allowance and prove the ceiling exists. The scope is distinct from the one
+-- used above so the earlier assertions keep their own budget. Run as postgres: the limiter helper
+-- is internal and, correctly, executable by no client or backend role.
+reset role;
+do $$
+declare index integer;
+begin
+  for index in 1..240 loop
+    perform public.consume_messaging_rate_limit('web-poll:' || repeat('c', 64), 240, 60);
+  end loop;
+end $$;
+
+set local role service_role;
+select set_config('request.jwt.claim.role', 'service_role', true);
+
+select extensions.throws_ok(
+  $$ select * from public.get_web_chat_messages(repeat('a', 64), repeat('c', 64), null) $$,
+  '42901',
+  'Too many web chat polls',
+  'the durable poll quota refuses a client that has exhausted it'
+);
+
+reset role;
+select * from extensions.finish();
+rollback;
