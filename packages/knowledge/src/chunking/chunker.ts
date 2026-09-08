@@ -8,8 +8,11 @@ export interface ChunkingOptions {
   readonly overlapCharacters?: number;
 }
 
-const defaultMaxCharacters = 2_500;
-const defaultOverlapCharacters = 250;
+// Small-business pages often place unrelated hours, services, and pricing on one compact page.
+// Keeping the default focused preserves semantic contrast for retrieval without changing the
+// reliability threshold that guards customer-facing answers.
+const defaultMaxCharacters = 500;
+const defaultOverlapCharacters = 50;
 
 function normalizeParagraphs(content: string): readonly string[] {
   return content

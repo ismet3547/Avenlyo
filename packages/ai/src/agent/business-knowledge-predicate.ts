@@ -88,6 +88,9 @@ const CONVERSATION_ONLY = new RegExp(
  */
 const END = '\\s*[?!.…]*$';
 
+const TR_WEEKDAY = '(?:pazartesi|salı|sali|çarşamba|carsamba|perşembe|persembe|cuma|cumartesi|pazar)';
+const EN_WEEKDAY = '(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)';
+
 export const CONFIGURATION_QUESTIONS: readonly {
   readonly field: keyof AgentBusinessContext;
   readonly pattern: RegExp;
@@ -103,9 +106,11 @@ export const CONFIGURATION_QUESTIONS: readonly {
   { field: 'businessHours', pattern: new RegExp(`^(çalışma|calisma)?\\s*saatleriniz\\s*(ne|nedir|nelerdir)?${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^(saat\\s+)?kaçta\\s+(açılıyorsunuz|aciliyorsunuz|açıyorsunuz|aciyorsunuz|kapanıyorsunuz|kapaniyorsunuz|kapatıyorsunuz|kapatiyorsunuz)${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^(?:bugün|bugun|yarın|yarin|şu an|su an)?\\s*(?:açık|acik)\\s*(?:mısınız|misiniz|mısın|misin)${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^${TR_WEEKDAY}(?:\\s+(?:günü|gunu))?\\s+(?:açık|acik)\\s*(?:mısınız|misiniz|mısın|misin)${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^(what\\s+are\\s+)?your\\s+(business|opening|working)\\s+hours${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^what\\s+time\\s+do\\s+you\\s+(open|close)${END}`, 'u') },
   { field: 'businessHours', pattern: new RegExp(`^are\\s+you\\s+open(\\s+(today|tomorrow|now))?${END}`, 'u') },
+  { field: 'businessHours', pattern: new RegExp(`^are\\s+you\\s+open\\s+(?:on\\s+)?${EN_WEEKDAY}${END}`, 'u') },
   // Phone
   { field: 'phone', pattern: new RegExp(`^telefon\\s*(numaranız|numaraniz|numarası|numarasi)?\\s*(ne|nedir|kaç|kac)?${END}`, 'u') },
   { field: 'phone', pattern: new RegExp(`^(numaranız|numaraniz)\\s*(ne|nedir)?${END}`, 'u') },
