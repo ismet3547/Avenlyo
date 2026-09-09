@@ -38,7 +38,10 @@ export function detectSafetyEscalation(
         'bleeding will not stop',
         "bleeding won't stop",
         'rapid facial swelling',
+        'facial swelling',
         'face is swelling',
+        'face is swollen',
+        'my face is swollen',
         'major facial trauma',
         'knocked out tooth',
         'tooth knocked out',
@@ -50,6 +53,8 @@ export function detectSafetyEscalation(
         'şiddetli kanama',
         'yüzüm hızla şişiyor',
         'yüzüm çok şişti',
+        'yüzüm şişti',
+        'yüzüm şişiyor',
         'dişim yerinden çıktı',
       ])
     ) {
