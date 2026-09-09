@@ -3,19 +3,32 @@
 import { useActionState } from 'react';
 
 import { saveBusinessAction } from '@/app/onboarding/actions';
-import { initialFormActionState } from '@/lib/forms/state';
+import { initialFormActionState, type FormActionState } from '@/lib/forms/state';
 
 import { FieldError, FormMessage } from './form-feedback';
 import { SubmitButton } from './submit-button';
+
+type BusinessFormAction = (
+  previousState: FormActionState,
+  formData: FormData,
+) => Promise<FormActionState>;
 
 interface BusinessFormProps {
   initialName: string;
   initialPhone: string | null;
   initialWebsiteUrl: string | null;
+  saveAction?: BusinessFormAction;
+  submitLabel?: string;
 }
 
-export function BusinessForm({ initialName, initialPhone, initialWebsiteUrl }: BusinessFormProps) {
-  const [state, action] = useActionState(saveBusinessAction, initialFormActionState);
+export function BusinessForm({
+  initialName,
+  initialPhone,
+  initialWebsiteUrl,
+  saveAction = saveBusinessAction,
+  submitLabel = 'Continue to location',
+}: BusinessFormProps) {
+  const [state, action] = useActionState(saveAction, initialFormActionState);
   const displayName = initialName === 'New Avenlyo workspace' ? '' : initialName;
 
   return (
@@ -30,7 +43,7 @@ export function BusinessForm({ initialName, initialPhone, initialWebsiteUrl }: B
           defaultValue={displayName}
           id="name"
           name="name"
-          placeholder="North Star Veterinary"
+          placeholder="Avenlyo Dental Clinic"
           required
         />
         <FieldError errors={state.fieldErrors?.name} />
@@ -72,7 +85,7 @@ export function BusinessForm({ initialName, initialPhone, initialWebsiteUrl }: B
 
       <FormMessage state={state} />
       <div className="flex justify-end border-t border-slate-100 pt-6">
-        <SubmitButton label="Continue to location" />
+        <SubmitButton label={submitLabel} />
       </div>
     </form>
   );
