@@ -29,6 +29,7 @@ export default async function BusinessLocationSettingsPage() {
           Customer-facing name, website, and phone number.
         </p>
         <BusinessForm
+          idPrefix="business"
           initialName={workspace.organizationName}
           initialPhone={workspace.businessPhone}
           initialWebsiteUrl={workspace.websiteUrl}
