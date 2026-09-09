@@ -4,7 +4,7 @@ import { type BusinessHours, type Weekday, weekdays } from '@avenlyo/shared';
 import { useActionState, useState } from 'react';
 
 import { saveLocationAction } from '@/app/onboarding/actions';
-import { initialFormActionState } from '@/lib/forms/state';
+import { initialFormActionState, type FormActionState } from '@/lib/forms/state';
 
 import { FieldError, FormMessage } from './form-feedback';
 import { SubmitButton } from './submit-button';
@@ -36,6 +36,11 @@ const timezoneSuggestions = [
   'Europe/Paris',
 ];
 
+type LocationFormAction = (
+  previousState: FormActionState,
+  formData: FormData,
+) => Promise<FormActionState>;
+
 interface LocationFormProps {
   initialAddress: {
     city?: string | undefined;
@@ -47,6 +52,8 @@ interface LocationFormProps {
   initialBusinessHours: BusinessHours | null;
   initialName: string | null;
   initialTimezone: string | null;
+  saveAction?: LocationFormAction;
+  submitLabel?: string;
 }
 
 function titleCase(value: string) {
@@ -58,8 +65,10 @@ export function LocationForm({
   initialBusinessHours,
   initialName,
   initialTimezone,
+  saveAction = saveLocationAction,
+  submitLabel = 'Continue to website',
 }: LocationFormProps) {
-  const [state, action] = useActionState(saveLocationAction, initialFormActionState);
+  const [state, action] = useActionState(saveAction, initialFormActionState);
   const [hours, setHours] = useState<BusinessHours>(initialBusinessHours ?? defaultBusinessHours);
 
   function setClosed(day: Weekday, closed: boolean) {
@@ -206,7 +215,7 @@ export function LocationForm({
       <fieldset>
         <legend className="text-sm font-semibold text-ink">Business hours</legend>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          Overnight hours are not supported during initial setup.
+          Overnight hours are not supported.
         </p>
         <div className="mt-4 divide-y divide-slate-100 rounded-2xl border border-slate-200 px-4">
           {weekdays.map((day) => {
@@ -254,7 +263,7 @@ export function LocationForm({
 
       <FormMessage state={state} />
       <div className="flex justify-end border-t border-slate-100 pt-6">
-        <SubmitButton label="Continue to website" />
+        <SubmitButton label={submitLabel} />
       </div>
     </form>
   );
