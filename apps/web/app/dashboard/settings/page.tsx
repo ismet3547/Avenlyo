@@ -3,12 +3,10 @@ import Link from 'next/link';
 import { requireCompletedWorkspace } from '@/lib/onboarding/session';
 import { canManageTeam } from '@/lib/team/capabilities';
 
-/**
- * Settings index. Phase 15 replaces the Phase 0 placeholder only for the areas it owns; the rest of
- * the dashboard is untouched.
- */
+/** Settings index for workspace configuration and access. */
 export default async function SettingsPage() {
   const workspace = await requireCompletedWorkspace();
+  const canManageBusiness = workspace.role === 'owner' || workspace.role === 'admin';
 
   return (
     <section className="max-w-3xl">
@@ -20,6 +18,18 @@ export default async function SettingsPage() {
       </h1>
 
       <div className="mt-8 space-y-3">
+        {canManageBusiness ? (
+          <Link
+            className="block rounded-xl border border-border bg-white p-5 transition-colors hover:border-primary"
+            href="/dashboard/settings/business"
+          >
+            <p className="font-semibold text-ink">Business &amp; location</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Update clinic details, address, timezone, and weekly opening hours.
+            </p>
+          </Link>
+        ) : null}
+
         <Link
           className="block rounded-xl border border-border bg-white p-5 transition-colors hover:border-primary"
           href="/dashboard/settings/team"
