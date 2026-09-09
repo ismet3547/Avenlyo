@@ -14,6 +14,7 @@ type BusinessFormAction = (
 ) => Promise<FormActionState>;
 
 interface BusinessFormProps {
+  idPrefix?: string;
   initialName: string;
   initialPhone: string | null;
   initialWebsiteUrl: string | null;
@@ -22,6 +23,7 @@ interface BusinessFormProps {
 }
 
 export function BusinessForm({
+  idPrefix,
   initialName,
   initialPhone,
   initialWebsiteUrl,
@@ -30,18 +32,19 @@ export function BusinessForm({
 }: BusinessFormProps) {
   const [state, action] = useActionState(saveAction, initialFormActionState);
   const displayName = initialName === 'New Avenlyo workspace' ? '' : initialName;
+  const fieldId = (name: string) => (idPrefix ? `${idPrefix}-${name}` : name);
 
   return (
     <form action={action} className="mt-9 space-y-6" noValidate>
       <div>
-        <label className="text-sm font-semibold text-ink" htmlFor="name">
+        <label className="text-sm font-semibold text-ink" htmlFor={fieldId('name')}>
           Business name
         </label>
         <input
           autoComplete="organization"
           className="avenlyo-input mt-2"
           defaultValue={displayName}
-          id="name"
+          id={fieldId('name')}
           name="name"
           placeholder="Avenlyo Dental Clinic"
           required
@@ -51,14 +54,14 @@ export function BusinessForm({
 
       <div className="grid gap-6 sm:grid-cols-2">
         <div>
-          <label className="text-sm font-semibold text-ink" htmlFor="websiteUrl">
+          <label className="text-sm font-semibold text-ink" htmlFor={fieldId('websiteUrl')}>
             Website <span className="font-normal text-muted-foreground">(optional)</span>
           </label>
           <input
             autoComplete="url"
             className="avenlyo-input mt-2"
             defaultValue={initialWebsiteUrl ?? ''}
-            id="websiteUrl"
+            id={fieldId('websiteUrl')}
             name="websiteUrl"
             placeholder="https://example.com"
             type="url"
@@ -67,14 +70,14 @@ export function BusinessForm({
         </div>
 
         <div>
-          <label className="text-sm font-semibold text-ink" htmlFor="phone">
+          <label className="text-sm font-semibold text-ink" htmlFor={fieldId('phone')}>
             Phone <span className="font-normal text-muted-foreground">(optional)</span>
           </label>
           <input
             autoComplete="tel"
             className="avenlyo-input mt-2"
             defaultValue={initialPhone ?? ''}
-            id="phone"
+            id={fieldId('phone')}
             name="phone"
             placeholder="+90 555 123 4567"
             type="tel"
