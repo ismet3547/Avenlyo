@@ -44,7 +44,13 @@ interface SettingsTableClient {
   from(name: 'locations'): SettingsUpdateBuilder<LocationSettingsUpdate>;
 }
 
-function settingsTables(client: AvenlyoSupabaseClient): SettingsTableClient {
+/**
+ * Keep the large generated Supabase generic outside this tiny table-mutation adapter. The caller
+ * remains strongly typed as `AvenlyoSupabaseClient`; this boundary deliberately accepts unknown so
+ * TypeScript does not recursively instantiate the full PostgREST client while checking two local
+ * RLS-gated update shapes.
+ */
+function settingsTables(client: unknown): SettingsTableClient {
   return client as SettingsTableClient;
 }
 
