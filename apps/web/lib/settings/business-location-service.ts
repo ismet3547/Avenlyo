@@ -45,7 +45,7 @@ interface SettingsTableClient {
 }
 
 function settingsTables(client: AvenlyoSupabaseClient): SettingsTableClient {
-  return client as unknown as SettingsTableClient;
+  return client as SettingsTableClient;
 }
 
 export class BusinessLocationSettingsError extends Error {
