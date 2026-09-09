@@ -22,6 +22,23 @@ describe('industry safety backstops', () => {
     expect(result?.reply).toMatch(/acil|hemen/i);
   });
 
+  it('routes natural facial swelling language urgently while pain alone stays clinical', () => {
+    const swollen = detectSafetyEscalation(
+      dentalPack,
+      'Dişim çok ağrıyor ve yüzüm şişti, ne yapmalıyım?',
+    );
+    const englishSwollen = detectSafetyEscalation(
+      dentalPack,
+      'My tooth hurts and my face is swollen. What should I do?',
+    );
+    const painOnly = detectSafetyEscalation(dentalPack, 'Dişim çok ağrıyor, ne yapmalıyım?');
+
+    expect(swollen).toMatchObject({ urgency: 'urgent' });
+    expect(swollen?.reply).toMatch(/acil|hemen/i);
+    expect(englishSwollen).toMatchObject({ urgency: 'urgent' });
+    expect(painOnly).toMatchObject({ urgency: 'normal' });
+  });
+
   it('keeps published administrative dental questions outside the clinical backstop', () => {
     expect(detectSafetyEscalation(dentalPack, 'İmplant fiyatınız nedir?')).toBeNull();
     expect(detectSafetyEscalation(dentalPack, 'Cumartesi açık mısınız?')).toBeNull();
