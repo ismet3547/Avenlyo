@@ -22,9 +22,9 @@ import type { RuntimeComponent } from './runtime-state.js';
  * a new dental workspace cannot complete its first onboarding step against it.
  *
  * The comparison stays `>=`, so a *newer* schema remains compatible with an older build and a
- * rollback needs no down-migration. The dental migration is additive: legacy industries remain valid.
+ * rollback needs no down-migration. The AI usage migration is additive: older releases ignore the new telemetry table and RPCs.
  */
-export const REQUIRED_SCHEMA_VERSION = 23;
+export const REQUIRED_SCHEMA_VERSION = 24;
 
 export type ReadinessReason =
   | 'shutting_down'

@@ -15,14 +15,13 @@ select extensions.is(
   'the dental system industry template is installed exactly once'
 );
 
-select extensions.is(
+select extensions.ok(
   (
-    select schema_version
+    select schema_version >= 23
     from public.platform_schema_contract
     where id
   ),
-  23,
-  'dental V1 advances the platform schema contract to 23'
+  'dental V1 requires schema version 23 or newer'
 );
 
 insert into auth.users (id, email)

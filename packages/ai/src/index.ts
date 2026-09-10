@@ -9,6 +9,8 @@ export {
 } from './agent/limits';
 export { buildAgentInstructions, coreAgentInstructions } from './agent/prompt-builder';
 export { AgentRuntime, agentTurnFingerprint } from './agent/runtime';
+export { agentPricingVersion, estimateAgentCostMicrousd } from './agent/cost';
+export { defaultAgentModelCatalog, fixedModelCatalog, routeAgentTurn } from './agent/model-router';
 export { AgentProviderError } from './agent/types';
 export type {
   KnowledgeMatchDecision,
@@ -26,6 +28,10 @@ export type {
   AgentExecutionContext,
   AgentFunctionTool,
   AgentMode,
+  AgentModelCatalog,
+  AgentModelTier,
+  AgentReasoningEffort,
+  AgentRouteReason,
   AgentProvider,
   AgentProviderContinuation,
   AgentProviderInput,
@@ -33,6 +39,7 @@ export type {
   AgentToolCall,
   AgentToolExecution,
   AgentTurnInput,
+  AgentTurnRoute,
   AgentTurnResult,
   KnowledgeSource,
 } from './agent/types';
@@ -44,7 +51,11 @@ export {
   isInterruptIntent,
   isMutatingCustomerIntent,
 } from './agent/intent-contract';
-export type { AgentIntentFrame, CustomerIntent, IntentPrecedenceTier } from './agent/intent-contract';
+export type {
+  AgentIntentFrame,
+  CustomerIntent,
+  IntentPrecedenceTier,
+} from './agent/intent-contract';
 export { actionRiskByName, mayExposeHandoffTool } from './policy/action-policy';
 export { detectExplicitHumanRequest } from './policy/human-request';
 export type { HumanRequestInterrupt } from './policy/human-request';

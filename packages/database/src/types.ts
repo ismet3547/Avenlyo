@@ -879,6 +879,16 @@ export interface WebChatWidgetConfigurationRow {
   welcome_message: string | null;
 }
 
+export interface AiUsageSummaryRow {
+  model_tier: 'deterministic' | 'luna' | 'terra' | 'sol';
+  turn_count: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  estimated_cost_microusd: number;
+  unknown_cost_count: number;
+}
+
 type EmptyRecord = Record<never, never>;
 
 export interface Database {
@@ -1112,6 +1122,23 @@ export interface Database {
       record_agent_test_knowledge_search: {
         Args: { target_conversation_id: string; tool_call_id: string };
         Returns: undefined;
+      };
+      record_agent_test_ai_usage: {
+        Args: {
+          target_run_id: string;
+          target_model_tier: 'deterministic' | 'luna' | 'terra' | 'sol';
+          target_route_reason: string;
+          target_input_tokens: number;
+          target_cached_input_tokens: number;
+          target_output_tokens: number;
+          target_estimated_cost_microusd: number | null;
+          target_pricing_version: string;
+        };
+        Returns: undefined;
+      };
+      get_my_ai_usage_summary: {
+        Args: { target_location_id: string; lookback_days?: number };
+        Returns: AiUsageSummaryRow[];
       };
       request_agent_test_handoff: {
         Args: {
@@ -1564,6 +1591,20 @@ export interface Database {
       get_message_agent_context: {
         Args: { target_message_id: string };
         Returns: MessageAgentContextRow[];
+      };
+      record_message_ai_usage: {
+        Args: {
+          target_inbound_message_id: string;
+          target_model: string;
+          target_model_tier: 'deterministic' | 'luna' | 'terra' | 'sol';
+          target_route_reason: string;
+          target_input_tokens: number;
+          target_cached_input_tokens: number;
+          target_output_tokens: number;
+          target_estimated_cost_microusd: number | null;
+          target_pricing_version: string;
+        };
+        Returns: undefined;
       };
       has_persisted_ai_reply: {
         Args: { target_inbound_message_id: string };

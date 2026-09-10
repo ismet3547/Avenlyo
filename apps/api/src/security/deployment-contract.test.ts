@@ -862,7 +862,7 @@ describe('the expected Supabase project ref is a profile declaration, mirrored i
       'utf8',
     );
 
-    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*23/);
+    expect(readiness).toMatch(/REQUIRED_SCHEMA_VERSION\s*=\s*24/);
     expect(confirmation).toContain('confirmation_prompt_message_id');
     expect(guard).toContain('Presented booking confirmation is required');
     expect(ordering).toContain('customer_mutation_confirmation_prompt_visible_at');

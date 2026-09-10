@@ -6,6 +6,53 @@ import type { KnowledgeSearchDiagnostic } from './knowledge-reliability';
 export type AgentConversationRole = 'assistant' | 'customer';
 export type AgentMode = 'customer' | 'test';
 export type AgentConversationControlState = 'ai_active' | 'human_paused';
+export type AgentReasoningEffort = 'none' | 'low' | 'medium';
+export type AgentModelTier = 'deterministic' | 'luna' | 'terra' | 'sol';
+export type AgentRouteReason =
+  | 'deterministic_safety'
+  | 'deterministic_human_request'
+  | 'deterministic_business_hours'
+  | 'luna_default'
+  | 'terra_pending_mutation'
+  | 'terra_consequential_request'
+  | 'terra_complex_conversation'
+  | 'sol_complex_conversation';
+
+export interface AgentModelCatalog {
+  readonly luna: string;
+  readonly terra: string;
+  readonly sol: string;
+}
+
+export type AgentTurnRoute =
+  | {
+      readonly action:
+        | { readonly kind: 'reply'; readonly text: string }
+        | {
+            readonly handoffReason: string;
+            readonly kind: 'handoff';
+            readonly text: string;
+            readonly urgency: 'normal' | 'urgent';
+          };
+      readonly kind: 'deterministic';
+      readonly model: 'deterministic';
+      readonly reason: Extract<
+        AgentRouteReason,
+        'deterministic_safety' | 'deterministic_human_request' | 'deterministic_business_hours'
+      >;
+      readonly reasoningEffort: 'none';
+      readonly tier: 'deterministic';
+    }
+  | {
+      readonly kind: 'model';
+      readonly model: string;
+      readonly reason: Exclude<
+        AgentRouteReason,
+        'deterministic_safety' | 'deterministic_human_request' | 'deterministic_business_hours'
+      >;
+      readonly reasoningEffort: AgentReasoningEffort;
+      readonly tier: Exclude<AgentModelTier, 'deterministic'>;
+    };
 
 export interface AgentConversationWorkState {
   readonly control: AgentConversationControlState;
@@ -133,10 +180,12 @@ export interface AgentProviderInput {
   readonly instructions: string;
   readonly maxOutputTokens: number;
   readonly model: string;
+  readonly reasoningEffort?: AgentReasoningEffort | undefined;
   readonly tools: readonly AgentFunctionTool[];
 }
 
 export interface AgentProviderUsage {
+  readonly cachedInputTokens?: number;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
 }
@@ -161,6 +210,8 @@ export interface AgentTurnInput {
   readonly history: readonly AgentConversationMessage[];
   readonly industry: IndustryPack;
   readonly userMessage: string;
+  /** Optional application-precomputed route. Runtime reuses it rather than reclassifying the turn. */
+  readonly route?: AgentTurnRoute | undefined;
   /**
    * Application-owned conversation state. Customer-mode callers must supply it; test mode may omit
    * it and receives a deterministic AI-active/no-pending-mutation default.
