@@ -2,7 +2,12 @@ import {
   AgentRuntime,
   ControlledToolExecutor,
   OpenAIResponsesProvider,
+  agentPricingVersion,
+  estimateAgentCostMicrousd,
+  routeAgentTurn,
+  type AgentBusinessContext,
   type AgentConversationMessage,
+  type AgentTurnRoute,
   type AgentMode,
   type KnowledgeSearchDiagnostic,
 } from '@avenlyo/ai';
@@ -90,6 +95,19 @@ interface AgentRpcCaller {
     args: { target_conversation_id: string; tool_call_id: string },
   ): PromiseLike<{ data: null; error: RpcError | null }>;
   (
+    name: 'record_agent_test_ai_usage',
+    args: {
+      target_cached_input_tokens: number;
+      target_estimated_cost_microusd: number | null;
+      target_input_tokens: number;
+      target_model_tier: AgentTurnRoute['tier'];
+      target_output_tokens: number;
+      target_pricing_version: string;
+      target_route_reason: AgentTurnRoute['reason'];
+      target_run_id: string;
+    },
+  ): PromiseLike<{ data: null; error: RpcError | null }>;
+  (
     name: 'request_agent_test_handoff',
     args: {
       handoff_reason: string;
@@ -125,6 +143,66 @@ export class AgentTestServiceError extends Error {
 
 function businessHoursText(value: TenantContext['businessHours']): string | null {
   return value ? JSON.stringify(value) : null;
+}
+
+function agentBusinessContext(workspace: TenantContext): AgentBusinessContext {
+  return {
+    address: workspace.locationAddress
+      ? Object.values(workspace.locationAddress).filter(Boolean).join(', ')
+      : null,
+    businessHours: businessHoursText(workspace.businessHours),
+    locationName: workspace.locationName,
+    name: workspace.organizationName,
+    phone: workspace.businessPhone,
+    timezone: workspace.locationTimezone ?? 'UTC',
+    website: workspace.websiteUrl,
+  };
+}
+
+function recordAgentTestUsage(
+  route: AgentTurnRoute,
+  usage: Awaited<ReturnType<AgentRuntime['runTurn']>>['usage'],
+): void {
+  console.info(
+    JSON.stringify({
+      event: 'agent.usage',
+      estimatedCostMicrousd: estimateAgentCostMicrousd(route.model, usage),
+      inputTokens: usage?.inputTokens ?? 0,
+      cachedInputTokens: usage?.cachedInputTokens ?? 0,
+      mode: 'test',
+      model: route.model,
+      outputTokens: usage?.outputTokens ?? 0,
+      pricingVersion: agentPricingVersion,
+      routeReason: route.reason,
+      tier: route.tier,
+    }),
+  );
+}
+
+async function persistAgentTestUsage(
+  client: AvenlyoSupabaseClient,
+  runId: string,
+  route: AgentTurnRoute,
+  usage: Awaited<ReturnType<AgentRuntime['runTurn']>>['usage'],
+): Promise<void> {
+  try {
+    const estimate = estimateAgentCostMicrousd(route.model, usage);
+    const { error } = await agentRpc(client)('record_agent_test_ai_usage', {
+      target_cached_input_tokens: usage?.cachedInputTokens ?? 0,
+      target_estimated_cost_microusd: estimate,
+      target_input_tokens: usage?.inputTokens ?? 0,
+      target_model_tier: route.tier,
+      target_output_tokens: usage?.outputTokens ?? 0,
+      target_pricing_version: agentPricingVersion,
+      target_route_reason: route.reason,
+      target_run_id: runId,
+    });
+    if (error) {
+      console.warn(JSON.stringify({ event: 'agent.usage_persist_failed', mode: 'test' }));
+    }
+  } catch {
+    console.warn(JSON.stringify({ event: 'agent.usage_persist_failed', mode: 'test' }));
+  }
 }
 
 function conversationHistory(
@@ -258,15 +336,30 @@ export async function runAgentTestTurn(
   idempotencyKey: string,
 ): Promise<AgentTestTurn> {
   const industry = requireIndustry(workspace);
-  if (!knowledgeServerEnv.OPENAI_API_KEY) {
-    throw new AgentTestServiceError('OpenAI is not configured for this environment.');
+  const transcript = await requireRpcData(
+    agentRpc(client)('get_agent_test_conversation', { target_conversation_id: conversationId }),
+  );
+  const history = conversationHistory(transcript);
+  const business = agentBusinessContext(workspace);
+  const route = routeAgentTurn({
+    business,
+    history,
+    industry,
+    models: { sol: knowledgeServerEnv.OPENAI_AGENT_MODEL },
+    userMessage,
+  });
+  const apiKey = knowledgeServerEnv.OPENAI_API_KEY;
+  let provider: OpenAIResponsesProvider | null = null;
+  if (route.kind === 'model') {
+    if (!apiKey) {
+      throw new AgentTestServiceError('OpenAI is not configured for this environment.');
+    }
+    provider = new OpenAIResponsesProvider({ apiKey, model: route.model });
   }
-
-  const model = knowledgeServerEnv.OPENAI_AGENT_MODEL;
   const started = await requireRpcData(
     agentRpc(client)('begin_agent_test_turn', {
       customer_message: userMessage,
-      model_name: model,
+      model_name: route.model,
       provider_name: 'openai-responses',
       target_conversation_id: conversationId,
       target_idempotency_key: idempotencyKey,
@@ -291,10 +384,6 @@ export async function runAgentTestTurn(
     );
   }
   try {
-    const transcript = await requireRpcData(
-      agentRpc(client)('get_agent_test_conversation', { target_conversation_id: conversationId }),
-    );
-    const history = conversationHistory(transcript).slice(0, -1);
     const context = {
       conversationId,
       industryId: industry.id,
@@ -330,33 +419,18 @@ export async function runAgentTestTurn(
         }));
       },
     });
-    const runtime = new AgentRuntime(
-      new OpenAIResponsesProvider({
-        apiKey: knowledgeServerEnv.OPENAI_API_KEY,
-        model,
-      }),
-      tools,
-      model,
-    );
+    const runtime = new AgentRuntime(provider, tools, knowledgeServerEnv.OPENAI_AGENT_MODEL);
     const result = await runtime.runTurn({
-      business: {
-        address: workspace.locationAddress
-          ? Object.values(workspace.locationAddress).filter(Boolean).join(', ')
-          : null,
-        businessHours: businessHoursText(workspace.businessHours),
-        locationName: workspace.locationName,
-        name: workspace.organizationName,
-        phone: workspace.businessPhone,
-        timezone: workspace.locationTimezone ?? 'UTC',
-        website: workspace.websiteUrl,
-      },
+      business,
       context,
       history,
       industry,
+      route,
       userMessage,
     });
 
     recordAgentTestKnowledgeDiagnostics(result.knowledgeDiagnostics);
+    recordAgentTestUsage(route, result.usage);
 
     await requireVoidRpc(
       agentRpc(client)('complete_agent_test_turn', {
@@ -368,6 +442,7 @@ export async function runAgentTestTurn(
         tool_executions: executionMetadata(result),
       }),
     );
+    await persistAgentTestUsage(client, run.run_id, route, result.usage);
 
     return {
       failureCode: result.failureCode ?? null,

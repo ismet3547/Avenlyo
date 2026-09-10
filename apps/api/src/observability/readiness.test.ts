@@ -99,12 +99,12 @@ describe('readiness evaluation', () => {
     expect(result.ready).toBe(true);
   });
 
-  describe('the dental V1 schema contract', () => {
-    it('requires 23 because new dental onboarding depends on the dental system template and RPC contract', () => {
-      expect(REQUIRED_SCHEMA_VERSION).toBe(23);
+  describe('the current schema contract', () => {
+    it('requires 24 because cost-aware routing persists usage through the Phase 25 RPC contract', () => {
+      expect(REQUIRED_SCHEMA_VERSION).toBe(24);
     });
 
-    it('refuses schema 22 because it cannot persist a dental onboarding selection', () => {
+    it('refuses schema 23 because the durable AI usage RPCs do not exist there', () => {
       const result = readinessFor({ probe: { ok: true, schemaVersion: 22 } });
 
       expect(result.ready).toBe(false);
@@ -121,10 +121,10 @@ describe('readiness evaluation', () => {
       }
     });
 
-    it('accepts a 23 database', () => {
-      expect(readinessFor({ probe: { ok: true, schemaVersion: 23 } })).toMatchObject({
+    it('accepts a 24 database', () => {
+      expect(readinessFor({ probe: { ok: true, schemaVersion: 24 } })).toMatchObject({
         ready: true,
-        schemaVersion: 23,
+        schemaVersion: 24,
       });
     });
   });

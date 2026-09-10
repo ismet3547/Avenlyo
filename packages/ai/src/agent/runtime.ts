@@ -9,11 +9,13 @@ import {
 } from './limits';
 import { buildAgentInstructions } from './prompt-builder';
 import { requiresBusinessKnowledge } from './business-knowledge-predicate';
+import { fixedModelCatalog, routeAgentTurn } from './model-router';
 import type { KnowledgeSearchDiagnostic } from './knowledge-reliability';
 import type {
   AgentConversationWorkState,
   AgentExecutionContext,
   AgentProvider,
+  AgentProviderUsage,
   AgentProviderInputItem,
   AgentToolCall,
   AgentToolExecution,
@@ -21,8 +23,6 @@ import type {
   AgentTurnResult,
   KnowledgeSource,
 } from './types';
-import { detectExplicitHumanRequest } from '../policy/human-request';
-import { detectSafetyEscalation } from '../policy/safety';
 import { policyHandoffCallId } from '../tools/executor';
 import type { ToolExecutionResult, ToolExecutor } from '../tools/types';
 
@@ -180,6 +180,18 @@ function trustedHandoffReply(call: AgentToolCall, result: ToolExecutionResult): 
   return "I've asked the team to help with this.";
 }
 
+function mergeUsage(
+  current: AgentProviderUsage | undefined,
+  next: AgentProviderUsage | undefined,
+): AgentProviderUsage | undefined {
+  if (!next) return current;
+  return {
+    cachedInputTokens: (current?.cachedInputTokens ?? 0) + (next.cachedInputTokens ?? 0),
+    inputTokens: (current?.inputTokens ?? 0) + (next.inputTokens ?? 0),
+    outputTokens: (current?.outputTokens ?? 0) + (next.outputTokens ?? 0),
+  };
+}
+
 function terminalToolTurn(input: {
   readonly executions: readonly AgentToolExecution[];
   readonly handoffRequested: boolean;
@@ -206,7 +218,7 @@ function terminalToolTurn(input: {
  */
 export class AgentRuntime {
   public constructor(
-    private readonly provider: AgentProvider,
+    private readonly provider: AgentProvider | null,
     private readonly executor: ToolExecutor,
     private readonly model: string,
   ) {}
@@ -233,56 +245,59 @@ export class AgentRuntime {
       return suppressedTurn(this.model, 'human_control');
     }
 
+    const route =
+      input.route ??
+      routeAgentTurn({
+        business: input.business,
+        history: input.history,
+        industry: input.industry,
+        models: fixedModelCatalog(this.model),
+        userMessage,
+        workState,
+      });
     const handoffAvailable = this.executor.tools.some((tool) => tool.name === 'request_human_help');
-    const safety = detectSafetyEscalation(input.industry, userMessage);
-    if (safety) {
+    if (route.kind === 'deterministic') {
+      if (route.action.kind === 'reply') {
+        return {
+          handoffRequested: false,
+          model: route.model,
+          sources: [],
+          text: route.action.text,
+          toolCalls: [],
+        };
+      }
       if (!handoffAvailable) {
         return {
           failureCode: 'tool_failure',
           handoffRequested: false,
-          model: this.model,
+          model: route.model,
           sources: [],
           text: unavailableHandoffReply,
           toolCalls: [],
         };
       }
       const result = await this.executor.execute(
-        policyCall(input.context, userMessage, safety.reason, safety.urgency),
+        policyCall(input.context, userMessage, route.action.handoffReason, route.action.urgency),
         input.context,
       );
       return {
         failureCode: result.handoffRequested ? undefined : 'tool_failure',
         handoffRequested: result.handoffRequested,
-        model: this.model,
+        model: route.model,
         sources: [],
-        text: result.handoffRequested ? safety.reply : unavailableHandoffReply,
+        text: result.handoffRequested ? route.action.text : unavailableHandoffReply,
         toolCalls: [result.execution],
       };
     }
-
-    const humanRequest = detectExplicitHumanRequest(userMessage);
-    if (humanRequest) {
-      if (!handoffAvailable) {
-        return {
-          failureCode: 'tool_failure',
-          handoffRequested: false,
-          model: this.model,
-          sources: [],
-          text: unavailableHandoffReply,
-          toolCalls: [],
-        };
-      }
-      const result = await this.executor.execute(
-        policyCall(input.context, userMessage, humanRequest.reason, humanRequest.urgency),
-        input.context,
-      );
+    const activeModel = route.model;
+    if (!this.provider) {
       return {
-        failureCode: result.handoffRequested ? undefined : 'tool_failure',
-        handoffRequested: result.handoffRequested,
-        model: this.model,
+        failureCode: 'provider_error',
+        handoffRequested: false,
+        model: activeModel,
         sources: [],
-        text: result.handoffRequested ? humanRequest.reply : unavailableHandoffReply,
-        toolCalls: [result.execution],
+        text: providerFailureReply,
+        toolCalls: [],
       };
     }
 
@@ -309,7 +324,7 @@ export class AgentRuntime {
     };
     let handoffRequested = false;
     let toolCalls = 0;
-    let latestUsage: AgentTurnResult['usage'];
+    let totalUsage: AgentTurnResult['usage'];
     const executedCallIds = new Set<string>();
     let knowledgeSearchAttempted = false;
     let reliableKnowledgeFound = false;
@@ -322,21 +337,23 @@ export class AgentRuntime {
           input: providerInput,
           instructions,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
-          model: this.model,
+          model: activeModel,
+          reasoningEffort: route.reasoningEffort,
           tools: this.executor.tools,
         });
       } catch {
         return {
           failureCode: 'provider_error',
           handoffRequested,
-          model: this.model,
+          model: activeModel,
           sources: distinctSources(sources),
           text: providerFailureReply,
           knowledgeDiagnostics,
           toolCalls: executions,
+          usage: totalUsage,
         };
       }
-      latestUsage = providerResult.usage;
+      totalUsage = mergeUsage(totalUsage, providerResult.usage);
 
       if (providerResult.toolCalls.length === 0) {
         // The model wants to finish. If it never searched and the question needed searching, its
@@ -355,10 +372,7 @@ export class AgentRuntime {
           runtimeForcedSearches += 1;
           // No executor knowledge service means no way to ground the claim, so the answer is
           // refused rather than allowed through unchecked.
-          const forced = await this.executor.searchKnowledgeForRuntime?.(
-            userMessage,
-            toolContext,
-          );
+          const forced = await this.executor.searchKnowledgeForRuntime?.(userMessage, toolContext);
           if (forced) knowledgeDiagnostics.push(forced.diagnostic);
           if (forced && forced.sources.length > 0) {
             sources.push(...forced.sources);
@@ -373,19 +387,19 @@ export class AgentRuntime {
           }
           return {
             handoffRequested,
-            model: this.model,
+            model: activeModel,
             sources: distinctSources(sources),
             // The model's ungrounded answer is discarded, not softened.
             text: unknownKnowledgeReply,
             knowledgeDiagnostics,
             toolCalls: executions,
-            usage: latestUsage,
+            usage: totalUsage,
           };
         }
 
         return {
           handoffRequested,
-          model: this.model,
+          model: activeModel,
           sources: distinctSources(sources),
           text:
             knowledgeSearchAttempted && !reliableKnowledgeFound
@@ -393,7 +407,7 @@ export class AgentRuntime {
               : responseText(providerResult.text),
           knowledgeDiagnostics,
           toolCalls: executions,
-          usage: latestUsage,
+          usage: totalUsage,
         };
       }
 
@@ -435,12 +449,12 @@ export class AgentRuntime {
           return {
             failureCode: 'loop_limit',
             handoffRequested,
-            model: this.model,
+            model: activeModel,
             sources: distinctSources(sources),
             text: loopLimitReply,
             knowledgeDiagnostics,
             toolCalls: executions,
-            usage: latestUsage,
+            usage: totalUsage,
           };
         }
 
@@ -465,10 +479,10 @@ export class AgentRuntime {
             executions,
             handoffRequested: true,
             knowledgeDiagnostics,
-            model: this.model,
+            model: activeModel,
             sources,
             text: handoffReply,
-            usage: latestUsage,
+            usage: totalUsage,
           });
         }
 
@@ -482,10 +496,10 @@ export class AgentRuntime {
             executions,
             handoffRequested,
             knowledgeDiagnostics,
-            model: this.model,
+            model: activeModel,
             sources,
             text: completionReply,
-            usage: latestUsage,
+            usage: totalUsage,
           });
         }
 
@@ -504,12 +518,12 @@ export class AgentRuntime {
     return {
       failureCode: 'loop_limit',
       handoffRequested,
-      model: this.model,
+      model: activeModel,
       sources: distinctSources(sources),
       text: loopLimitReply,
       knowledgeDiagnostics,
       toolCalls: executions,
-      usage: latestUsage,
+      usage: totalUsage,
     };
   }
 }

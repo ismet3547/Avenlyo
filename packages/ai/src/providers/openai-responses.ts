@@ -99,6 +99,7 @@ export function buildResponsesRequest(input: AgentProviderInput): ResponseCreate
     instructions: input.instructions,
     max_output_tokens: input.maxOutputTokens,
     model: input.model,
+    ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
     parallel_tool_calls: false,
     // Avenlyo persists product conversation state; Responses API state must never be retained.
     store: false,
@@ -164,6 +165,7 @@ export class OpenAIResponsesProvider implements AgentProvider {
           })),
         usage: response.usage
           ? {
+              cachedInputTokens: response.usage.input_tokens_details?.cached_tokens ?? 0,
               inputTokens: response.usage.input_tokens,
               outputTokens: response.usage.output_tokens,
             }

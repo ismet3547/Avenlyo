@@ -60,6 +60,15 @@ const agentRuntimeReliabilityMigration = readSql(
     import.meta.url,
   ),
 );
+const aiUsageRouterMigration = readSql(
+  new URL(
+    '../../../supabase/migrations/20260910000000_phase_25_ai_usage_router.sql',
+    import.meta.url,
+  ),
+);
+const aiUsageRouterSecurityTest = readSql(
+  new URL('../../../supabase/tests/database/ai_usage_router_security.test.sql', import.meta.url),
+);
 const voiceMigration = readSql(
   new URL('../../../supabase/migrations/20260816060000_phase_4_inbound_voice.sql', import.meta.url),
 );
@@ -1813,5 +1822,37 @@ describe('phase 17 billing enforcement', () => {
     ]) {
       expect(billingEnforcementTest).toContain(expected);
     }
+  });
+});
+
+describe('Phase 25 AI usage routing telemetry', () => {
+  it('persists only bounded route and token metadata behind trusted RPC boundaries', () => {
+    expect(aiUsageRouterMigration).toContain('create table public.ai_usage_events');
+    expect(aiUsageRouterMigration).toContain('create function public.record_agent_test_ai_usage');
+    expect(aiUsageRouterMigration).toContain('create function public.record_message_ai_usage');
+    expect(aiUsageRouterMigration).toContain('perform public.require_messaging_service_role()');
+    expect(aiUsageRouterMigration).toContain('on conflict (inbound_message_id) do nothing');
+    expect(aiUsageRouterMigration).toContain('on conflict (agent_test_run_id) do nothing');
+    expect(aiUsageRouterMigration).not.toMatch(/customer_message|message_body|source_content/);
+  });
+
+  it('keeps direct writes away from authenticated clients and separates customer from test usage', () => {
+    expect(aiUsageRouterMigration).toContain(
+      'revoke all on public.ai_usage_events from anon, authenticated, service_role',
+    );
+    expect(aiUsageRouterMigration).toContain(
+      "mode text not null check (mode in ('customer', 'test'))",
+    );
+    expect(aiUsageRouterMigration).toContain('ai_usage_events_source_mode_check');
+    expect(aiUsageRouterSecurityTest).toContain(
+      'authenticated users cannot insert usage rows directly',
+    );
+    expect(aiUsageRouterSecurityTest).toContain(
+      'authenticated clients cannot reach customer usage persistence',
+    );
+  });
+
+  it('advances the additive schema contract to 24', () => {
+    expect(aiUsageRouterMigration).toContain('set schema_version = 24');
   });
 });

@@ -1,9 +1,13 @@
 import {
   AgentRuntime,
   ControlledToolExecutor,
+  agentPricingVersion,
+  estimateAgentCostMicrousd,
+  routeAgentTurn,
   CustomerCapabilityToolExecutor,
   OpenAIResponsesProvider,
   WorkStateToolExecutor,
+  type AgentBusinessContext,
   type AgentConversationMessage,
   type KnowledgeSource,
 } from '@avenlyo/ai';
@@ -250,16 +254,26 @@ export class ConversationAgentService {
     });
     const runtime = new AgentRuntime(this.provider, executor, this.input.model);
     const locationAddress = toRecord(context.location_address);
+    const business: AgentBusinessContext = {
+      address: locationAddress ? JSON.stringify(locationAddress) : null,
+      businessHours: context.business_hours ? JSON.stringify(context.business_hours) : null,
+      locationName: context.location_name,
+      name: context.organization_name,
+      phone: context.business_phone,
+      timezone: context.location_timezone,
+      website: context.website_url,
+    };
+    const previousHistory = history.slice(0, -1);
+    const route = routeAgentTurn({
+      business,
+      history: previousHistory,
+      industry,
+      models: { sol: this.input.model },
+      userMessage,
+      workState,
+    });
     const result = await runtime.runTurn({
-      business: {
-        address: locationAddress ? JSON.stringify(locationAddress) : null,
-        businessHours: context.business_hours ? JSON.stringify(context.business_hours) : null,
-        locationName: context.location_name,
-        name: context.organization_name,
-        phone: context.business_phone,
-        timezone: context.location_timezone,
-        website: context.website_url,
-      },
+      business,
       context: {
         conversationId: context.conversation_id,
         channel: context.channel_type === 'sms' ? 'sms' : 'web',
@@ -269,11 +283,45 @@ export class ConversationAgentService {
         organizationId: context.organization_id,
         triggeringInboundMessageId: inboundMessageId,
       },
-      history: history.slice(0, -1),
+      history: previousHistory,
       industry,
+      route,
       userMessage,
       workState,
     });
+    const estimatedCostMicrousd = estimateAgentCostMicrousd(route.model, result.usage);
+    console.info(
+      JSON.stringify({
+        event: 'agent.usage',
+        estimatedCostMicrousd,
+        cachedInputTokens: result.usage?.cachedInputTokens ?? 0,
+        inputTokens: result.usage?.inputTokens ?? 0,
+        mode: 'customer',
+        model: route.model,
+        outputTokens: result.usage?.outputTokens ?? 0,
+        pricingVersion: agentPricingVersion,
+        routeReason: route.reason,
+        tier: route.tier,
+      }),
+    );
+    try {
+      const { error: usageError } = await this.input.supabase.rpc('record_message_ai_usage', {
+        target_cached_input_tokens: result.usage?.cachedInputTokens ?? 0,
+        target_estimated_cost_microusd: estimatedCostMicrousd,
+        target_inbound_message_id: inboundMessageId,
+        target_input_tokens: result.usage?.inputTokens ?? 0,
+        target_model: route.model,
+        target_model_tier: route.tier,
+        target_output_tokens: result.usage?.outputTokens ?? 0,
+        target_pricing_version: agentPricingVersion,
+        target_route_reason: route.reason,
+      });
+      if (usageError) {
+        console.warn(JSON.stringify({ event: 'agent.usage_persist_failed', mode: 'customer' }));
+      }
+    } catch {
+      console.warn(JSON.stringify({ event: 'agent.usage_persist_failed', mode: 'customer' }));
+    }
     if (result.suppressedReason) {
       return { handoffRequested: false, suppressed: true, text: '' };
     }

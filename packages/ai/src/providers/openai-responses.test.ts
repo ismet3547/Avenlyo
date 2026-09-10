@@ -10,12 +10,14 @@ describe('OpenAI Responses request contract', () => {
       input: [{ content: 'Hello', role: 'user', type: 'message' }],
       instructions: 'Follow policy.',
       maxOutputTokens: 500,
-      model: 'gpt-5.6',
+      model: 'gpt-5.6-luna',
+      reasoningEffort: 'none',
       tools: activeToolsForIndustry(veterinaryPack),
     });
 
     expect(request.store).toBe(false);
     expect(request.parallel_tool_calls).toBe(false);
+    expect(request.reasoning).toEqual({ effort: 'none' });
     expect(request.include).toContain('reasoning.encrypted_content');
     expect(request).not.toHaveProperty('previous_response_id');
     expect(request.tools).toEqual(

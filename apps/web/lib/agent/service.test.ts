@@ -22,6 +22,15 @@ vi.mock('@avenlyo/ai', () => ({
     }
   },
   OpenAIResponsesProvider: class {},
+  agentPricingVersion: 'test-pricing',
+  estimateAgentCostMicrousd: () => 0,
+  routeAgentTurn: () => ({
+    kind: 'model',
+    model: 'gpt-5.6',
+    reason: 'luna_default',
+    reasoningEffort: 'none',
+    tier: 'luna',
+  }),
 }));
 
 vi.mock('@/lib/knowledge/config', () => ({
@@ -200,7 +209,8 @@ describe('data-returning agent RPCs keep their strict null check', () => {
     });
 
     await expect(run(client)).rejects.toBeInstanceOf(AgentTestServiceError);
-    expect(rpc).toHaveBeenCalledWith('fail_agent_test_turn', expect.anything());
+    expect(rpc).not.toHaveBeenCalledWith('begin_agent_test_turn', expect.anything());
+    expect(rpc).not.toHaveBeenCalledWith('fail_agent_test_turn', expect.anything());
   });
 });
 
