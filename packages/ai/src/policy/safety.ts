@@ -61,8 +61,8 @@ export function detectSafetyEscalation(
       return {
         reason: 'Potential urgent dental or facial safety concern.',
         reply: turkish
-          ? 'Bu durum acil değerlendirme gerektirebilir. Klinik ekibine hemen yönlendiriyorum. Nefes alma veya yutma güçlüğü varsa yerel acil sağlık hizmetlerine başvurun.'
-          : 'This may need urgent clinical attention. I’m escalating this to the clinic team now. If breathing or swallowing is affected, contact local emergency services.',
+          ? 'Geçmiş olsun. Yüzünüzdeki şişlik acil olabilir, bu yüzden sizi hemen klinik ekibine aktarıyorum. Nefes almakta ya da yutkunmakta zorlanıyorsanız beklemeyin; acil yardım alın.'
+          : 'I’m sorry you’re dealing with that. Facial swelling can be urgent, so I’m getting the clinic team involved right away. If you’re having trouble breathing or swallowing, don’t wait—seek emergency help now.',
         urgency: 'urgent',
       };
     }
@@ -94,8 +94,8 @@ export function detectSafetyEscalation(
       return {
         reason: 'Dental diagnosis, treatment eligibility or clinical advice question.',
         reply: turkish
-          ? 'Bunu güvenli şekilde değerlendirmek için klinik ekibinin yardımcı olması gerekiyor. Sizi şimdi ekibe yönlendiriyorum.'
-          : 'The clinic team needs to help with that clinical question. I’m handing this over to them now.',
+          ? 'Bunu buradan güvenle değerlendiremiyorum. En doğrusu klinik ekibinin bakması; sizi şimdi ekibe aktarıyorum.'
+          : 'I can’t safely judge that here. The clinic team will need to take a look, so I’m handing this over to them now.',
         urgency: 'normal',
       };
     }

@@ -8,7 +8,9 @@ describe('industry safety backstops', () => {
     const result = detectSafetyEscalation(dentalPack, 'İmplant bana uygun mu?');
 
     expect(result).toMatchObject({ urgency: 'normal' });
-    expect(result?.reply).toMatch(/klinik ekibinin|yönlendiriyorum/i);
+    expect(result?.reply).toMatch(
+      /buradan güvenle değerlendiremiyorum|klinik ekibinin|aktarıyorum/i,
+    );
     expect(result?.reply).not.toMatch(/uygun|tedavi olmalısınız/i);
   });
 
@@ -19,7 +21,10 @@ describe('industry safety backstops', () => {
     );
 
     expect(result).toMatchObject({ urgency: 'urgent' });
-    expect(result?.reply).toMatch(/acil|hemen/i);
+    expect(result?.reply).toMatch(/^Geçmiş olsun\./);
+    expect(result?.reply).toMatch(/hemen klinik ekibine aktarıyorum/i);
+    expect(result?.reply).toMatch(/beklemeyin; acil yardım alın/i);
+    expect(result?.reply).not.toContain('Bu durum acil değerlendirme gerektirebilir');
   });
 
   it('routes natural facial swelling language urgently while pain alone stays clinical', () => {
@@ -34,9 +39,12 @@ describe('industry safety backstops', () => {
     const painOnly = detectSafetyEscalation(dentalPack, 'Dişim çok ağrıyor, ne yapmalıyım?');
 
     expect(swollen).toMatchObject({ urgency: 'urgent' });
+    expect(swollen?.reply).toMatch(/^Geçmiş olsun\./);
     expect(swollen?.reply).toMatch(/acil|hemen/i);
     expect(englishSwollen).toMatchObject({ urgency: 'urgent' });
+    expect(englishSwollen?.reply).toMatch(/^I’m sorry you’re dealing with that\./);
     expect(painOnly).toMatchObject({ urgency: 'normal' });
+    expect(painOnly?.reply).toMatch(/buradan güvenle değerlendiremiyorum/i);
   });
 
   it('keeps published administrative dental questions outside the clinical backstop', () => {
