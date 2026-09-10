@@ -8,7 +8,9 @@ describe('industry safety backstops', () => {
     const result = detectSafetyEscalation(dentalPack, 'İmplant bana uygun mu?');
 
     expect(result).toMatchObject({ urgency: 'normal' });
-    expect(result?.reply).toMatch(/buradan güvenle değerlendiremiyorum|klinik ekibinin|aktarıyorum/i);
+    expect(result?.reply).toMatch(
+      /buradan güvenle değerlendiremiyorum|klinik ekibinin|aktarıyorum/i,
+    );
     expect(result?.reply).not.toMatch(/uygun|tedavi olmalısınız/i);
   });
 
