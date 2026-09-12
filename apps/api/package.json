@@ -16,6 +16,8 @@
     "ops:preflight:dev": "tsx src/scripts/ops-preflight.ts",
     "ops:status": "node dist/scripts/ops-status.js",
     "ops:status:dev": "tsx src/scripts/ops-status.ts",
+    "acceptance:dental": "node dist/scripts/dental-agent-acceptance.js",
+    "acceptance:dental:dev": "tsx src/scripts/dental-agent-acceptance.ts",
     "smoke:production": "node dist/scripts/smoke-production.js",
     "smoke:production:dev": "tsx src/scripts/smoke-production.ts",
     "voice:assign-number": "tsx src/scripts/assign-voice-number.ts",

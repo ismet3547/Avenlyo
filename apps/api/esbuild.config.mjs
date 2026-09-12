@@ -84,6 +84,9 @@ await build({
   entryPoints: {
     server: 'src/server.ts',
     'scripts/chromium-sandbox-smoke': 'src/scripts/chromium-sandbox-smoke.ts',
+    // Staging-only read/provider acceptance harness. It is a CLI rather than a route and has no
+    // database write services; see the script header for the operator boundary.
+    'scripts/dental-agent-acceptance': 'src/scripts/dental-agent-acceptance.ts',
     // The operator status command. The runbook tells whoever is on the host to run it, the image
     // copies `dist/` and not `src/`, and the production image has no tsx -- so leaving this out of
     // the bundle meant the documented operational check simply did not exist in production.

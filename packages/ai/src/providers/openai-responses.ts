@@ -1,10 +1,4 @@
 import OpenAI from 'openai';
-import type {
-  FunctionTool,
-  ResponseCreateParamsNonStreaming,
-  ResponseInputItem,
-  ResponseReasoningItem,
-} from 'openai/resources/responses/responses';
 
 import { PROVIDER_TIMEOUT_MS } from '../agent/limits';
 import {
@@ -12,9 +6,15 @@ import {
   type AgentProvider,
   type AgentProviderContinuation,
   type AgentProviderInput,
-  type AgentProviderInputItem,
   type AgentProviderResult,
 } from '../agent/types';
+import {
+  buildResponsesRequest,
+  plainTextResponse,
+  toEncryptedReasoningContinuation,
+} from './openai-responses-request';
+
+export { buildResponsesRequest, plainTextResponse } from './openai-responses-request';
 
 export const defaultAgentModel = 'gpt-5.6';
 
@@ -28,83 +28,6 @@ function getProviderStatus(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
   const status = (error as { readonly status?: unknown }).status;
   return typeof status === 'number' ? status : undefined;
-}
-
-function toResponseInput(item: AgentProviderInputItem): readonly ResponseInputItem[] {
-  if (item.type === 'message') {
-    return [{ content: item.content, role: item.role, type: 'message' }];
-  }
-  if (item.type === 'runtime_knowledge') {
-    // `user`, deliberately, even though the customer did not write it.
-    //
-    // The tempting choice is `developer`, because Avenlyo performed this search rather than the
-    // model. That reasoning is about *authorship* and gets the wrong answer, because the thing
-    // that matters here is *trust*. The payload is text crawled from a third-party website, which
-    // is the least trustworthy input in the system: a hostile page can contain "ignore previous
-    // instructions" as easily as it can contain opening hours. Routing it through a developer-role
-    // message would hand attacker-controlled prose the same standing as Avenlyo's own policy, and
-    // `JSON.stringify` is not a boundary -- it escapes quotes, not intent.
-    //
-    // So retrieved knowledge stays at the lowest available priority, exactly where the same
-    // content sits when it arrives as a normal tool result. The wrapper the runtime puts around it
-    // says what it is and that its instructions are never to be followed; the standing developer
-    // instruction that retrieved knowledge is untrusted remains the authority.
-    return [{ content: item.content, role: 'user', type: 'message' }];
-  }
-  if (item.type === 'function_call') {
-    return [
-      {
-        arguments: item.arguments,
-        call_id: item.callId,
-        name: item.name,
-        type: 'function_call',
-      },
-    ];
-  }
-  if (item.type === 'function_call_output') {
-    return [{ call_id: item.callId, output: item.output, type: 'function_call_output' }];
-  }
-  if (item.continuation.provider !== 'openai-responses') {
-    throw new AgentProviderError('configuration', 'Unsupported provider continuation.', false);
-  }
-  return item.continuation.encryptedReasoningItems.map((reasoning) => ({
-    encrypted_content: reasoning.encryptedContent,
-    id: reasoning.id,
-    summary: [],
-    type: 'reasoning' as const,
-  }));
-}
-
-function toOpenAITool(tool: AgentProviderInput['tools'][number]): FunctionTool {
-  return {
-    description: tool.description,
-    name: tool.name,
-    parameters: tool.parameters,
-    strict: tool.strict,
-    type: 'function',
-  };
-}
-
-function toEncryptedReasoningContinuation(
-  item: ResponseReasoningItem,
-): AgentProviderContinuation['encryptedReasoningItems'][number] | null {
-  return item.encrypted_content ? { encryptedContent: item.encrypted_content, id: item.id } : null;
-}
-
-/** Kept pure so the retention and tool-safety contract is unit tested without network calls. */
-export function buildResponsesRequest(input: AgentProviderInput): ResponseCreateParamsNonStreaming {
-  return {
-    input: input.input.flatMap(toResponseInput),
-    include: ['reasoning.encrypted_content'],
-    instructions: input.instructions,
-    max_output_tokens: input.maxOutputTokens,
-    model: input.model,
-    ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
-    parallel_tool_calls: false,
-    // Avenlyo persists product conversation state; Responses API state must never be retained.
-    store: false,
-    tools: input.tools.map(toOpenAITool),
-  };
 }
 
 /** Official OpenAI Responses API adapter. It is server-only and strips raw SDK objects at the boundary. */
@@ -155,7 +78,7 @@ export class OpenAIResponsesProvider implements AgentProvider {
         : undefined;
       return {
         continuation,
-        text: response.output_text,
+        text: plainTextResponse(response.output_text),
         toolCalls: response.output
           .filter((item) => item.type === 'function_call')
           .map((item) => ({

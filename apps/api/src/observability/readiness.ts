@@ -22,9 +22,11 @@ import type { RuntimeComponent } from './runtime-state.js';
  * a new dental workspace cannot complete its first onboarding step against it.
  *
  * The comparison stays `>=`, so a *newer* schema remains compatible with an older build and a
- * rollback needs no down-migration. The AI usage migration is additive: older releases ignore the new telemetry table and RPCs.
+ * rollback needs no down-migration. Schema 25 also restores hosted service-role compatibility for
+ * the shared voice/message knowledge RPC and adds the backend-only acceptance context read model.
  */
-export const REQUIRED_SCHEMA_VERSION = 24;
+const PREVIOUS_REQUIRED_SCHEMA_VERSION = 24;
+export const REQUIRED_SCHEMA_VERSION = PREVIOUS_REQUIRED_SCHEMA_VERSION + 1;
 
 export type ReadinessReason =
   | 'shutting_down'
