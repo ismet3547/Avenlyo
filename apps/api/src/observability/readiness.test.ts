@@ -100,16 +100,16 @@ describe('readiness evaluation', () => {
   });
 
   describe('the current schema contract', () => {
-    it('requires 24 because cost-aware routing persists usage through the Phase 25 RPC contract', () => {
-      expect(REQUIRED_SCHEMA_VERSION).toBe(24);
+    it('requires 25 because hosted service-role knowledge access needs the Phase 26 role guard', () => {
+      expect(REQUIRED_SCHEMA_VERSION).toBe(25);
     });
 
-    it('refuses schema 23 because the durable AI usage RPCs do not exist there', () => {
-      const result = readinessFor({ probe: { ok: true, schemaVersion: 22 } });
+    it('refuses schema 24 because the hosted service-role knowledge guard is incompatible there', () => {
+      const result = readinessFor({ probe: { ok: true, schemaVersion: 24 } });
 
       expect(result.ready).toBe(false);
       expect(result.reasons).toEqual(['schema_incompatible']);
-      expect(result.schemaVersion).toBe(22);
+      expect(result.schemaVersion).toBe(24);
     });
 
     it('still refuses older intermediate Phase 23 schemas', () => {
@@ -121,10 +121,10 @@ describe('readiness evaluation', () => {
       }
     });
 
-    it('accepts a 24 database', () => {
-      expect(readinessFor({ probe: { ok: true, schemaVersion: 24 } })).toMatchObject({
+    it('accepts a 25 database', () => {
+      expect(readinessFor({ probe: { ok: true, schemaVersion: 25 } })).toMatchObject({
         ready: true,
-        schemaVersion: 24,
+        schemaVersion: 25,
       });
     });
   });

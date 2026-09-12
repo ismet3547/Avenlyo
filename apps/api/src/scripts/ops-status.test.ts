@@ -99,16 +99,16 @@ describe('ops:status reports the schema contract this build requires', () => {
     };
   }
 
-  it('prints 24 as the required version, and the deployed one beside it', async () => {
-    expect(REQUIRED_SCHEMA_VERSION).toBe(24);
-    createServiceSupabaseClient.mockReturnValue(clientReporting(24));
+  it('prints 25 as the required version, and the deployed one beside it', async () => {
+    expect(REQUIRED_SCHEMA_VERSION).toBe(25);
+    createServiceSupabaseClient.mockReturnValue(clientReporting(25));
     const stdout: string[] = [];
 
     const code = await runOpsStatus({ argv: [], stderr: () => {}, stdout: (t) => stdout.push(t) });
     const output = stdout.join('');
 
     expect(code).toBe(0);
-    expect(output).toContain('24 (requires >= 24)');
+    expect(output).toContain('25 (requires >= 25)');
   });
 
   it('still prints the requirement when the deployed schema is behind it', async () => {
@@ -117,6 +117,6 @@ describe('ops:status reports the schema contract this build requires', () => {
 
     await runOpsStatus({ argv: [], stderr: () => {}, stdout: (t) => stdout.push(t) });
 
-    expect(stdout.join('')).toContain('22 (requires >= 24)');
+    expect(stdout.join('')).toContain('22 (requires >= 25)');
   });
 });

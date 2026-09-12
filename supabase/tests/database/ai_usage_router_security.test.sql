@@ -32,10 +32,11 @@ select extensions.col_is_pk('public', 'ai_usage_events', 'id', 'usage event id i
 select extensions.has_index('public', 'ai_usage_events', 'ai_usage_events_organization_created_at_idx', 'organization/time index exists');
 select extensions.has_index('public', 'ai_usage_events', 'ai_usage_events_location_created_at_idx', 'location/time index exists');
 select extensions.has_index('public', 'ai_usage_events', 'ai_usage_events_conversation_created_at_idx', 'conversation/time index exists');
-select extensions.is(
+select extensions.cmp_ok(
   (select schema_version from public.platform_schema_contract where id),
+  '>=',
   24,
-  'Phase 25 advertises schema version 24'
+  'Phase 25 or a newer additive schema is deployed'
 );
 
 select * from extensions.finish();
